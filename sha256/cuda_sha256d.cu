@@ -672,9 +672,9 @@ void sha256d_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, const ui
 	dim3 block(TPB);
 
 	CUDA_SAFE_CALL(cudaMemset(d_resNonces[thr_id], 0xFF, 2 * sizeof(uint32_t)));
-	cudaThreadSynchronize();
+	cudaDeviceSynchronize();
 	sha256d_gpu_hash << <grid, block >> > (threads, startNonce, d_resNonces[thr_id], t1c, t2c, w16, w16rot, w17, w17rot, b2, c2, d2, f2, g2, h2, ms[0], ms[1], ms[2], ms[3], ms[4], ms[5], ms[6], ms[7], compacttarget);
-	cudaThreadSynchronize();
+	cudaDeviceSynchronize();
 
 	CUDA_SAFE_CALL(cudaMemcpy(resNonces, d_resNonces[thr_id], 2 * sizeof(uint32_t), cudaMemcpyDeviceToHost));
 	if (resNonces[0] == resNonces[1]) {

@@ -1626,12 +1626,12 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_FUGUE256:
 		case ALGO_GROESTL:
 		case ALGO_KECCAK:
-		case ALGO_SHA3D:
-			sha3d(merkle_root, sctx->job.coinbase, (int)sctx->job.coinbase_size);
-			break;
 		case ALGO_BLAKECOIN:
 		case ALGO_WHIRLCOIN:
 			SHA256((uchar*)sctx->job.coinbase, sctx->job.coinbase_size, (uchar*)merkle_root);
+			break;
+		case ALGO_SHA3D:
+			sha3d(merkle_root, sctx->job.coinbase, (int)sctx->job.coinbase_size);
 			break;
 		case ALGO_GOSTCOIN:
 			gostd(merkle_root, sctx->job.coinbase, (int)sctx->job.coinbase_size);

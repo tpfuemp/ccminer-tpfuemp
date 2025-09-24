@@ -229,7 +229,7 @@ void keccak256_sha3d_hash_80(int thr_id, uint32_t threads, uint32_t startNounce,
 	keccak256_sha3d_gpu_hash_80<<<grid, block, shared_size>>>(threads, startNounce, d_KNonce[thr_id]);
 
 	cudaMemcpy(resNonces, d_KNonce[thr_id], 2*sizeof(uint32_t), cudaMemcpyDeviceToHost);
-	cudaThreadSynchronize();
+	cudaDeviceSynchronize();
 }
 
 #if 0

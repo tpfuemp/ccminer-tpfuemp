@@ -216,6 +216,7 @@
       <Optimization>O3</Optimization>
       <TargetMachinePlatform>64</TargetMachinePlatform>
       <AdditionalOptions>-allow-unsupported-compiler --Wno-deprecated-gpu-targets %(AdditionalOptions)</AdditionalOptions>
+      <Defines>_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH</Defines>
     </CudaCompile>
     <CudaLink>
       <Optimization>O3</Optimization>

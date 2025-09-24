@@ -165,7 +165,7 @@ extern "C" void free_sha3d(int thr_id)
 	if (!init[thr_id])
 		return;
 
-	cudaThreadSynchronize();
+	cudaDeviceSynchronize();
 
 	if(!use_compat_kernels[thr_id])
 		keccak256_cpu_free(thr_id);

@@ -639,7 +639,7 @@ extern "C" void free_x21s(int thr_id)
 	if (!init[thr_id])
 		return;
 
-	cudaThreadSynchronize();
+	cudaDeviceSynchronize();
 
     cudaFree(d_matrix[thr_id]);
 	cudaFree(d_hash[thr_id]);

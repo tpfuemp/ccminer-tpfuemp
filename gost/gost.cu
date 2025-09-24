@@ -140,7 +140,7 @@ extern "C" void free_gostd(int thr_id)
 	if (!init[thr_id])
 		return;
 
-	cudaThreadSynchronize();
+	cudaDeviceSynchronize();
 
 	gostd_free(thr_id);
 
