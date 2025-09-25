@@ -224,6 +224,12 @@
     </CudaLink>
   </ItemDefinitionGroup>
   <ItemGroup>
+    <ClCompile Include="argon2d\argon2ref\argon2.c" />
+    <ClCompile Include="argon2d\argon2ref\blake2\blake2b.c" />
+    <ClCompile Include="argon2d\argon2ref\core.c" />
+    <ClCompile Include="argon2d\argon2ref\encoding.c" />
+    <ClCompile Include="argon2d\argon2ref\opt.c" />
+    <ClCompile Include="argon2d\argon2ref\thread.c" />
     <ClCompile Include="compat\getopt\getopt_long.c" />
     <ClCompile Include="compat\gettimeofday.c" />
     <ClCompile Include="compat\jansson\dump.c" />
@@ -297,6 +303,7 @@
       <MaxRegCount>76</MaxRegCount>
     </CudaCompile>
     <CudaCompile Include="allium.cu" />
+    <CudaCompile Include="blake2b.cu" />
     <CudaCompile Include="heavyhash/heavyhash.cu" />
     <CudaCompile Include="heavyhash/cuda_heavyhash.cu" />
     <CudaCompile Include="crypto\cryptolight.cu" />
@@ -354,6 +361,16 @@
     <ClCompile Include="x13\sm3.c" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="argon2d\argon2ref\argon2.h" />
+    <ClInclude Include="argon2d\argon2ref\core.h" />
+    <ClInclude Include="argon2d\argon2ref\encoding.h" />
+    <ClInclude Include="argon2d\argon2ref\thread.h" />
+    <ClInclude Include="argon2d\argon2ref\blake2\blake2.h" />
+    <ClInclude Include="argon2d\argon2ref\blake2\blake2-impl.h" />
+    <ClInclude Include="argon2d\argon2ref\blake2\blakma-round-opt.h" />
+    <ClInclude Include="argon2d\argon2ref\blake2\blakma-round-ref.h" />
+    <ClInclude Include="argon2d\argon2d_kernel.h" />
+    <ClInclude Include="argon2d\cudaexception.h" />
     <ClInclude Include="compat.h" />
     <ClInclude Include="compat\getopt\getopt.h" />
     <ClInclude Include="compat\inttypes.h" />
@@ -429,6 +446,9 @@
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="cuda.cpp" />
+    <CudaCompile Include="argon2d\argon2d.cu" />
+    <CudaCompile Include="argon2d\argon2d_fill.cu" />
+    <CudaCompile Include="argon2d\blake2b_kernels.cu" />
     <CudaCompile Include="cuda_groestlcoin.cu" />
     <CudaCompile Include="cuda_myriadgroestl.cu" />
     <CudaCompile Include="scrypt\blake.cu" />

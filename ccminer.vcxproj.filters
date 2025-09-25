@@ -363,6 +363,12 @@
     <ClCompile Include="sph\sha256_Y.c">
       <Filter>Source Files\sph</Filter>
     </ClCompile>
+    <ClCompile Include="argon2d\argon2ref\argon2.c" />
+    <ClCompile Include="argon2d\argon2ref\blake2\blake2b.c" />
+    <ClCompile Include="argon2d\argon2ref\core.c" />
+    <ClCompile Include="argon2d\argon2ref\encoding.c" />
+    <ClCompile Include="argon2d\argon2ref\opt.c" />
+    <ClCompile Include="argon2d\argon2ref\thread.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="algos.h">
@@ -635,6 +641,16 @@
     <ClInclude Include="sph\sha256_Y.h">
       <Filter>Header Files\sph</Filter>
     </ClInclude>
+    <ClInclude Include="argon2d\argon2ref\argon2.h" />
+    <ClInclude Include="argon2d\argon2ref\core.h" />
+    <ClInclude Include="argon2d\argon2ref\encoding.h" />
+    <ClInclude Include="argon2d\argon2ref\thread.h" />
+    <ClInclude Include="argon2d\argon2ref\blake2\blake2.h" />
+    <ClInclude Include="argon2d\argon2ref\blake2\blake2-impl.h" />
+    <ClInclude Include="argon2d\argon2ref\blake2\blakma-round-opt.h" />
+    <ClInclude Include="argon2d\argon2ref\blake2\blakma-round-ref.h" />
+    <ClInclude Include="argon2d\argon2d_kernel.h" />
+    <ClInclude Include="argon2d\cudaexception.h" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="cuda.cpp">
@@ -1060,6 +1076,12 @@
     </CudaCompile>
     <CudaCompile Include="sha256\sha256csm.cu">
       <Filter>Source Files\CUDA\sha256</Filter>
+    </CudaCompile>
+    <CudaCompile Include="argon2d\argon2d.cu" />
+    <CudaCompile Include="argon2d\argon2d_fill.cu" />
+    <CudaCompile Include="argon2d\blake2b_kernels.cu" />
+    <CudaCompile Include="blake2b.cu">
+      <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
   </ItemGroup>
   <ItemGroup>

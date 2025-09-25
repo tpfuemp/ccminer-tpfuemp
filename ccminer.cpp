@@ -251,11 +251,14 @@ Options:\n\
   -a, --algo=ALGO       specify the hash algorithm to use\n\
 			0x10		ChainOX\n\
 			allium		Lyra2 blake2s\n\
+			argon2d1000	Zero Dynamics Cash\n\
+			argon2d16000	Alterdot\n\
 			anime		Animecoin\n\
 			heavyhash	oBTC coin\n\
 			bastion		Hefty bastion\n\
 			bitcore		Timetravel-10\n\
 			blake		Blake 256 (SFR)\n\
+			blake2b		Blake2-B 512 (BCX)\n\
 			blake2s		Blake2-S 256 (NEVA)\n\
 			blakecoin	Fast Blake 256 (8 rounds)\n\
 			bmw		BMW 256\n\
@@ -1769,6 +1772,8 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		opt_difficulty = 1.;
 
 	switch (opt_algo) {
+		case ALGO_ARGON2D1000:
+		case ALGO_ARGON2D16000:
 		case ALGO_HMQ1725:
 		case ALGO_JACKPOT:
 		case ALGO_JHA:
@@ -2318,6 +2323,7 @@ static void *miner_thread(void *userdata)
 			//case ALGO_WHIRLPOOLX:
 				minmax = 0x40000000U;
 				break;
+			case ALGO_BLAKE2B:
 			case ALGO_KECCAK:
 			case ALGO_KECCAKC:
 			case ALGO_LBRY:
@@ -2357,6 +2363,8 @@ static void *miner_thread(void *userdata)
 			case ALGO_LYRA2:
 			case ALGO_LYRA2Z:
 			case ALGO_ALLIUM:
+			case ALGO_ARGON2D1000:
+			case ALGO_ARGON2D16000:
 			case ALGO_NEOSCRYPT:
 			case ALGO_XAYA:
 			case ALGO_SIB:
@@ -2437,6 +2445,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_BLAKE:
 			rc = scanhash_blake256(thr_id, &work, max_nonce, &hashes_done, 14);
+			break;
+		case ALGO_BLAKE2B:
+			rc = scanhash_blake2b(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_BLAKE2S:
 			rc = scanhash_blake2s(thr_id, &work, max_nonce, &hashes_done);
@@ -2529,6 +2540,12 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_ALLIUM:
 			rc = scanhash_allium(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_ARGON2D1000:
+			rc = scanhash_argon2d1000(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_ARGON2D16000:
+			rc = scanhash_argon2d16000(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_ANIME:
 			rc = scanhash_anime(thr_id, &work, max_nonce, &hashes_done);
@@ -3458,11 +3475,15 @@ void parse_arg(int key, char *arg)
 		}
 		p = strstr(arg, "://");
 		if (p) {
-			if (strncasecmp(arg, "http://", 7) 
-				&& strncasecmp(arg, "https://", 8) 
-				&& strncasecmp(arg, "stratum+tcp://", 14) 
-				&& strncasecmp(arg, "stratum+tcps://", 15) )
+			if (strncasecmp(arg, "http://", 7) &&
+				strncasecmp(arg, "https://", 8) &&
+				strncasecmp(arg, "stratum+tcp://", 14) &&
+				strncasecmp(arg, "stratum+ssl://", 14) &&
+				strncasecmp(arg, "stratum+tcps://", 15))
+			{
+				fprintf(stderr, "unknown protocol -- '%s'\n", arg);
 				show_usage_and_exit(1);
+			}
 			free(rpc_url);
 			rpc_url = strdup(arg);
 			short_url = &rpc_url[(p - arg) + 3];
@@ -4151,6 +4172,7 @@ int main(int argc, char *argv[])
 	flags = CURL_GLOBAL_ALL;
 	if ( !opt_benchmark )
 		if ( strncasecmp( rpc_url, "https:", 6 )
+			&& strncasecmp(rpc_url, "stratum+ssl://", 14 )
 			&& strncasecmp( rpc_url, "stratum+tcps://", 15 ) )
 			flags &= ~CURL_GLOBAL_SSL;
 

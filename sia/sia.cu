@@ -40,7 +40,7 @@ static __constant__ const int8_t blake2b_sigma[12][16] = {
 // host mem align
 #define A 64
 
-extern "C" void blake2b_hash(void *output, const void *input)
+extern "C" void sia_blake2b_hash(void *output, const void *input)
 {
 	uint8_t _ALIGN(A) hash[32];
 	blake2b_ctx ctx;
@@ -102,7 +102,7 @@ static void H(const int r, const int i, uint64_t &a, uint64_t &b, uint64_t &c, u
 
 __global__
 //__launch_bounds__(128, 8) /* to force 64 regs */
-void blake2b_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint32_t *resNonce, const uint2 target2)
+void sia_blake2b_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint32_t *resNonce, const uint2 target2)
 {
 	const uint32_t nonce = (blockDim.x * blockIdx.x + threadIdx.x) + startNonce;
 	__shared__ uint64_t s_target;
@@ -154,7 +154,7 @@ void blake2b_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint32_
 }
 
 __host__
-uint32_t blake2b_hash_cuda(const int thr_id, const uint32_t threads, const uint32_t startNonce, const uint2 target2, uint32_t &secNonce)
+uint32_t sia_blake2b_hash_cuda(const int thr_id, const uint32_t threads, const uint32_t startNonce, const uint2 target2, uint32_t &secNonce)
 {
 	uint32_t resNonces[NBN] = { UINT32_MAX, UINT32_MAX };
 	uint32_t result = UINT32_MAX;
@@ -166,7 +166,7 @@ uint32_t blake2b_hash_cuda(const int thr_id, const uint32_t threads, const uint3
 	if (cudaMemset(d_resNonces[thr_id], 0xff, NBN*sizeof(uint32_t)) != cudaSuccess)
 		return result;
 
-	blake2b_gpu_hash <<<grid, block, 8>>> (threads, startNonce, d_resNonces[thr_id], target2);
+	sia_blake2b_gpu_hash <<<grid, block, 8>>> (threads, startNonce, d_resNonces[thr_id], target2);
 	cudaDeviceSynchronize();
 
 	if (cudaSuccess == cudaMemcpy(resNonces, d_resNonces[thr_id], NBN*sizeof(uint32_t), cudaMemcpyDeviceToHost)) {
@@ -178,7 +178,7 @@ uint32_t blake2b_hash_cuda(const int thr_id, const uint32_t threads, const uint3
 }
 
 __host__
-void blake2b_setBlock(uint32_t *data)
+void sia_blake2b_setBlock(uint32_t *data)
 {
 	CUDA_SAFE_CALL(cudaMemcpyToSymbol(d_data, data, 80, 0, cudaMemcpyHostToDevice));
 }
@@ -224,10 +224,10 @@ int scanhash_sia(int thr_id, struct work *work, uint32_t max_nonce, unsigned lon
 
 	const uint2 target = make_uint2(ptarget[6], ptarget[7]);
 
-	blake2b_setBlock(inputdata);
+	sia_blake2b_setBlock(inputdata);
 
 	do {
-		work->nonces[0] = blake2b_hash_cuda(thr_id, throughput, pdata[8], target, work->nonces[1]);
+		work->nonces[0] = sia_blake2b_hash_cuda(thr_id, throughput, pdata[8], target, work->nonces[1]);
 
 		*hashes_done = pdata[8] - first_nonce + throughput;
 
@@ -235,7 +235,7 @@ int scanhash_sia(int thr_id, struct work *work, uint32_t max_nonce, unsigned lon
 		{
 			work->valid_nonces = 0;
 			inputdata[8] = work->nonces[0];
-			blake2b_hash(hash, inputdata);
+			sia_blake2b_hash(hash, inputdata);
 			if (swab32(hash[0]) <= Htarg) {
 				// sia hash target is reversed (start of hash)
 				swab256(vhashcpu, hash);
@@ -250,7 +250,7 @@ int scanhash_sia(int thr_id, struct work *work, uint32_t max_nonce, unsigned lon
 
 			if (work->nonces[1] != UINT32_MAX) {
 				inputdata[8] = work->nonces[1];
-				blake2b_hash(hash, inputdata);
+				sia_blake2b_hash(hash, inputdata);
 				if (swab32(hash[0]) <= Htarg) {
 					swab256(vhashcpu, hash);
 					if (fulltest(vhashcpu, ptarget)) {
