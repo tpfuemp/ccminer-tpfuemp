@@ -2199,6 +2199,8 @@ void print_hash_tests(void)
 
 	deephash(&hash[0], &buf[0]);
 	printpfx("deep", hash);
+	evohash(&hash[0], &buf[0]);
+	printpfx("evohash", hash);
 
 	fresh_hash(&hash[0], &buf[0]);
 	printpfx("fresh", hash);

@@ -381,6 +381,9 @@
     <ClCompile Include="balloon\balloon_scan.cpp">
       <Filter>Source Files\balloon</Filter>
     </ClCompile>
+    <ClCompile Include="rinhash\rinhash_scanhash.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="balloon\sha256-ref.c">
       <Filter>Source Files\balloon</Filter>
     </ClCompile>
@@ -1106,6 +1109,12 @@
     </CudaCompile>
     <CudaCompile Include="balloon\cuda_balloon.cu">
       <Filter>Source Files\CUDA\balloon</Filter>
+    </CudaCompile>
+    <CudaCompile Include="rinhash\rinhash.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
+    <CudaCompile Include="evohash\evohash.cu">
+      <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
   </ItemGroup>
   <ItemGroup>

@@ -301,6 +301,8 @@ extern int scanhash_cryptolight(int thr_id, struct work* work, uint32_t max_nonc
 extern int scanhash_cryptonight(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_decred(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_deep(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_evohash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_rinhash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_keccak256(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_fresh(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_fugue256(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
@@ -381,6 +383,7 @@ extern void free_cryptolight(int thr_id);
 extern void free_cryptonight(int thr_id);
 extern void free_decred(int thr_id);
 extern void free_deep(int thr_id);
+extern void free_evohash(int thr_id);
 extern void free_keccak256(int thr_id);
 extern void free_fresh(int thr_id);
 extern void free_fugue256(int thr_id);
@@ -557,6 +560,7 @@ struct option {
 extern int options_count();
 
 extern bool opt_benchmark;
+extern uint32_t opt_batch_size;
 extern bool opt_debug;
 extern bool opt_quiet;
 extern bool opt_protocol;
@@ -931,6 +935,7 @@ void cryptolight_hash(void* output, const void* input, int len);
 void cryptonight_hash(void* output, const void* input, size_t len);
 void decred_hash(void *state, const void *input);
 void deephash(void *state, const void *input);
+void evohash(void *state, const void *input);
 void luffa_hash(void *state, const void *input);
 void fresh_hash(void *state, const void *input);
 void fugue256_hash(unsigned char* output, const unsigned char* input, int len);

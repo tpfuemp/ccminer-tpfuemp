@@ -86,6 +86,7 @@ bool opt_debug_diff = false;
 bool opt_debug_threads = false;
 bool opt_protocol = false;
 bool opt_benchmark = false;
+uint32_t opt_batch_size = 0; // RinHash: nonces per scanhash call (0 = default 2M)
 bool opt_showdiff = true;
 bool opt_hwmonitor = true;
 
@@ -254,6 +255,8 @@ Options:\n\
 			argon2d1000	Zero Dynamics Cash\n\
 			argon2d16000	Alterdot\n\
 			balloon		Balloon hash\n\
+			evohash		EvoAI\n\
+			rinhash		RinHash (Blake3+Argon2d+SHA3-256)\n\
 			anime		Animecoin\n\
 			heavyhash	oBTC coin\n\
 			bastion		Hefty bastion\n\
@@ -704,6 +707,23 @@ bool jobj_binary(const json_t *obj, const char *key, void *buf, size_t buflen)
 /* compute nbits to get the network diff */
 static void calc_network_diff(struct work *work)
 {
+	// RinHash: standard cpuminer-style nbits->network-diff calculation.
+	if (opt_algo == ALGO_RINHASH) {
+		uint32_t nbits_be = work->data[18]; // big-endian already (set in stratum_gen_work)
+		uint32_t shift = (nbits_be >> 24) & 0xff;
+		uint32_t bits = nbits_be & 0x00ffffff;
+		if (bits == 0) {
+			net_diff = 0.0;
+			return;
+		}
+		double d = (double)0x0000ffff / (double)bits;
+		for (int m = shift; m < 29; m++) d *= 256.0;
+		for (int m = 29; m < shift; m++) d /= 256.0;
+		net_diff = d;
+		if (opt_debug_diff)
+			applog(LOG_DEBUG, "net diff (RinHash): %f -> shift %u, bits %08x", d, shift, bits);
+		return;
+	}
 	// sample for diff 43.281 : 1c05ea29
 	// todo: endian reversed on longpoll could be zr5 specific...
 	uint32_t nbits = have_longpoll ? work->data[18] : swab32(work->data[18]);
@@ -1028,6 +1048,11 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 			be32enc(&nonce, work->data[8]);
 			break;
 		case ALGO_ZR5:
+			check_dups = true;
+			be32enc(&ntime, work->data[17]);
+			be32enc(&nonce, work->data[19]);
+			break;
+		case ALGO_RINHASH:
 			check_dups = true;
 			be32enc(&ntime, work->data[17]);
 			be32enc(&nonce, work->data[19]);
@@ -1691,6 +1716,14 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		memcpy(&work->data[44], &sctx->job.coinbase[sctx->job.coinbase_size-4], 4);
 		sctx->job.height = work->data[32];
 		//applog_hex(work->data, 180);
+	} else if (opt_algo == ALGO_RINHASH) {
+		work->data[0] = swab32(le32dec(sctx->job.version));
+		for (i = 0; i < 8; i++) // reversed prevhash
+			work->data[1 + i] = swab32(work->data[1 + i]);
+		memcpy(&work->data[9], merkle_root, 32);
+		work->data[17] = swab32(le32dec(sctx->job.ntime));
+		work->data[18] = swab32(le32dec(sctx->job.nbits));
+		work->data[19] = 0;
 	} else if (opt_algo == ALGO_EQUIHASH) {
 		memcpy(&work->data[9], sctx->job.coinbase, 32+32); // merkle [9..16] + reserved
 		work->data[25] = le32dec(sctx->job.ntime);
@@ -1808,6 +1841,10 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_X16S:
 		case ALGO_X21S:
 			work_set_target(work, sctx->job.diff / (256.0 * opt_difficulty));
+			break;
+		case ALGO_RINHASH:
+		case ALGO_EVOHASH:
+			work_set_target(work, sctx->job.diff / opt_difficulty);
 			break;
 		case ALGO_KECCAK:
 		case ALGO_LYRA2:
@@ -2550,6 +2587,12 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_BALLOON:
 			rc = scanhash_balloon(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_RINHASH:
+			rc = scanhash_rinhash(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_EVOHASH:
+			rc = scanhash_evohash(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_ANIME:
 			rc = scanhash_anime(thr_id, &work, max_nonce, &hashes_done);

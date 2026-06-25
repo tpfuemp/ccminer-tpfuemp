@@ -93,6 +93,8 @@ enum sha_algos {
 	ALGO_YESCRYPTR24,
 	ALGO_YESCRYPTR32,
 	ALGO_ZR5,
+	ALGO_RINHASH,
+	ALGO_EVOHASH,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -188,6 +190,8 @@ static const char *algo_names[] = {
 	"yescryptr24",
 	"yescryptr32",
 	"zr5",
+	"rinhash",
+	"evohash",
 	"auto", /* reserved for multi algo */
 	""
 };
