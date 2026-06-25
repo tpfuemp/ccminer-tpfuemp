@@ -233,6 +233,7 @@
     <ClCompile Include="balloon\balloon.cpp" />
     <ClCompile Include="balloon\balloon_scan.cpp" />
     <ClCompile Include="rinhash\rinhash_scanhash.cpp" />
+    <ClCompile Include="odocrypt\odocrypt_host.cpp" />
     <ClCompile Include="balloon\sha256-ref.c" />
     <ClCompile Include="compat\getopt\getopt_long.c" />
     <ClCompile Include="compat\gettimeofday.c" />
@@ -312,6 +313,7 @@
     <CudaCompile Include="balloon\cuda_balloon.cu" />
     <CudaCompile Include="rinhash\rinhash.cu" />
     <CudaCompile Include="evohash\evohash.cu" />
+    <CudaCompile Include="odocrypt\cuda_odocrypt.cu" />
     <CudaCompile Include="blake2b.cu" />
     <CudaCompile Include="heavyhash/heavyhash.cu" />
     <CudaCompile Include="heavyhash/cuda_heavyhash.cu" />

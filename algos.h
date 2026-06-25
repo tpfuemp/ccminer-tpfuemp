@@ -95,6 +95,7 @@ enum sha_algos {
 	ALGO_ZR5,
 	ALGO_RINHASH,
 	ALGO_EVOHASH,
+	ALGO_ODO,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -192,6 +193,7 @@ static const char *algo_names[] = {
 	"zr5",
 	"rinhash",
 	"evohash",
+	"odo",
 	"auto", /* reserved for multi algo */
 	""
 };
@@ -249,6 +251,8 @@ static inline int algo_to_int(char* arg)
 			i = ALGO_ZR5;
 		else if (!strcasecmp("neoscrypt-xaya", arg))
 			i = ALGO_XAYA;
+		else if (!strcasecmp("odocrypt", arg))
+			i = ALGO_ODO;
 		else
 			i = -1;
 	}

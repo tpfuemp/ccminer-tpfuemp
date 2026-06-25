@@ -257,6 +257,7 @@ Options:\n\
 			balloon		Balloon hash\n\
 			evohash		EvoAI\n\
 			rinhash		RinHash (Blake3+Argon2d+SHA3-256)\n\
+			odo		Odocrypt (DigiByte)\n\
 			anime		Animecoin\n\
 			heavyhash	oBTC coin\n\
 			bastion		Hefty bastion\n\
@@ -1057,6 +1058,14 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 			be32enc(&ntime, work->data[17]);
 			be32enc(&nonce, work->data[19]);
 			break;
+		case ALGO_ODO:
+			// odo hashes the nonce little-endian (matching cpuminer / the pool),
+			// so the submit nonce is big-endian (the pool reverses it back to LE);
+			// ntime keeps the standard little-endian encoding.
+			check_dups = true;
+			le32enc(&ntime, work->data[17]);
+			be32enc(&nonce, work->data[19]);
+			break;
 		default:
 			le32enc(&ntime, work->data[17]);
 			le32enc(&nonce, work->data[19]);
@@ -1844,6 +1853,7 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 			break;
 		case ALGO_RINHASH:
 		case ALGO_EVOHASH:
+		case ALGO_ODO:
 			work_set_target(work, sctx->job.diff / opt_difficulty);
 			break;
 		case ALGO_KECCAK:
@@ -2593,6 +2603,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_EVOHASH:
 			rc = scanhash_evohash(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_ODO:
+			rc = scanhash_odocrypt(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_ANIME:
 			rc = scanhash_anime(thr_id, &work, max_nonce, &hashes_done);

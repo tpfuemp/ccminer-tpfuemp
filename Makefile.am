@@ -29,6 +29,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  balloon/balloon.h balloon/sha256.h \
 			  rinhash/rinhash_scanhash.cpp rinhash/rinhash.cu \
 			  evohash/evohash.cu \
+			  odocrypt/odocrypt_host.cpp odocrypt/cuda_odocrypt.cu \
 			  heavyhash/heavyhash.cu \
 			  heavyhash/cuda_heavyhash.cu \
 			  heavyhash/keccak_tiny.c \
