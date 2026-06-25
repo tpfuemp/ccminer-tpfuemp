@@ -230,6 +230,9 @@
     <ClCompile Include="argon2d\argon2ref\encoding.c" />
     <ClCompile Include="argon2d\argon2ref\opt.c" />
     <ClCompile Include="argon2d\argon2ref\thread.c" />
+    <ClCompile Include="balloon\balloon.cpp" />
+    <ClCompile Include="balloon\balloon_scan.cpp" />
+    <ClCompile Include="balloon\sha256-ref.c" />
     <ClCompile Include="compat\getopt\getopt_long.c" />
     <ClCompile Include="compat\gettimeofday.c" />
     <ClCompile Include="compat\jansson\dump.c" />
@@ -242,6 +245,8 @@
     <ClCompile Include="compat\jansson\strconv.c" />
     <ClCompile Include="compat\jansson\utf.c" />
     <ClCompile Include="compat\jansson\value.c" />
+    <ClInclude Include="balloon\balloon.h" />
+    <ClInclude Include="balloon\sha256.h" />
     <ClInclude Include="compat\pthreads\pthread.h" />
     <ClCompile Include="compat\winansi.c" />
     <ClCompile Include="ccminer.cpp">
@@ -303,6 +308,7 @@
       <MaxRegCount>76</MaxRegCount>
     </CudaCompile>
     <CudaCompile Include="allium.cu" />
+    <CudaCompile Include="balloon\cuda_balloon.cu" />
     <CudaCompile Include="blake2b.cu" />
     <CudaCompile Include="heavyhash/heavyhash.cu" />
     <CudaCompile Include="heavyhash/cuda_heavyhash.cu" />

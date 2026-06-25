@@ -253,6 +253,7 @@ Options:\n\
 			allium		Lyra2 blake2s\n\
 			argon2d1000	Zero Dynamics Cash\n\
 			argon2d16000	Alterdot\n\
+			balloon		Balloon hash\n\
 			anime		Animecoin\n\
 			heavyhash	oBTC coin\n\
 			bastion		Hefty bastion\n\
@@ -2546,6 +2547,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_ARGON2D16000:
 			rc = scanhash_argon2d16000(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_BALLOON:
+			rc = scanhash_balloon(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_ANIME:
 			rc = scanhash_anime(thr_id, &work, max_nonce, &hashes_done);

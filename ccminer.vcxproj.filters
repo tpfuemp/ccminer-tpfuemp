@@ -121,6 +121,12 @@
     <Filter Include="Source Files\CUDA\yescrypt">
       <UniqueIdentifier>{600e2767-1d6f-4434-9f53-5fa16bd1385f}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\CUDA\balloon">
+      <UniqueIdentifier>{da9944d6-30eb-4887-b42f-a91e1f63091c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\balloon">
+      <UniqueIdentifier>{3f1a032d-6cd2-4637-b103-ee835a1ead32}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="compat\jansson\dump.c">
@@ -369,6 +375,15 @@
     <ClCompile Include="argon2d\argon2ref\encoding.c" />
     <ClCompile Include="argon2d\argon2ref\opt.c" />
     <ClCompile Include="argon2d\argon2ref\thread.c" />
+    <ClCompile Include="balloon\balloon.cpp">
+      <Filter>Source Files\balloon</Filter>
+    </ClCompile>
+    <ClCompile Include="balloon\balloon_scan.cpp">
+      <Filter>Source Files\balloon</Filter>
+    </ClCompile>
+    <ClCompile Include="balloon\sha256-ref.c">
+      <Filter>Source Files\balloon</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="algos.h">
@@ -651,6 +666,12 @@
     <ClInclude Include="argon2d\argon2ref\blake2\blakma-round-ref.h" />
     <ClInclude Include="argon2d\argon2d_kernel.h" />
     <ClInclude Include="argon2d\cudaexception.h" />
+    <ClInclude Include="balloon\balloon.h">
+      <Filter>Source Files\balloon</Filter>
+    </ClInclude>
+    <ClInclude Include="balloon\sha256.h">
+      <Filter>Source Files\balloon</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="cuda.cpp">
@@ -1082,6 +1103,9 @@
     <CudaCompile Include="argon2d\blake2b_kernels.cu" />
     <CudaCompile Include="blake2b.cu">
       <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
+    <CudaCompile Include="balloon\cuda_balloon.cu">
+      <Filter>Source Files\CUDA\balloon</Filter>
     </CudaCompile>
   </ItemGroup>
   <ItemGroup>

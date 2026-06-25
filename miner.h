@@ -289,6 +289,7 @@ extern int scanhash_argon2d1000(int thr_id, struct work *work, uint32_t max_nonc
 extern int scanhash_argon2d16000(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_anime(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_heavyhash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_balloon(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done);
 extern int scanhash_bastion(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_blake256(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done, int8_t blakerounds);
 extern int scanhash_blake2b(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
