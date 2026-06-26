@@ -70,33 +70,11 @@ extern void x17_sha512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startN
 extern void x17_haval256_cpu_init(int thr_id, uint32_t threads);
 extern void x17_haval256_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash, const int outlen);
 
-// sha256 over a 64-byte chained value (x21/cuda_sha256_2.cu). Writes 32 bytes,
-// leaving the high 32 bytes of the slot stale (we zero them before haval).
-extern void sha256_cpu_hash_64(int thr_id, int threads, uint32_t *d_hash);
-
-// Zero the high 32 bytes (uint32 indices 8..15) of each 64-byte hash slot, so
+// sha256 over a 64-byte chained value, writing the 32-byte digest and zeroing
+// the high 32 bytes of the slot in the same kernel (x21/cuda_sha256_2.cu), so
 // the final haval consumes the same (32 bytes digest || 32 bytes zero) buffer
-// as the CPU reference.
-__global__
-void skydoge_zero_upper_gpu(const uint32_t threads, uint32_t *g_hash)
-{
-	const uint32_t thread = blockDim.x * blockIdx.x + threadIdx.x;
-	if (thread < threads) {
-		uint32_t *h = &g_hash[thread * 16U];
-		#pragma unroll
-		for (int i = 8; i < 16; i++)
-			h[i] = 0;
-	}
-}
-
-__host__
-static void skydoge_zero_upper_cpu(uint32_t threads, uint32_t *d_hash)
-{
-	const uint32_t threadsperblock = 256;
-	dim3 grid((threads + threadsperblock - 1) / threadsperblock);
-	dim3 block(threadsperblock);
-	skydoge_zero_upper_gpu <<<grid, block>>> (threads, d_hash);
-}
+// as the CPU reference -- without a separate zeroing launch.
+extern void sha256_cpu_hash_64z(int thr_id, int threads, uint32_t *d_hash);
 
 // SkyDoge CPU Hash (validation + self-test reference)
 extern "C" void skydoge_hash(void *output, const void *input)
@@ -329,8 +307,7 @@ extern "C" int scanhash_skydoge(int thr_id, struct work* work, uint32_t max_nonc
 		x17_sha512_cpu_hash_64(thr_id, throughput, pdata[19], d_hash[thr_id]); order++;                      // 16
 		x11_simd512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);               // 17
 		x15_whirlpool_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);             // 18
-		sha256_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;                                     // 19
-		skydoge_zero_upper_cpu(throughput, d_hash[thr_id]);
+		sha256_cpu_hash_64z(thr_id, throughput, d_hash[thr_id]); order++;                                    // 19 (digest + zero high 32 bytes)
 		x17_haval256_cpu_hash_64(thr_id, throughput, pdata[19], d_hash[thr_id], 256); order++;               // 20
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
