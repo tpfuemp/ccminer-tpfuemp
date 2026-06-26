@@ -96,6 +96,7 @@ enum sha_algos {
 	ALGO_RINHASH,
 	ALGO_EVOHASH,
 	ALGO_ODO,
+	ALGO_SKYDOGE,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -194,6 +195,7 @@ static const char *algo_names[] = {
 	"rinhash",
 	"evohash",
 	"odo",
+	"skydoge",
 	"auto", /* reserved for multi algo */
 	""
 };

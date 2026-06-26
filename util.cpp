@@ -2353,6 +2353,9 @@ void print_hash_tests(void)
 	x21s_hash(&hash[0], &buf[0]);
 	printpfx("X21S", hash);
 
+	skydoge_hash(&hash[0], &buf[0]);
+	printpfx("SkyDoge", hash);
+
 	//memcpy(buf, zrtest, 80);
 	zr5hash(&hash[0], &buf[0]);
 	//zr5hash_pok(&hash[0], (uint32_t*) &buf[0]);

@@ -329,6 +329,7 @@ Options:\n\
 			x16rv2		X16R V2\n\
 			x16s		X16S\n\
 			x21s		X21S\n\
+			skydoge		SkyDoge\n\
 			wildkeccak	Boolberry\n\
 			yescrypt     Globlboost-Y (BSTY) or any params\n\
             yescryptr8   BitZeny (ZNY)\n\
@@ -1854,6 +1855,7 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_RINHASH:
 		case ALGO_EVOHASH:
 		case ALGO_ODO:
+		case ALGO_SKYDOGE:
 			work_set_target(work, sctx->job.diff / opt_difficulty);
 			break;
 		case ALGO_KECCAK:
@@ -2721,6 +2723,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_X21S:
 			rc = scanhash_x21s(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_SKYDOGE:
+			rc = scanhash_skydoge(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_ZR5:
 			rc = scanhash_zr5(thr_id, &work, max_nonce, &hashes_done);

@@ -356,6 +356,7 @@ extern int scanhash_x16rv2(int thr_id, struct work* work, uint32_t max_nonce, un
 extern int scanhash_x16s(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_x17(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_x21s(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_skydoge(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_zr5(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 
 extern int scanhash_yescrypt(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done);
@@ -435,6 +436,7 @@ extern void free_x16rv2(int thr_id);
 extern void free_x16s(int thr_id);
 extern void free_x17(int thr_id);
 extern void free_x21s(int thr_id);
+extern void free_skydoge(int thr_id);
 extern void free_zr5(int thr_id);
 /* api related */
 void *api_thread(void *userdata);
@@ -990,6 +992,7 @@ void x16rv2_hash(void *output, const void *input);
 void x16s_hash(void *output, const void *input);
 void x17hash(void *output, const void *input);
 void x21s_hash(void *output, const void *input);
+void skydoge_hash(void *output, const void *input);
 void wildkeccak_hash(void *output, const void *input, uint64_t* scratchpad, uint64_t ssize);
 void yescrypt_hash(void* output, const void* input);
 void yescryptr8_hash(void* output, const void* input);
