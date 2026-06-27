@@ -54,6 +54,12 @@ __device__ __constant__ static uint32_t d_K256[64];
 __device__ __constant__ static uint32_t d_midstate[8]; // SHA-256 midstate of stage2 block 1
 __device__ __constant__ static uint32_t d_block2[4];    // w0=merkle tail, w1=ntime, [2] unused, w3=nonce_hi
 __device__ __constant__ static uint32_t d_target[8];    // work->target (index 7 = most significant)
+// Block-2 compression state after rounds 0,1,2 (only nonce word w[2] varies, so
+// those rounds depend on the nonce only as "const + w2"). Layout matches a..h
+// after round 2 with the two nonce-linear words pre-split: [0]=const part of a,
+// [1]=b, [2]=c, [3]=d, [4]=const part of e, [5]=f, [6]=g, [7]=h. The kernel adds
+// w2 back into [0]/[4] and resumes compression at round 3 (cf. cgminer SHA256d).
+__device__ __constant__ static uint32_t d_pre[8];
 
 static uint32_t *d_resNonce[MAX_GPUS];
 static bool      init_done[MAX_GPUS] = { 0 };
@@ -102,6 +108,42 @@ static void host_sha256_transform(uint32_t state[8], const uint32_t in[16])
 	}
 	state[0]+=a; state[1]+=b; state[2]+=c; state[3]+=d;
 	state[4]+=e; state[5]+=f; state[6]+=g; state[7]+=h;
+}
+
+// Precompute block-2 compression state through round 2, where only the nonce
+// word w[2] varies. Rounds 0,1 are fully constant; round 2's t1/t2 reduce to
+// "const + w2", so the resulting a and e are "const + w2". We hand the kernel
+// the constant parts (a/e split out) and let it resume compression at round 3.
+static void sha256dv_precompute_pre(const uint32_t ms[8], const uint32_t block2[4],
+                                    uint32_t pre[8])
+{
+	uint32_t a=ms[0],b=ms[1],c=ms[2],d=ms[3],e=ms[4],f=ms[5],g=ms[6],h=ms[7];
+	const uint32_t w01[2] = { block2[0], block2[1] };   // rounds 0,1 message words
+	for (int i = 0; i < 2; i++) {
+		uint32_t S1 = ROTR32(e,6) ^ ROTR32(e,11) ^ ROTR32(e,25);
+		uint32_t ch = (e & f) ^ (~e & g);
+		uint32_t t1 = h + S1 + ch + h_K256[i] + w01[i];
+		uint32_t S0 = ROTR32(a,2) ^ ROTR32(a,13) ^ ROTR32(a,22);
+		uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+		uint32_t t2 = S0 + maj;
+		h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
+	}
+	// State here is a2..h2 (after rounds 0,1). Round 2 omits w[2]=w2 (added back
+	// on the device): t1 = T1c + w2, t2 = T2c, both T*c constant.
+	uint32_t S1  = ROTR32(e,6) ^ ROTR32(e,11) ^ ROTR32(e,25);
+	uint32_t ch  = (e & f) ^ (~e & g);
+	uint32_t T1c = h + S1 + ch + h_K256[2];
+	uint32_t S0  = ROTR32(a,2) ^ ROTR32(a,13) ^ ROTR32(a,22);
+	uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+	uint32_t T2c = S0 + maj;
+	pre[0] = T1c + T2c;   // a3 = const + w2
+	pre[1] = a;           // b3 = a2
+	pre[2] = b;           // c3 = b2
+	pre[3] = c;           // d3 = c2
+	pre[4] = d + T1c;     // e3 = const + w2
+	pre[5] = e;           // f3 = e2
+	pre[6] = f;           // g3 = f2
+	pre[7] = g;           // h3 = g2
 }
 
 // Double SHA-256 of an 80-byte stage2 buffer -> 8 LE words (index 7 = MSW,
@@ -158,33 +200,9 @@ static bool sha256dv_meets_target(const uint32_t *hash, const uint32_t *target)
 // ---------------------------------------------------------------------------
 // Device SHA-256
 // ---------------------------------------------------------------------------
-
-__device__ __forceinline__
-static void dev_sha256_transform(uint32_t state[8], const uint32_t in[16])
-{
-	uint32_t w[64];
-	#pragma unroll
-	for (int i = 0; i < 16; i++) w[i] = in[i];
-	#pragma unroll
-	for (int i = 16; i < 64; i++) {
-		uint32_t s0 = ROTR32(w[i-15], 7) ^ ROTR32(w[i-15], 18) ^ (w[i-15] >> 3);
-		uint32_t s1 = ROTR32(w[i-2], 17) ^ ROTR32(w[i-2], 19) ^ (w[i-2] >> 10);
-		w[i] = w[i-16] + s0 + w[i-7] + s1;
-	}
-	uint32_t a=state[0],b=state[1],c=state[2],d=state[3],e=state[4],f=state[5],g=state[6],h=state[7];
-	#pragma unroll
-	for (int i = 0; i < 64; i++) {
-		uint32_t S1 = ROTR32(e,6) ^ ROTR32(e,11) ^ ROTR32(e,25);
-		uint32_t ch = (e & f) ^ (~e & g);
-		uint32_t t1 = h + S1 + ch + d_K256[i] + w[i];
-		uint32_t S0 = ROTR32(a,2) ^ ROTR32(a,13) ^ ROTR32(a,22);
-		uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
-		uint32_t t2 = S0 + maj;
-		h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
-	}
-	state[0]+=a; state[1]+=b; state[2]+=c; state[3]+=d;
-	state[4]+=e; state[5]+=f; state[6]+=g; state[7]+=h;
-}
+// Both blocks are inlined into the kernel below (the first transform resumes
+// from the host-precomputed round-2 state; the second uses a round-60 early-out),
+// so there is no shared device transform helper.
 
 __global__
 void sha256dv_gpu_hash(uint32_t threads, uint32_t startNonce, uint32_t *resNonce)
@@ -193,56 +211,123 @@ void sha256dv_gpu_hash(uint32_t threads, uint32_t startNonce, uint32_t *resNonce
 	if (tid < threads)
 	{
 		const uint32_t nonce_lo = startNonce + tid;
+		const uint32_t w2 = cuda_swab32(nonce_lo);   // nonce_lo message word
 
 		// Second block of the first SHA-256 (continues from the job midstate).
-		uint32_t in[16];
-		in[0] = d_block2[0];                 // merkle tail
-		in[1] = d_block2[1];                 // ntime
-		in[2] = cuda_swab32(nonce_lo);       // nonce_lo message word
-		in[3] = d_block2[3];                 // nonce_hi
-		in[4] = 0x80000000;
+		// Only message word w[2] depends on the nonce, so rounds 0,1,2 of the
+		// compression are precomputed on the host (d_pre); we resume at round 3.
+		uint32_t w[64];
+		w[0] = d_block2[0];                  // merkle tail
+		w[1] = d_block2[1];                  // ntime
+		w[2] = w2;
+		w[3] = d_block2[3];                  // nonce_hi
+		w[4] = 0x80000000;
 		#pragma unroll
-		for (int i = 5; i < 15; i++) in[i] = 0;
-		in[15] = 640;
+		for (int i = 5; i < 15; i++) w[i] = 0;
+		w[15] = 640;
+		#pragma unroll
+		for (int i = 16; i < 64; i++) {
+			uint32_t s0 = ROTR32(w[i-15], 7) ^ ROTR32(w[i-15], 18) ^ (w[i-15] >> 3);
+			uint32_t s1 = ROTR32(w[i-2], 17) ^ ROTR32(w[i-2], 19) ^ (w[i-2] >> 10);
+			w[i] = w[i-16] + s0 + w[i-7] + s1;
+		}
+
+		uint32_t a = d_pre[0] + w2, b = d_pre[1], c = d_pre[2], d = d_pre[3];
+		uint32_t e = d_pre[4] + w2, f = d_pre[5], g = d_pre[6], h = d_pre[7];
+		#pragma unroll
+		for (int i = 3; i < 64; i++) {
+			uint32_t S1 = ROTR32(e,6) ^ ROTR32(e,11) ^ ROTR32(e,25);
+			uint32_t ch = (e & f) ^ (~e & g);
+			uint32_t t1 = h + S1 + ch + d_K256[i] + w[i];
+			uint32_t S0 = ROTR32(a,2) ^ ROTR32(a,13) ^ ROTR32(a,22);
+			uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+			uint32_t t2 = S0 + maj;
+			h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
+		}
 
 		uint32_t st[8];
-		#pragma unroll
-		for (int i = 0; i < 8; i++) st[i] = d_midstate[i];
-		dev_sha256_transform(st, in);
+		st[0] = d_midstate[0] + a; st[1] = d_midstate[1] + b;
+		st[2] = d_midstate[2] + c; st[3] = d_midstate[3] + d;
+		st[4] = d_midstate[4] + e; st[5] = d_midstate[5] + f;
+		st[6] = d_midstate[6] + g; st[7] = d_midstate[7] + h;
 
-		// Second SHA-256 over the 32-byte first digest.
-		uint32_t in2[16];
+		// Second SHA-256 over the 32-byte first digest, inlined with a round-60
+		// early-out. The compared MSW st2[7] = 0x5be0cd19 + e60 is fully
+		// determined after round 60 (register lineage gives h63 = e60), so for
+		// any target whose high word is 0 (pool diff >= 1) almost every nonce is
+		// rejected here -- skipping rounds 61-63, the feed-forward and the full
+		// compare. Rare survivors (incl. the exact-match self-test) finish normally.
+		uint32_t w2s[64];
 		#pragma unroll
-		for (int i = 0; i < 8; i++) in2[i] = st[i];
-		in2[8] = 0x80000000;
+		for (int i = 0; i < 8; i++) w2s[i] = st[i];
+		w2s[8] = 0x80000000;
 		#pragma unroll
-		for (int i = 9; i < 15; i++) in2[i] = 0;
-		in2[15] = 256;
-
-		uint32_t st2[8] = {
-			0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-			0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
-		};
-		dev_sha256_transform(st2, in2);
-
-		// MSW-first compare against target.
-		bool ok = true;
+		for (int i = 9; i < 15; i++) w2s[i] = 0;
+		w2s[15] = 256;
 		#pragma unroll
-		for (int i = 7; i >= 0; i--) {
-			if (st2[i] > d_target[i]) { ok = false; break; }
-			if (st2[i] < d_target[i]) break;
+		for (int i = 16; i <= 60; i++) {
+			uint32_t s0 = ROTR32(w2s[i-15],7) ^ ROTR32(w2s[i-15],18) ^ (w2s[i-15] >> 3);
+			uint32_t s1 = ROTR32(w2s[i-2],17) ^ ROTR32(w2s[i-2],19) ^ (w2s[i-2] >> 10);
+			w2s[i] = w2s[i-16] + s0 + w2s[i-7] + s1;
 		}
-		if (ok)
-			resNonce[0] = nonce_lo;
+
+		uint32_t A = 0x6a09e667, B = 0xbb67ae85, C = 0x3c6ef372, D = 0xa54ff53a;
+		uint32_t E = 0x510e527f, F = 0x9b05688c, G = 0x1f83d9ab, H = 0x5be0cd19;
+		#pragma unroll
+		for (int i = 0; i <= 60; i++) {
+			uint32_t S1 = ROTR32(E,6) ^ ROTR32(E,11) ^ ROTR32(E,25);
+			uint32_t ch = (E & F) ^ (~E & G);
+			uint32_t t1 = H + S1 + ch + d_K256[i] + w2s[i];
+			uint32_t S0 = ROTR32(A,2) ^ ROTR32(A,13) ^ ROTR32(A,22);
+			uint32_t maj = (A & B) ^ (A & C) ^ (B & C);
+			uint32_t t2 = S0 + maj;
+			H=G; G=F; F=E; E=D+t1; D=C; C=B; B=A; A=t1+t2;
+		}
+
+		// st2[7] == 0x5be0cd19 + e60 (== h after round 63). Reject unless it can
+		// still meet the target high word; otherwise finish and full-compare.
+		if (0x5be0cd19 + E <= d_target[7]) {
+			#pragma unroll
+			for (int i = 61; i < 64; i++) {
+				uint32_t s0 = ROTR32(w2s[i-15],7) ^ ROTR32(w2s[i-15],18) ^ (w2s[i-15] >> 3);
+				uint32_t s1 = ROTR32(w2s[i-2],17) ^ ROTR32(w2s[i-2],19) ^ (w2s[i-2] >> 10);
+				w2s[i] = w2s[i-16] + s0 + w2s[i-7] + s1;
+			}
+			#pragma unroll
+			for (int i = 61; i < 64; i++) {
+				uint32_t S1 = ROTR32(E,6) ^ ROTR32(E,11) ^ ROTR32(E,25);
+				uint32_t ch = (E & F) ^ (~E & G);
+				uint32_t t1 = H + S1 + ch + d_K256[i] + w2s[i];
+				uint32_t S0 = ROTR32(A,2) ^ ROTR32(A,13) ^ ROTR32(A,22);
+				uint32_t maj = (A & B) ^ (A & C) ^ (B & C);
+				uint32_t t2 = S0 + maj;
+				H=G; G=F; F=E; E=D+t1; D=C; C=B; B=A; A=t1+t2;
+			}
+
+			uint32_t st2[8];
+			st2[0]=0x6a09e667+A; st2[1]=0xbb67ae85+B; st2[2]=0x3c6ef372+C; st2[3]=0xa54ff53a+D;
+			st2[4]=0x510e527f+E; st2[5]=0x9b05688c+F; st2[6]=0x1f83d9ab+G; st2[7]=0x5be0cd19+H;
+
+			// MSW-first compare against target.
+			bool ok = true;
+			#pragma unroll
+			for (int i = 7; i >= 0; i--) {
+				if (st2[i] > d_target[i]) { ok = false; break; }
+				if (st2[i] < d_target[i]) break;
+			}
+			if (ok)
+				resNonce[0] = nonce_lo;
+		}
 	}
 }
 
 __host__
 static void sha256dv_setBlock(const uint32_t midstate[8], const uint32_t block2[4],
-                              const uint32_t target[8])
+                              const uint32_t pre[8], const uint32_t target[8])
 {
 	cudaMemcpyToSymbol(d_midstate, midstate, 8 * sizeof(uint32_t), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(d_block2,   block2,   4 * sizeof(uint32_t), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(d_pre,      pre,      8 * sizeof(uint32_t), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(d_target,   target,   8 * sizeof(uint32_t), 0, cudaMemcpyHostToDevice);
 }
 
@@ -279,7 +364,9 @@ static bool sha256dv_self_test(int thr_id)
 	// nonce only if its GPU-computed hash is <= exp. Since the host hash equals
 	// exp exactly, a correct kernel reports it; a kernel that computes a larger
 	// digest fails the test (got stays UINT32_MAX).
-	sha256dv_setBlock(ms, block2, exp);
+	uint32_t pre[8];
+	sha256dv_precompute_pre(ms, block2, pre);
+	sha256dv_setBlock(ms, block2, pre, exp);
 
 	cudaMemset(d_resNonce[thr_id], 0xff, sizeof(uint32_t));
 	sha256dv_gpu_hash <<< 1, 1 >>> (1, nonce_lo, d_resNonce[thr_id]);
@@ -319,7 +406,7 @@ extern "C" int scanhash_sha256dv(int thr_id, struct work* work, uint32_t max_non
 	// --benchmark uses the host-supplied pdata[19]/max_nonce window directly.
 	const bool dv_track = !opt_benchmark;
 
-	uint32_t throughput = cuda_default_throughput(thr_id, 1U << 23);
+	uint32_t throughput = cuda_default_throughput(thr_id, 1U << 24);
 	if (init_done[thr_id] && !dv_track) throughput = min(throughput, max_nonce - pdata[19]);
 
 	if (opt_benchmark)
@@ -379,7 +466,9 @@ extern "C" int scanhash_sha256dv(int thr_id, struct work* work, uint32_t max_non
 	block2[2] = 0;
 	block2[3] = be32dec(stage2 + 76);
 
-	sha256dv_setBlock(ms, block2, ptarget);
+	uint32_t pre[8];
+	sha256dv_precompute_pre(ms, block2, pre);
+	sha256dv_setBlock(ms, block2, pre, ptarget);
 
 	const uint32_t first_nonce = pdata[19];
 	// Scan the full nonce_lo space (0..2^32); cap this call to one host-sized
@@ -391,6 +480,11 @@ extern "C" int scanhash_sha256dv(int thr_id, struct work* work, uint32_t max_non
 			? (uint64_t)first_nonce + 0x40000000ull : scan_end)
 		: scan_end;
 
+	// Reset the result slot once. The kernel only writes it on a find (which
+	// returns below), so a no-find iteration leaves it at UINT32_MAX -- no need
+	// to re-clear every launch. The rare reject-continue path re-arms it inline.
+	cudaMemset(d_resNonce[thr_id], 0xff, sizeof(uint32_t));
+
 	do {
 		// Clamp the final window so the cursor never wraps past the 2^32 nonce_lo
 		// space (dv_track) or the host max_nonce (benchmark).
@@ -398,9 +492,7 @@ extern "C" int scanhash_sha256dv(int thr_id, struct work* work, uint32_t max_non
 		if ((uint64_t)pdata[19] + span > scan_end)
 			span = (uint32_t)(scan_end - pdata[19]);
 
-		cudaMemset(d_resNonce[thr_id], 0xff, sizeof(uint32_t));
-
-		const uint32_t tpb = 256;
+		const uint32_t tpb = 128;
 		dim3 grid((span + tpb - 1) / tpb);
 		dim3 block(tpb);
 		sha256dv_gpu_hash <<< grid, block >>> (span, pdata[19], d_resNonce[thr_id]);
@@ -436,6 +528,9 @@ extern "C" int scanhash_sha256dv(int thr_id, struct work* work, uint32_t max_non
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
 					gpulog(LOG_WARNING, thr_id, "result for nonce_lo %08x does not validate on CPU!", resNonce);
+				// Re-arm the slot: the kernel wrote a (rejected) nonce into it, so
+				// clear it before continuing or the next read would re-trigger.
+				cudaMemset(d_resNonce[thr_id], 0xff, sizeof(uint32_t));
 			}
 		}
 
