@@ -300,6 +300,7 @@ extern int scanhash_c11(int thr_id, struct work* work, uint32_t max_nonce, unsig
 extern int scanhash_cryptolight(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_cryptonight(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_decred(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_sha256dv(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_deep(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_evohash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_rinhash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
@@ -437,6 +438,7 @@ extern void free_x16s(int thr_id);
 extern void free_x17(int thr_id);
 extern void free_x21s(int thr_id);
 extern void free_skydoge(int thr_id);
+extern void free_sha256dv(int thr_id);
 extern void free_zr5(int thr_id);
 /* api related */
 void *api_thread(void *userdata);
@@ -709,6 +711,12 @@ struct stratum_job {
 	uint32_t height;
 	uint32_t shares_count;
 	double diff;
+	// Veil SHA256Dv (bespoke notify, see sha256dv.cu)
+	bool          veil_sha256dv;
+	unsigned char veil_midstate_be[32];
+	unsigned char veil_merkle_be[32];
+	uint32_t      veil_ntime;
+	uint32_t      veil_nonce_hi;
 };
 
 struct stratum_ctx {
@@ -776,6 +784,14 @@ struct work {
 
 	uint32_t scanned_from;
 	uint32_t scanned_to;
+
+	// Veil SHA256Dv job fields (bespoke notify/submit, see sha256dv.cu)
+	bool          veil_sha256dv;
+	unsigned char veil_midstate_be[32];
+	unsigned char veil_merkle_be[32];
+	uint32_t      veil_ntime;
+	uint32_t      veil_nonce_hi;
+	uint32_t      veil_nonce_lo;
 
 	/* pok getwork txs */
 	uint32_t tx_count;

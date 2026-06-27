@@ -303,6 +303,7 @@ Options:\n\
 			sha256csm	SHA256csm (galleoncoin)\n\
 			sha256d		SHA256d (bitcoin)\n\
 			sha256t		SHA256 x3\n\
+			sha256dv	SHA256d Veil\n\
 			sha3d		Bsha3, Yilacoin and Kylacoin\n\
 			sia		SIA (Blake2B)\n\
 			sib		Sibcoin (X11+Streebog)\n\
@@ -1015,6 +1016,29 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 		char *ntimestr, *noncestr, *xnonce2str, *nvotestr;
 		uint16_t nvote = 0;
 
+		// Veil SHA256Dv: bespoke mining.submit carrying (nonce_hi, ntime, nonce_lo).
+		if (opt_algo == ALGO_SHA256DV) {
+			uint32_t v_ntime, v_hi, v_lo;
+			le32enc(&v_ntime, work->veil_ntime);
+			le32enc(&v_hi,    work->veil_nonce_hi);
+			le32enc(&v_lo,    work->veil_nonce_lo);
+			char *ntimes = bin2hex((const uchar*)&v_ntime, 4);
+			char *histr  = bin2hex((const uchar*)&v_hi, 4);
+			char *lostr  = bin2hex((const uchar*)&v_lo, 4);
+			stratum.sharediff = work->sharediff[idnonce];
+			sprintf(s, "{\"method\": \"mining.submit\", \"params\": ["
+				"\"%s\", \"%s\", \"%s\", \"%s\", \"%s\"], \"id\":%u}",
+				pool->user, work->job_id + 8, histr, ntimes, lostr, stratum.job.shares_count + 10);
+			free(ntimes); free(histr); free(lostr);
+			gettimeofday(&stratum.tv_submit, NULL);
+			if (unlikely(!stratum_send_line(&stratum, s))) {
+				applog(LOG_ERR, "submit_upstream_work stratum_send_line failed");
+				return false;
+			}
+			stratum.job.shares_count++;
+			return true;
+		}
+
 		switch (opt_algo) {
 		case ALGO_BLAKE:
 		case ALGO_BLAKECOIN:
@@ -1642,7 +1666,11 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 	snprintf(work->job_id, sizeof(work->job_id), "%07x %s",
 		be32dec(sctx->job.ntime) & 0xfffffff, sctx->job.job_id);
 	work->xnonce2_len = sctx->xnonce2_size;
-	memcpy(work->xnonce2, sctx->job.xnonce2, sctx->xnonce2_size);
+	// Bespoke jobs (e.g. SHA256Dv/Veil) supply a finished midstate and carry no
+	// coinbase, so sctx->job.xnonce2 is NULL even though the pool advertised an
+	// xnonce2 size at subscribe time. Guard the copy against that NULL.
+	if (sctx->job.xnonce2)
+		memcpy(work->xnonce2, sctx->job.xnonce2, sctx->xnonce2_size);
 
 	// also store the block number
 	work->height = sctx->job.height;
@@ -1654,7 +1682,8 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_DECRED:
 		case ALGO_EQUIHASH:
 		case ALGO_SIA:
-			// getwork over stratum, no merkle to generate
+		case ALGO_SHA256DV:
+			// getwork over stratum / pool-supplied midstate, no merkle to generate
 			break;
 #ifdef WITH_HEAVY_ALGO
 		case ALGO_HEAVY:
@@ -1696,7 +1725,8 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 	}
 	
 	/* Increment extranonce2 */
-	for (i = 0; i < (int)sctx->xnonce2_size && !++sctx->job.xnonce2[i]; i++);
+	if (sctx->job.xnonce2)
+		for (i = 0; i < (int)sctx->xnonce2_size && !++sctx->job.xnonce2[i]; i++);
 
 	/* Assemble block header */
 	memset(work->data, 0, sizeof(work->data));
@@ -1769,6 +1799,18 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		work->data[18] = le32dec(sctx->job.nbits);
 		work->data[20] = 0x80000000;
 		work->data[31] = (opt_algo == ALGO_MJOLLNIR) ? 0x000002A0 : 0x00000280;
+	} else if (opt_algo == ALGO_SHA256DV) {
+		// Veil SHA256Dv: pool-supplied midstate/merkle; no header to assemble.
+		// work->data[0] already holds le32dec(version).
+		work->veil_sha256dv = sctx->job.veil_sha256dv;
+		memcpy(work->veil_midstate_be, sctx->job.veil_midstate_be, 32);
+		memcpy(work->veil_merkle_be,   sctx->job.veil_merkle_be,   32);
+		work->veil_ntime    = sctx->job.veil_ntime;
+		work->veil_nonce_hi = sctx->job.veil_nonce_hi;
+		work->veil_nonce_lo = 0;
+		work->data[17] = sctx->job.veil_ntime;        // for debug/diff display only
+		work->data[18] = le32dec(sctx->job.nbits);    // for calc_network_diff only
+		work->data[19] = 0;                           // nonce_lo cursor
 	} else {
 		for (i = 0; i < 8; i++)
 			work->data[9 + i] = be32dec((uint32_t *)merkle_root + i);
@@ -2370,6 +2412,7 @@ static void *miner_thread(void *userdata)
 			case ALGO_SHA256CSM:
 			case ALGO_SHA256D:
 			case ALGO_SHA256T:
+			case ALGO_SHA256DV:
 			//case ALGO_WHIRLPOOLX:
 				minmax = 0x40000000U;
 				break;
@@ -2650,6 +2693,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_SHA256T:
 			rc = scanhash_sha256t(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_SHA256DV:
+			rc = scanhash_sha256dv(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_SHA3D:
 			rc = scanhash_sha3d(thr_id, &work, max_nonce, &hashes_done);

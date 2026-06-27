@@ -34,6 +34,7 @@
 #include <netinet/tcp.h>
 #endif
 #include "miner.h"
+#include "algos.h"
 #include "elist.h"
 
 #include "crypto/xmr-rpc.h"
@@ -1435,6 +1436,76 @@ static uint32_t getblocheight(struct stratum_ctx *sctx)
 	return height;
 }
 
+// Veil SHA256Dv bespoke mining.notify. The pool has already done stage-1 and
+// sends a finished midstate + merkle root, so there is no coinbase/extranonce.
+// Params: [job_id, version, midstate_hex, merkle_hex, _, ntime, nbits_hex,
+//          nonce_hi, clean, height, tx_count].
+static bool sha256dv_stratum_notify(struct stratum_ctx *sctx, json_t *params)
+{
+	if (!params || !json_is_array(params) || json_array_size(params) < 11) {
+		applog(LOG_ERR, "SHA256Dv notify: expected >= 11 params");
+		return false;
+	}
+
+	json_t *j_job_id = json_array_get(params, 0);
+	json_t *j_ver    = json_array_get(params, 1);
+	json_t *j_mid    = json_array_get(params, 2);
+	json_t *j_mrk    = json_array_get(params, 3);
+	json_t *j_ntime  = json_array_get(params, 5);
+	json_t *j_nbits  = json_array_get(params, 6);
+	json_t *j_nonhi  = json_array_get(params, 7);
+	json_t *j_clean  = json_array_get(params, 8);
+	json_t *j_height = json_array_get(params, 9);
+
+	if (!json_is_string(j_job_id) || !json_is_integer(j_ver) ||
+	    !json_is_string(j_mid)    || !json_is_string(j_mrk)  ||
+	    !json_is_integer(j_ntime) || !json_is_string(j_nbits) ||
+	    !json_is_integer(j_nonhi)) {
+		applog(LOG_ERR, "SHA256Dv notify: invalid parameters");
+		return false;
+	}
+
+	const char *job_id       = json_string_value(j_job_id);
+	const char *midstate_hex = json_string_value(j_mid);
+	const char *merkle_hex   = json_string_value(j_mrk);
+	const char *nbits_hex    = json_string_value(j_nbits);
+	uint32_t version  = (uint32_t) json_integer_value(j_ver);
+	uint32_t ntime    = (uint32_t) json_integer_value(j_ntime);
+	uint32_t nonce_hi = (uint32_t) json_integer_value(j_nonhi);
+
+	if (strlen(midstate_hex) != 64 || strlen(merkle_hex) != 64 || strlen(nbits_hex) != 8) {
+		applog(LOG_ERR, "SHA256Dv notify: bad field length");
+		return false;
+	}
+
+	pthread_mutex_lock(&stratum_work_lock);
+
+	free(sctx->job.job_id);
+	sctx->job.job_id = strdup(job_id);
+
+	// version stored little-endian (recovered as an integer in stratum_gen_work)
+	sctx->job.version[0] =  version        & 0xff;
+	sctx->job.version[1] = (version >> 8)  & 0xff;
+	sctx->job.version[2] = (version >> 16) & 0xff;
+	sctx->job.version[3] = (version >> 24) & 0xff;
+
+	hex2bin(sctx->job.veil_midstate_be, midstate_hex, 32);
+	hex2bin(sctx->job.veil_merkle_be,   merkle_hex,   32);
+	hex2bin(sctx->job.nbits,            nbits_hex,    4);
+
+	sctx->job.veil_ntime    = ntime;
+	sctx->job.veil_nonce_hi = nonce_hi;
+	sctx->job.veil_sha256dv = true;
+	sctx->job.clean         = j_clean ? json_is_true(j_clean) : true;
+	if (json_is_integer(j_height))
+		sctx->job.height = (uint32_t) json_integer_value(j_height);
+	sctx->job.diff = sctx->next_diff;
+
+	pthread_mutex_unlock(&stratum_work_lock);
+
+	return true;
+}
+
 static bool stratum_notify(struct stratum_ctx *sctx, json_t *params)
 {
 	const char *job_id, *prevhash, *coinb1, *coinb2, *version, *nbits, *stime;
@@ -1452,6 +1523,10 @@ static bool stratum_notify(struct stratum_ctx *sctx, json_t *params)
 
 	if (sctx->is_equihash) {
 		return equi_stratum_notify(sctx, params);
+	}
+
+	if (opt_algo == ALGO_SHA256DV) {
+		return sha256dv_stratum_notify(sctx, params);
 	}
 
 	job_id = json_string_value(json_array_get(params, p++));
