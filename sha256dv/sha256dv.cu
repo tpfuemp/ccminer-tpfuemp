@@ -58,17 +58,22 @@ __device__ __constant__ static uint32_t d_target[8];    // work->target (index 7
 static uint32_t *d_resNonce[MAX_GPUS];
 static bool      init_done[MAX_GPUS] = { 0 };
 
-// A Veil job's identity lives in work->veil_* (midstate/merkle/ntime/nonce_hi),
-// which miner_thread's data[]-based job-change check cannot see. As a result
-// stratum_gen_work resets the nonce_lo cursor (work->data[19]) to 0 on every
-// scantime regen of an *unchanged* job, which would rescan it from zero and
-// resubmit duplicate shares. We therefore track the cursor ourselves, keyed on a
-// signature of the pool-fixed inputs: resume where we left off, and stop once a
-// job's 32-bit nonce_lo space is exhausted (wait for genuinely new work).
-static uint32_t dv_cursor[MAX_GPUS]  = { 0 };
+// Veil mines a 64-bit nonce = nonce_hi:nonce_lo. The pool supplies a starting
+// nonce_hi; the miner searches the full 32-bit nonce_lo and, when that space is
+// used up, rolls nonce_hi forward for a fresh 2^32 range (cf. cpuminer-opt). So
+// the search space is effectively unbounded and we never idle.
+//
+// A job's fixed identity (midstate/ntime/target) lives in work->veil_*, which
+// miner_thread's data[]-based job-change check can't see; it therefore resets
+// work->data[19] (and re-copies the pool's base nonce_hi) on every scantime
+// regen of an *unchanged* job. We keep the running (nonce_hi, nonce_lo) cursor
+// ourselves, keyed on a signature of the fixed inputs, so those resets don't
+// rescan covered ground (which would resubmit duplicate shares) or rewind the
+// rolled nonce_hi.
+static uint32_t dv_hi[MAX_GPUS]      = { 0 };  // current (rolled) nonce_hi
+static uint32_t dv_lo[MAX_GPUS]      = { 0 };  // nonce_lo cursor within dv_hi
 static uint32_t dv_sig[MAX_GPUS]     = { 0 };
 static bool     dv_sig_set[MAX_GPUS] = { 0 };
-static bool     dv_done[MAX_GPUS]    = { 0 };
 
 // ---------------------------------------------------------------------------
 // Host SHA-256 (for midstate precompute, CPU validation and self-test)
@@ -338,10 +343,32 @@ extern "C" int scanhash_sha256dv(int thr_id, struct work* work, uint32_t max_non
 		init_done[thr_id] = true;
 	}
 
+	// Resolve the running (nonce_hi, nonce_lo) cursor before building stage2, so
+	// the kernel encodes the rolled nonce_hi. Signature = FNV-1a over the fixed
+	// inputs (midstate, ntime, target) -- NOT nonce_hi, which we roll ourselves.
+	// A changed signature is a genuinely new job: restart from the pool's base
+	// nonce_hi (striped by thr_id). An unchanged signature resumes our cursor,
+	// ignoring stratum_gen_work's per-regen reset of pdata[19]/veil_nonce_hi.
+	const uint32_t hi_stride = (opt_n_threads > 0) ? (uint32_t)opt_n_threads : 1u;
+	uint32_t nonce_hi = work->veil_nonce_hi;
+	if (dv_track) {
+		uint32_t sig = 2166136261u;
+		for (int i = 0; i < 32; i++) { sig ^= work->veil_midstate_be[i]; sig *= 16777619u; }
+		sig ^= work->veil_ntime;   sig *= 16777619u;
+		for (int i = 0; i < 8; i++) { sig ^= ptarget[i]; sig *= 16777619u; }
+
+		if (!dv_sig_set[thr_id] || sig != dv_sig[thr_id]) {
+			dv_sig[thr_id] = sig; dv_sig_set[thr_id] = true;
+			dv_hi[thr_id] = work->veil_nonce_hi + (uint32_t)thr_id;
+			dv_lo[thr_id] = 0;
+		}
+		nonce_hi  = dv_hi[thr_id];
+		pdata[19] = dv_lo[thr_id];
+	}
+
 	// Per-job constants: stage2 block-1 midstate + block-2 fixed words.
 	uint8_t  stage2[80];
 	uint32_t ms[8], blk[16], block2[4];
-	const uint32_t nonce_hi = work->veil_nonce_hi;
 
 	sha256dv_build_stage2(stage2, work, pdata[19], nonce_hi);
 	memcpy(ms, h_H256, sizeof(ms));
@@ -354,27 +381,15 @@ extern "C" int scanhash_sha256dv(int thr_id, struct work* work, uint32_t max_non
 
 	sha256dv_setBlock(ms, block2, ptarget);
 
-	// Resolve the nonce_lo cursor for this job. Signature = FNV-1a over the
-	// pool-fixed inputs (midstate, nonce_hi, ntime, target). A changed signature
-	// is a genuinely new job: restart from 0. An unchanged signature resumes the
-	// saved cursor, ignoring any spurious reset of pdata[19] by stratum_gen_work.
-	const uint64_t scan_end = dv_track ? 0x100000000ull : (uint64_t)max_nonce;
-	if (dv_track) {
-		uint32_t sig = 2166136261u;
-		for (int i = 0; i < 32; i++) { sig ^= work->veil_midstate_be[i]; sig *= 16777619u; }
-		sig ^= nonce_hi;           sig *= 16777619u;
-		sig ^= work->veil_ntime;   sig *= 16777619u;
-		for (int i = 0; i < 8; i++) { sig ^= ptarget[i]; sig *= 16777619u; }
-
-		if (!dv_sig_set[thr_id] || sig != dv_sig[thr_id]) {
-			dv_sig[thr_id] = sig; dv_sig_set[thr_id] = true;
-			dv_cursor[thr_id] = 0; dv_done[thr_id] = false;
-		}
-		if (dv_done[thr_id]) { *hashes_done = 0; return 0; } // exhausted: await new work
-		pdata[19] = dv_cursor[thr_id];
-	}
-
 	const uint32_t first_nonce = pdata[19];
+	// Scan the full nonce_lo space (0..2^32); cap this call to one host-sized
+	// window so we stay responsive to new work. scan_end bounds the kernel; the
+	// per-call cap bounds how far we sweep before returning.
+	const uint64_t scan_end = dv_track ? 0x100000000ull : (uint64_t)max_nonce;
+	const uint64_t call_end = dv_track
+		? ((uint64_t)first_nonce + 0x40000000ull < scan_end
+			? (uint64_t)first_nonce + 0x40000000ull : scan_end)
+		: scan_end;
 
 	do {
 		// Clamp the final window so the cursor never wraps past the 2^32 nonce_lo
@@ -407,10 +422,14 @@ extern "C" int scanhash_sha256dv(int thr_id, struct work* work, uint32_t max_non
 				work->valid_nonces = 1;
 				memcpy(work->target, ptarget, sizeof(work->target));
 				for (int i = 0; i < 8; i++) ((uint32_t*)work->extra)[i] = hash_le[i];
+				bn_set_target_ratio(work, hash_le, 0); // share diff for --show-diff
 				pdata[19] = resNonce + 1;
 				if (dv_track) {
-					dv_cursor[thr_id] = pdata[19];
-					if (resNonce == 0xFFFFFFFFu) dv_done[thr_id] = true; // last nonce_lo
+					dv_lo[thr_id] = resNonce + 1;
+					if (resNonce == 0xFFFFFFFFu) {       // nonce_lo wrapped: roll nonce_hi
+						dv_hi[thr_id] += hi_stride;
+						dv_lo[thr_id] = 0;
+					}
 				}
 				return 1;
 			} else {
@@ -421,18 +440,22 @@ extern "C" int scanhash_sha256dv(int thr_id, struct work* work, uint32_t max_non
 		}
 
 		if ((uint64_t)pdata[19] + span >= scan_end) {
+			// nonce_lo space used up for this nonce_hi: roll nonce_hi and restart
+			// nonce_lo at 0. Never idle -- the next call gets a fresh 2^32 range.
+			*hashes_done = pdata[19] - first_nonce + span;
 			if (dv_track) {
-				dv_cursor[thr_id] = pdata[19] + span;   // for hashrate accounting
-				dv_done[thr_id]   = true;               // job exhausted: await new work
+				dv_hi[thr_id] += hi_stride;
+				dv_lo[thr_id] = 0;
+				pdata[19] = 0;
 			} else {
 				pdata[19] = (uint32_t)scan_end;
 			}
-			break;
+			return 0;
 		}
 		pdata[19] += span;
-		if (dv_track) dv_cursor[thr_id] = pdata[19];
+		if (dv_track) dv_lo[thr_id] = pdata[19];
 
-	} while (!work_restart[thr_id].restart);
+	} while (!work_restart[thr_id].restart && (uint64_t)pdata[19] < call_end);
 
 	*hashes_done = pdata[19] - first_nonce;
 	return 0;
@@ -447,7 +470,7 @@ extern "C" void free_sha256dv(int thr_id)
 	cudaFree(d_resNonce[thr_id]);
 	init_done[thr_id]  = false;
 	dv_sig_set[thr_id] = false;
-	dv_done[thr_id]    = false;
-	dv_cursor[thr_id]  = 0;
+	dv_hi[thr_id]      = 0;
+	dv_lo[thr_id]      = 0;
 	cudaDeviceSynchronize();
 }
