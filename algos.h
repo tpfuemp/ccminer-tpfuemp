@@ -98,6 +98,7 @@ enum sha_algos {
 	ALGO_EVOHASH,
 	ALGO_ODO,
 	ALGO_SKYDOGE,
+	ALGO_HOOHASH,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -198,6 +199,7 @@ static const char *algo_names[] = {
 	"evohash",
 	"odo",
 	"skydoge",
+	"hoohash",
 	"auto", /* reserved for multi algo */
 	""
 };
@@ -217,6 +219,10 @@ static inline int algo_to_int(char* arg)
 		// some aliases...
 		if (!strcasecmp("all", arg))
 			i = ALGO_AUTO;
+		else if (!strcasecmp("hoohashv110", arg))
+			i = ALGO_HOOHASH;
+		else if (!strcasecmp("pepepow", arg))
+			i = ALGO_HOOHASH;
 		else if (!strcasecmp("cryptonight-light", arg))
 			i = ALGO_CRYPTOLIGHT;
 		else if (!strcasecmp("cryptonight-lite", arg))

@@ -312,6 +312,13 @@
     <CudaCompile Include="allium.cu" />
     <CudaCompile Include="balloon\cuda_balloon.cu" />
     <CudaCompile Include="rinhash\rinhash.cu" />
+    <CudaCompile Include="hoohash\cuda_hoohashv110.cu">
+      <FastMath>false</FastMath>
+      <FmadOptimization>false</FmadOptimization>
+      <Defines>_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH</Defines>
+      <AdditionalOptions>--fmad=false --prec-div=true --prec-sqrt=true --ftz=false -allow-unsupported-compiler --Wno-deprecated-gpu-targets %(AdditionalOptions)</AdditionalOptions>
+    </CudaCompile>
+    <CudaCompile Include="hoohash\hoohash.cu" />
     <CudaCompile Include="evohash\evohash.cu" />
     <CudaCompile Include="odocrypt\cuda_odocrypt.cu" />
     <CudaCompile Include="blake2b.cu" />

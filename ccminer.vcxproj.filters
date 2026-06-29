@@ -1122,6 +1122,12 @@
     <CudaCompile Include="rinhash\rinhash.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
+    <CudaCompile Include="hoohash\cuda_hoohashv110.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
+    <CudaCompile Include="hoohash\hoohash.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
     <CudaCompile Include="odocrypt\cuda_odocrypt.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>

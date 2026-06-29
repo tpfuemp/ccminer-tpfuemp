@@ -28,6 +28,8 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  balloon/sha256-ref.c balloon/cuda_balloon.cu \
 			  balloon/balloon.h balloon/sha256.h \
 			  rinhash/rinhash_scanhash.cpp rinhash/rinhash.cu \
+			  hoohash/cuda_hoohashv110.cu hoohash/hoohash.cu \
+			  hoohash/hoohash_device.cuh \
 			  evohash/evohash.cu \
 			  odocrypt/odocrypt_host.cpp odocrypt/cuda_odocrypt.cu \
 			  heavyhash/heavyhash.cu \
@@ -145,6 +147,11 @@ nvcc_FLAGS += $(JANSSON_INCLUDES) --ptxas-options="-v"
 
 lyra2/cuda_lyra2.o: lyra2/cuda_lyra2.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=128 -o $@ -c $<
+
+# HoohashV110 device TU: consensus-critical strict FP (must match the glibc oracle).
+# No fast-math; disable FMA contraction; precise div/sqrt; no flush-to-zero.
+hoohash/cuda_hoohashv110.o: hoohash/cuda_hoohashv110.cu
+	$(NVCC) $(nvcc_FLAGS) --maxrregcount=128 --fmad=false --prec-div=true --prec-sqrt=true --ftz=false -o $@ -c $<
 
 Algo256/blake256.o: Algo256/blake256.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=64 -o $@ -c $<
