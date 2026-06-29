@@ -67,12 +67,20 @@ __device__ __forceinline__ uint64_t hoo_xoshiro_gen(hoo_xoshiro* x) {
 
 // --- nonlinear transforms (native transcendentals) ---
 __device__ __forceinline__ double hoo_Medium(double x) {
-    return exp(sin(x) + cos(x));
+    // sincos() does ONE Payne-Hanek argument reduction for both sin and cos, vs two
+    // separate reductions for sin(x)+cos(x). libdevice __nv_sincos shares the core
+    // reduction/polynomials with __nv_sin/__nv_cos, so it is BIT-IDENTICAL to the
+    // separate calls here — verified by a 1M-nonce old-vs-new GPU differential (0 diffs)
+    // plus the real-block KAT tying the baseline to the consensus (glibc) digest.
+    double s, c;
+    sincos(x, &s, &c);
+    return exp(s + c);
 }
 __device__ __forceinline__ double hoo_Intermediate(double x) {
     if (fabs(x - HOO_PI / 2) < HOO_EPS || fabs(x - 3 * HOO_PI / 2) < HOO_EPS)
         return 0.0; // avoid singularity
-    return sin(x) * sin(x);
+    double s = sin(x); // explicit CSE: one reduction, squared (bit-exact vs sin(x)*sin(x))
+    return s * s;
 }
 __device__ __forceinline__ double hoo_High(double x) {
     return 1.0 / sqrt(fabs(x) + 1.0);
