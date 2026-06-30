@@ -351,6 +351,9 @@
     <ClCompile Include="equi\equi.cpp">
       <Filter>Source Files\equi</Filter>
     </ClCompile>
+    <ClCompile Include="equi\equihash.cpp">
+      <Filter>Source Files\equi</Filter>
+    </ClCompile>
     <ClCompile Include="equi\equi-stratum.cpp">
       <Filter>Source Files\equi</Filter>
     </ClCompile>
@@ -1098,6 +1101,9 @@
     <CudaCompile Include="Algo256\sha3d.cu" />
     <CudaCompile Include="Algo256\cuda_sha3t.cu" />
     <CudaCompile Include="Algo256\sha3t.cu" />
+    <CudaCompile Include="equi\cuda_equi.cu">
+      <Filter>Source Files\equi</Filter>
+    </CudaCompile>
     <CudaCompile Include="Algo256\cuda_keccak256_sha3d.cu" />
     <CudaCompile Include="gost\cuda_gosthash.cu" />
     <CudaCompile Include="gost\gost.cu" />

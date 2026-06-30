@@ -268,6 +268,7 @@
     </ClCompile>
     <ClCompile Include="equi\equi-stratum.cpp" />
     <ClCompile Include="equi\equi.cpp" />
+    <ClCompile Include="equi\equihash.cpp" />
     <ClCompile Include="nvapi.cpp" />
     <ClCompile Include="nvsettings.cpp" />
     <ClCompile Include="pools.cpp" />
@@ -529,6 +530,12 @@
     <CudaCompile Include="Algo256\sha3d.cu" />
     <CudaCompile Include="Algo256\cuda_sha3t.cu" />
     <CudaCompile Include="Algo256\sha3t.cu" />
+    <CudaCompile Include="equi\cuda_equi.cu">
+      <CodeGeneration>compute_52,sm_52;compute_50,sm_50</CodeGeneration>
+      <AdditionalOptions> -Xptxas -dlcm=ca -Xptxas -dscm=cs %(AdditionalOptions)</AdditionalOptions>
+      <MaxRegCount>0</MaxRegCount>
+      <CodeGeneration Condition="'$(Configuration)|$(Platform)'=='Release|x64'">compute_61,sm_61;compute_52,sm_52;compute_50,sm_50</CodeGeneration>
+    </CudaCompile>
     <CudaCompile Include="Algo256\cuda_blake256.cu" />
     <CudaCompile Include="Algo256\cuda_bmw256.cu" />
     <CudaCompile Include="Algo256\cuda_cubehash256.cu" />

@@ -153,7 +153,7 @@ extern "C" int scanhash_equihash(int thr_id, struct work *work, uint32_t max_non
 	uint32_t *pdata = work->data;
 	uint32_t *ptarget = work->target;
 	const uint32_t first_nonce = pdata[NONCE_OFT];
-	uint32_t nonce_increment = rand() & 0xFF; // nonce randomizer
+	uint32_t nonce_increment = (rand() & 0xFF) | 1; // nonce randomizer; force odd so the step is never 0 (a 0 step re-grinds the same nonce until restart)
 	struct timeval tv_start, tv_end, diff;
 	double secs, solps;
 	uint32_t soluce_count = 0;

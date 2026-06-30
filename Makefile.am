@@ -23,6 +23,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  api.cpp hashlog.cpp nvml.cpp stats.cpp sysinfos.cpp cuda.cpp \
 			  nvsettings.cpp \
 			  equi/equi-stratum.cpp equi/equi.cpp equi/blake2/blake2bx.cpp \
+			  equi/equihash.cpp equi/cuda_equi.cu \
 			  allium.cu \
 			  balloon/balloon.cpp balloon/balloon_scan.cpp \
 			  balloon/sha256-ref.c balloon/cuda_balloon.cu \

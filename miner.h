@@ -361,6 +361,7 @@ extern int scanhash_skydoge(int thr_id, struct work* work, uint32_t max_nonce, u
 extern int scanhash_hoohash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_sha3t(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_equihash(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_zr5(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 
 extern int scanhash_yescrypt(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done);
@@ -444,6 +445,7 @@ extern void free_skydoge(int thr_id);
 extern void free_hoohash(int thr_id);
 extern void free_ghostrider(int thr_id);
 extern void free_sha3t(int thr_id);
+extern void free_equihash(int thr_id);
 void sha3t256_hash(void *state, const void *input);
 extern void free_sha256dv(int thr_id);
 extern void free_zr5(int thr_id);

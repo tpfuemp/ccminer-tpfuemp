@@ -2097,7 +2097,11 @@ static void *miner_thread(void *userdata)
 			wcmplen = 39;
 		} else if (opt_algo == ALGO_EQUIHASH) {
 			nonceptr = &work.data[EQNONCE_OFFSET]; // 27 is pool extranonce (256bits nonce space)
-			wcmplen = 4+32+32;
+			// 108 = version+prevhash+merkle+hashReserved+nTime+nBits, i.e. the whole header up
+			// to the 256-bit nonce space (data[27..34]). The old 68 only compared
+			// version+prevhash+merkle, so new jobs that changed hashReserved/nTime/nBits were
+			// seen as "same work" and the miner kept grinding stale data.
+			wcmplen = 4+32+32+32+4+4;
 		}
 
 		if (have_stratum) {
@@ -2794,6 +2798,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_SHA3T:
 			rc = scanhash_sha3t(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_EQUIHASH:
+			rc = scanhash_equihash(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_ZR5:
 			rc = scanhash_zr5(thr_id, &work, max_nonce, &hashes_done);
