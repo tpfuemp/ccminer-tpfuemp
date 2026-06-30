@@ -360,6 +360,7 @@
     <ClCompile Include="heavyhash/heavyhash-gate.c" />
     <ClCompile Include="heavyhash/keccak_tiny.c" />
     <ClCompile Include="sph\sha3d.c" />
+    <ClCompile Include="sph\sha3.c" />
     <ClCompile Include="sph\yescrypt-common.c">
       <Filter>Source Files\sph</Filter>
     </ClCompile>
@@ -650,6 +651,7 @@
       <Filter>Header Files\CUDA</Filter>
     </ClInclude>
     <ClInclude Include="sph\sph_sha3d.h" />
+    <ClInclude Include="sph\sha3.h" />
     <ClInclude Include="sph\yescrypt.h">
       <Filter>Header Files\sph</Filter>
     </ClInclude>
@@ -1094,6 +1096,8 @@
     <CudaCompile Include="heavyhash/heavyhash.cu" />
     <CudaCompile Include="heavyhash/cuda_heavyhash.cu" />
     <CudaCompile Include="Algo256\sha3d.cu" />
+    <CudaCompile Include="Algo256\cuda_sha3t.cu" />
+    <CudaCompile Include="Algo256\sha3t.cu" />
     <CudaCompile Include="Algo256\cuda_keccak256_sha3d.cu" />
     <CudaCompile Include="gost\cuda_gosthash.cu" />
     <CudaCompile Include="gost\gost.cu" />

@@ -100,6 +100,7 @@ enum sha_algos {
 	ALGO_SKYDOGE,
 	ALGO_HOOHASH,
 	ALGO_GHOSTRIDER,
+	ALGO_SHA3T,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -202,6 +203,7 @@ static const char *algo_names[] = {
 	"skydoge",
 	"hoohash",
 	"ghostrider",
+	"sha3t",
 	"auto", /* reserved for multi algo */
 	""
 };
@@ -227,6 +229,8 @@ static inline int algo_to_int(char* arg)
 			i = ALGO_HOOHASH;
 		else if (!strcasecmp("gr", arg))
 			i = ALGO_GHOSTRIDER;
+		else if (!strcasecmp("sha3-256t", arg))
+			i = ALGO_SHA3T;
 		else if (!strcasecmp("cryptonight-light", arg))
 			i = ALGO_CRYPTOLIGHT;
 		else if (!strcasecmp("cryptonight-lite", arg))

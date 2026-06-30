@@ -55,6 +55,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  Algo256/cuda_blake256.cu Algo256/cuda_groestl256.cu \
 			  Algo256/cuda_keccak256_sm3.cu Algo256/cuda_keccak256_sha3d.cu Algo256/cuda_keccak256.cu Algo256/cuda_skein256.cu \
 			  Algo256/blake256.cu Algo256/decred.cu Algo256/vanilla.cu Algo256/keccak256.cu Algo256/sha3d.cu \
+			  Algo256/cuda_sha3t.cu Algo256/sha3t.cu \
 			  Algo256/blake2s.cu sph/blake2s.c \
 			  Algo256/bmw.cu Algo256/bmw512.cu Algo256/cuda_bmw.cu \
 			  gost/cuda_gosthash.cu gost/gost.cu \
@@ -78,7 +79,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  sph/cubehash.c sph/echo.c sph/luffa.c sph/sha2.c sph/shavite.c sph/simd.c \
 			  sph/hamsi.c sph/hamsi_helper.c sph/streebog.c sph/tiger.c \
 			  sph/shabal.c sph/whirlpool.c sph/sha2big.c sph/haval.c \
-			  sph/ripemd.c sph/sph_sha2.c sph/sha3d.c \
+			  sph/ripemd.c sph/sph_sha2.c sph/sha3d.c sph/sha3.c \
 			  polytimos.cu \
 			  lbry/lbry.cu lbry/cuda_sha256_lbry.cu lbry/cuda_sha512_lbry.cu lbry/cuda_lbry_merged.cu \
 			  qubit/qubit.cu qubit/qubit_luffa512.cu qubit/deep.cu qubit/luffa.cu \
