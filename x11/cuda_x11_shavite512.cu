@@ -1686,7 +1686,7 @@ void x11_shavite512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t
 	__shared__ uint32_t sharedMemory[1024];
 
 	shavite_gpu_init(sharedMemory);
-	__threadfence_block();
+	__syncthreads(); // barrier: shared AES table is filled cooperatively (threads <128)
 
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
@@ -1738,7 +1738,7 @@ void x11_shavite512_gpu_hash_80(uint32_t threads, uint32_t startNounce, void *ou
 	__shared__ uint32_t sharedMemory[1024];
 
 	shavite_gpu_init(sharedMemory);
-	__threadfence_block();
+	__syncthreads(); // barrier: shared AES table is filled cooperatively (threads <128)
 
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)

@@ -359,6 +359,7 @@ extern int scanhash_x17(int thr_id, struct work* work, uint32_t max_nonce, unsig
 extern int scanhash_x21s(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_skydoge(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_hoohash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_zr5(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 
 extern int scanhash_yescrypt(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done);
@@ -440,6 +441,7 @@ extern void free_x17(int thr_id);
 extern void free_x21s(int thr_id);
 extern void free_skydoge(int thr_id);
 extern void free_hoohash(int thr_id);
+extern void free_ghostrider(int thr_id);
 extern void free_sha256dv(int thr_id);
 extern void free_zr5(int thr_id);
 /* api related */
@@ -582,6 +584,7 @@ extern bool have_longpoll;
 extern bool want_stratum;
 extern bool have_stratum;
 extern bool opt_stratum_stats;
+extern char *opt_user_agent;
 extern char *opt_cert;
 extern char *opt_proxy;
 extern long opt_proxy_type;

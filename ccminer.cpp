@@ -223,6 +223,7 @@ int opt_statsavg = 30;
 // strdup on char* to allow a common free() if used
 static char* opt_syslog_pfx = strdup(PROGRAM_NAME);
 char *opt_api_bind = strdup("127.0.0.1"); /* 0.0.0.0 for all ips */
+char *opt_user_agent = NULL; /* overrides the default USER_AGENT sent to the pool */
 int opt_api_port = 4068; /* 0 to disable */
 char *opt_api_allow = NULL;
 char *opt_api_groups = NULL;
@@ -332,6 +333,7 @@ Options:\n\
 			x21s		X21S\n\
 			skydoge		SkyDoge\n\
 			hoohash		HoohashV110 (PEPEPOW)\n\
+			ghostrider	GhostRider (Raptoreum)\n\
 			wildkeccak	Boolberry\n\
 			yescrypt     Globlboost-Y (BSTY) or any params\n\
             yescryptr8   BitZeny (ZNY)\n\
@@ -384,6 +386,7 @@ Options:\n\
       --cpu-affinity    set process affinity to cpu core(s), mask 0x3 for cores 0 and 1\n\
       --cpu-priority    set process priority (default: 3) 0 idle, 2 normal to 5 highest\n\
   -b, --api-bind=port   IP:port for the miner API (default: 127.0.0.1:4068), 0 disabled\n\
+      --user-agent=NAME override the miner name sent to the pool (default: " USER_AGENT ")\n\
       --api-remote      Allow remote control, like pool switching, imply --api-allow=0/0\n\
       --api-allow=...   IP/mask of the allowed api client(s), 0/0 for all\n\
       --max-temp=N      Only mine if gpu temp is less than specified value\n\
@@ -519,6 +522,7 @@ struct option options[] = {
 	{ "segwit", 0, NULL, 1083 },
 	{ "yescrypt-param", 1, NULL, 1084 },
 	{ "yescrypt-key", 1, NULL, 1085 },
+	{ "user-agent", 1, NULL, 1086 },
 	{ 0, 0, 0, 0 }
 };
 
@@ -1902,6 +1906,11 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_HOOHASH:
 			work_set_target(work, sctx->job.diff / opt_difficulty);
 			break;
+		case ALGO_GHOSTRIDER:
+			// GhostRider/Raptoreum: hash difficulty carries a 2^16 factor
+			// (cpuminer-opt opt_target_factor = 65536). Verify on live pool.
+			work_set_target(work, sctx->job.diff / (65536.0 * opt_difficulty));
+			break;
 		case ALGO_KECCAK:
 		case ALGO_LYRA2:
 			work_set_target(work, sctx->job.diff / (128.0 * opt_difficulty));
@@ -2777,6 +2786,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_HOOHASH:
 			rc = scanhash_hoohash(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_GHOSTRIDER:
+			rc = scanhash_ghostrider(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_ZR5:
 			rc = scanhash_zr5(thr_id, &work, max_nonce, &hashes_done);
@@ -3855,6 +3867,12 @@ void parse_arg(int key, char *arg)
 		break;
 	case 1015:
 		opt_submit_stale = true;
+		break;
+	case 1086: /* --user-agent */
+		if (arg && strlen(arg)) {
+			free(opt_user_agent);
+			opt_user_agent = strdup(arg);
+		}
 		break;
 	case 'S':
 	case 1018:

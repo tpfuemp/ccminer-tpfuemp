@@ -116,6 +116,7 @@ void algo_free_all(int thr_id)
 	free_x21s(thr_id);
 	free_skydoge(thr_id);
 	free_hoohash(thr_id);
+	free_ghostrider(thr_id);
 	free_zr5(thr_id);
 	free_timetravel(thr_id);
 	free_tribus(thr_id);
