@@ -3402,6 +3402,12 @@ void parse_arg(int key, char *arg)
 			show_usage_and_exit(1);
 		}
 
+		// equihash 144/5 shares ALGO_EQUIHASH but needs the (n,k) +
+		// personalization variant selected; the alias name carries that intent.
+		if (opt_algo == ALGO_EQUIHASH &&
+		    (!strcasecmp("equihash144", arg) || !strcasecmp("equihash144_5", arg)))
+			eq_set_variant_144();
+
 		if (p) {
 			opt_nfactor = atoi(p + 1);
 			if (opt_algo == ALGO_SCRYPT_JANE) {

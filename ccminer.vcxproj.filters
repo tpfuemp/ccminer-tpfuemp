@@ -648,6 +648,9 @@
     <ClInclude Include="equi\eqcuda.hpp">
       <Filter>Source Files\equi</Filter>
     </ClInclude>
+    <ClInclude Include="equi\cuda_equi_tromp.h">
+      <Filter>Source Files\equi</Filter>
+    </ClInclude>
     <ClInclude Include="heavyhash/heavyhash-gate.h" />
     <ClInclude Include="heavyhash/keccak_tiny.h" />
     <ClInclude Include="x16\cuda_x16.h">
@@ -1102,6 +1105,9 @@
     <CudaCompile Include="Algo256\cuda_sha3t.cu" />
     <CudaCompile Include="Algo256\sha3t.cu" />
     <CudaCompile Include="equi\cuda_equi.cu">
+      <Filter>Source Files\equi</Filter>
+    </CudaCompile>
+    <CudaCompile Include="equi\cuda_equi_tromp.cu">
       <Filter>Source Files\equi</Filter>
     </CudaCompile>
     <CudaCompile Include="Algo256\cuda_keccak256_sha3d.cu" />

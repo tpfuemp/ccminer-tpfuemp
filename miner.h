@@ -897,6 +897,10 @@ bool equi_stratum_show_message(struct stratum_ctx *sctx, json_t *id, json_t *par
 void equi_work_set_target(struct work* work, double diff);
 void equi_store_work_solution(struct work* work, uint32_t* hash, void* sol_data);
 int equi_verify_sol(void * const hdr, void * const sol);
+int eq_variant_storelen(void); // bytes in work->extra to submit (compactSize+solution)
+int eq_variant_wk(void);       // active equihash k (9 for 200/9, 5 for 144/5)
+void eq_set_variant_144(void); // select 144/5 (BitcoinZ) variant (from -a alias)
+void eq_set_variant_params(int wn, int wk, const char* personal); // pool notify: adopt personal; (n,k) validate-only (fixed by -a)
 double equi_network_diff(struct work *work);
 
 void hashlog_remember_submit(struct work* work, uint32_t nonce);
