@@ -730,6 +730,138 @@ __global__ void digitET(equi *eq) { // even R: trees1[(R-1)/2] -> trees0[R/2]
     }
   }
 }
+// ---- djeZo-style warp-per-bucket collision kernels ----------------------
+// One WARP cooperatively processes one bucket (64 slots = 2 per lane):
+// slots are staged coalesced into registers + shared memory, collision
+// detection runs on warp ballots per rest-nibble (no per-thread
+// collisiondata in local memory), and pairs are processed in parallel
+// across lanes with partner words read from shared. Removes the serial
+// per-bucket slot loop that left the pair dependency chain exposed
+// (digitOT/ET measured ~93% long-scoreboard stalls at 19% occupancy).
+
+// per-round bucket/type routing
+template <u32 R> struct eqrt;
+template <> struct eqrt<1> {
+  typedef slot0 prev; typedef slot1 next;
+  static __device__ __forceinline__ slot0 *pbuck(equi *eq, u32 b) { return eq->hta.trees0[0][b]; }
+  static __device__ __forceinline__ slot1 *nbuck(equi *eq, u32 b) { return eq->hta.trees1[0][b]; }
+  static __device__ __forceinline__ u32 pnslots(equi *eq, u32 b) { return eq->getnslots0(b); }
+};
+template <> struct eqrt<2> {
+  typedef slot1 prev; typedef slot0 next;
+  static __device__ __forceinline__ slot1 *pbuck(equi *eq, u32 b) { return eq->hta.trees1[0][b]; }
+  static __device__ __forceinline__ slot0 *nbuck(equi *eq, u32 b) { return eq->hta.trees0[1][b]; }
+  static __device__ __forceinline__ u32 pnslots(equi *eq, u32 b) { return eq->getnslots1(b); }
+};
+template <> struct eqrt<3> {
+  typedef slot0 prev; typedef slot1 next;
+  static __device__ __forceinline__ slot0 *pbuck(equi *eq, u32 b) { return eq->hta.trees0[1][b]; }
+  static __device__ __forceinline__ slot1 *nbuck(equi *eq, u32 b) { return eq->hta.trees1[1][b]; }
+  static __device__ __forceinline__ u32 pnslots(equi *eq, u32 b) { return eq->getnslots0(b); }
+};
+template <> struct eqrt<4> {
+  typedef slot1 prev; typedef slot0 next;
+  static __device__ __forceinline__ slot1 *pbuck(equi *eq, u32 b) { return eq->hta.trees1[1][b]; }
+  static __device__ __forceinline__ slot0 *nbuck(equi *eq, u32 b) { return eq->hta.trees0[2][b]; }
+  static __device__ __forceinline__ u32 pnslots(equi *eq, u32 b) { return eq->getnslots1(b); }
+};
+
+#define EQ_WB_TPB 128
+#define EQ_WB_WPB (EQ_WB_TPB/32)
+
+template <u32 R>
+__global__ void digitWB(equi *eq) {
+  const u32 PREVU  = EQ_UNITS(R-1);
+  const u32 DUN    = PREVU - EQ_UNITS(R);
+  const u32 PREVBO = PREVU * 4 - EQ_HASHSIZE(R-1);
+  // inner stride 5 (4 words + 1 pad) spreads shared banks
+  __shared__ u32 shw[EQ_WB_WPB][NSLOTS][5];
+  const u32 lane = threadIdx.x & 31;
+  u32 (*sw)[5] = shw[threadIdx.x >> 5];
+  const u32 nwarps = (gridDim.x * blockDim.x) >> 5;
+  for (u32 bucketid = (blockIdx.x * blockDim.x + threadIdx.x) >> 5; bucketid < NBUCKETS; bucketid += nwarps) {
+    u32 bsize = lane ? 0 : eqrt<R>::pnslots(eq, bucketid); // caps at NSLOTS + resets counter
+    bsize = __shfl_sync(0xffffffff, bsize, 0);
+    typename eqrt<R>::prev *buck = eqrt<R>::pbuck(eq, bucketid);
+    // stage slots `lane` and `lane+32`: words into registers + shared
+    u32 w0[PREVU], w1[PREVU];
+    const bool v0 = lane < bsize, v1 = lane + 32 < bsize;
+    if (v0) {
+#pragma unroll
+      for (u32 k = 0; k < PREVU; k++)
+        sw[lane][k] = w0[k] = buck[lane].hash[k].word;
+    }
+    if (v1) {
+#pragma unroll
+      for (u32 k = 0; k < PREVU; k++)
+        sw[lane + 32][k] = w1[k] = buck[lane + 32].hash[k].word;
+    }
+    __syncwarp();
+    // collision masks per rest-nibble via ballots; lane v keeps value v's masks
+    const u32 n0 = v0 ? (EQ_BYTE32(w0, PREVBO) & 0xf) : 16;
+    const u32 n1 = v1 ? (EQ_BYTE32(w1, PREVBO) & 0xf) : 16;
+    u32 mv0 = 0, mv1 = 0;
+#pragma unroll
+    for (u32 v = 0; v < 16; v++) {
+      const u32 b0 = __ballot_sync(0xffffffff, n0 == v);
+      const u32 b1 = __ballot_sync(0xffffffff, n1 == v);
+      if (lane == v) { mv0 = b0; mv1 = b1; }
+    }
+    // fetch each own slot's partner mask (convergent shuffles), keep only i < j
+    const u32 m_j0    = __shfl_sync(0xffffffff, mv0, n0 & 15) & ((1u << lane) - 1);
+    const u32 m_j1_lo = __shfl_sync(0xffffffff, mv0, n1 & 15);
+    const u32 m_j1_hi = __shfl_sync(0xffffffff, mv1, n1 & 15) & ((1u << lane) - 1);
+    __syncwarp();
+    // pairs for j = lane (partners in low half only)
+    if (v0) {
+      for (u32 m = m_j0; m; m &= m - 1) {
+        const u32 i = __ffs(m) - 1;
+        u32 xw[PREVU];
+#pragma unroll
+        for (u32 k = 0; k < PREVU; k++)
+          xw[k] = w0[k] ^ sw[i][k];
+        if (xw[PREVU-1] == 0)
+          continue;
+        const u32 xorbucketid = (((EQ_BYTE32(xw, PREVBO+1) << 8) | EQ_BYTE32(xw, PREVBO+2)) << 4)
+                              | (EQ_BYTE32(xw, PREVBO+3) >> 4);
+        const u32 xorslot = atomicAdd(&eq->nslots[R&1][xorbucketid], 1);
+        if (xorslot >= NSLOTS)
+          continue;
+        typename eqrt<R>::next &xs = eqrt<R>::nbuck(eq, xorbucketid)[xorslot];
+        xs.attr = tree(bucketid, i, lane);
+#pragma unroll
+        for (u32 k = DUN; k < PREVU; k++)
+          xs.hash[k-DUN].word = xw[k];
+      }
+    }
+    // pairs for j = lane+32 (partners in low half, then high half below j)
+    if (v1) {
+      for (u32 half = 0; half < 2; half++) {
+        const u32 base = half ? 32 : 0;
+        for (u32 m = half ? m_j1_hi : m_j1_lo; m; m &= m - 1) {
+          const u32 i = base + __ffs(m) - 1;
+          u32 xw[PREVU];
+#pragma unroll
+          for (u32 k = 0; k < PREVU; k++)
+            xw[k] = w1[k] ^ sw[i][k];
+          if (xw[PREVU-1] == 0)
+            continue;
+          const u32 xorbucketid = (((EQ_BYTE32(xw, PREVBO+1) << 8) | EQ_BYTE32(xw, PREVBO+2)) << 4)
+                                | (EQ_BYTE32(xw, PREVBO+3) >> 4);
+          const u32 xorslot = atomicAdd(&eq->nslots[R&1][xorbucketid], 1);
+          if (xorslot >= NSLOTS)
+            continue;
+          typename eqrt<R>::next &xs = eqrt<R>::nbuck(eq, xorbucketid)[xorslot];
+          xs.attr = tree(bucketid, i, lane + 32);
+#pragma unroll
+          for (u32 k = DUN; k < PREVU; k++)
+            xs.hash[k-DUN].word = xw[k];
+        }
+      }
+    }
+    __syncwarp(); // staged shared data must not be overwritten early
+  }
+}
 #endif // register-resident digitO/E variants
 
 #ifdef UNROLL

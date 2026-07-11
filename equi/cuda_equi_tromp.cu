@@ -90,14 +90,15 @@ static int ctx_solve(solver_ctx *c, const char *headernonce, const char *persona
 	// at nt/tpb=64 blocks the GPU runs ~19% occupied (profiled 2026-07-02).
 	digitH<<<8 * (nt/tpb), tpb>>>(c->device_eq);
 #if WN == 144 && WK == 5 && BUCKBITS == 20 && RESTBITS == 4 && !defined(XINTREE)
-	// round-templated register-resident kernels (see equi_miner_tromp.cuh).
-	// Grid kept at nt/tpb: 8x grids regressed ~19% end-to-end — the collision
-	// kernels depend on bucket cache-residency, and 8x more buckets in flight
-	// thrash L2 (same lesson as the old nthreads sweep).
-	digitOT<1><<<nt/tpb, tpb>>>(c->device_eq);
-	digitET<2><<<nt/tpb, tpb>>>(c->device_eq);
-	digitOT<3><<<nt/tpb, tpb>>>(c->device_eq);
-	digitET<4><<<nt/tpb, tpb>>>(c->device_eq);
+	// warp-per-bucket collision kernels (see equi_miner_tromp.cuh): one warp
+	// stages one bucket coalesced and processes its pairs in parallel via
+	// ballot masks. Grid swept: 128 blocks best (64: -5%, 256: -1%, 512: -2%);
+	// 512 warps = 512 buckets in flight (~0.7MB staged, fits L2 easily).
+	// digitOT/ET kept above as reference.
+	digitWB<1><<<128, EQ_WB_TPB>>>(c->device_eq);
+	digitWB<2><<<128, EQ_WB_TPB>>>(c->device_eq);
+	digitWB<3><<<128, EQ_WB_TPB>>>(c->device_eq);
+	digitWB<4><<<128, EQ_WB_TPB>>>(c->device_eq);
 #else
 	for (u32 r = 1; r < WK; r++)
 		r & 1 ? digitO<<<nt/tpb, tpb>>>(c->device_eq, r)
