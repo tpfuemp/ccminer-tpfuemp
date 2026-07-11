@@ -249,6 +249,7 @@
     <ClCompile Include="compat\jansson\value.c" />
     <ClInclude Include="balloon\balloon.h" />
     <ClInclude Include="balloon\sha256.h" />
+    <ClInclude Include="cuda\sha256_device.cuh" />
     <ClInclude Include="compat\pthreads\pthread.h" />
     <ClCompile Include="compat\winansi.c" />
     <ClCompile Include="ccminer.cpp">
@@ -479,13 +480,14 @@
     <CudaCompile Include="scrypt\sha256.cu" />
     <CudaCompile Include="scrypt\salsa_kernel.cu">
     </CudaCompile>
-    <CudaCompile Include="sha256\cuda_sha256csm.cu" />
-    <CudaCompile Include="sha256\cuda_sha256d.cu" />
-    <CudaCompile Include="sha256\sha256csm.cu" />
-    <CudaCompile Include="sha256\sha256d.cu" />
-    <CudaCompile Include="sha256\cuda_sha256t.cu" />
-    <CudaCompile Include="sha256\sha256t.cu" />
-    <CudaCompile Include="sha256dv\sha256dv.cu" />
+    <CudaCompile Include="algos\sha256d\cuda_sha256csm.cu" />
+    <CudaCompile Include="algos\sha256d\cuda_sha256d.cu" />
+    <CudaCompile Include="algos\sha256d\cuda_sha256_selftest.cu" />
+    <CudaCompile Include="algos\sha256d\sha256csm.cu" />
+    <CudaCompile Include="algos\sha256d\sha256d.cu" />
+    <CudaCompile Include="algos\sha256d\cuda_sha256t.cu" />
+    <CudaCompile Include="algos\sha256d\sha256t.cu" />
+    <CudaCompile Include="algos\sha256dv\sha256dv.cu" />
     <CudaCompile Include="x11\cuda_x11_echo_sp.cu" />
     <CudaCompile Include="x11\cuda_x11_shavite512_sp.cu" />
     <CudaCompile Include="yescrypt\cuda_yescrypt.cu" />

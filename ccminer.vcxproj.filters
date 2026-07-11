@@ -1024,19 +1024,22 @@
     <CudaCompile Include="lbry\lbry.cu">
       <Filter>Source Files\CUDA\lbry</Filter>
     </CudaCompile>
-    <CudaCompile Include="sha256\cuda_sha256d.cu">
+    <CudaCompile Include="algos\sha256d\cuda_sha256d.cu">
       <Filter>Source Files\CUDA\sha256</Filter>
     </CudaCompile>
-    <CudaCompile Include="sha256\sha256d.cu">
+    <CudaCompile Include="algos\sha256d\cuda_sha256_selftest.cu">
       <Filter>Source Files\CUDA\sha256</Filter>
     </CudaCompile>
-    <CudaCompile Include="sha256\cuda_sha256t.cu">
+    <CudaCompile Include="algos\sha256d\sha256d.cu">
       <Filter>Source Files\CUDA\sha256</Filter>
     </CudaCompile>
-    <CudaCompile Include="sha256\sha256t.cu">
+    <CudaCompile Include="algos\sha256d\cuda_sha256t.cu">
       <Filter>Source Files\CUDA\sha256</Filter>
     </CudaCompile>
-    <CudaCompile Include="sha256dv\sha256dv.cu">
+    <CudaCompile Include="algos\sha256d\sha256t.cu">
+      <Filter>Source Files\CUDA\sha256</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\sha256dv\sha256dv.cu">
       <Filter>Source Files\CUDA\sha256</Filter>
     </CudaCompile>
     <CudaCompile Include="sia\sia.cu">
@@ -1120,10 +1123,10 @@
     <CudaCompile Include="yescrypt\cuda_yescrypt.cu">
       <Filter>Source Files\CUDA\yescrypt</Filter>
     </CudaCompile>
-    <CudaCompile Include="sha256\cuda_sha256csm.cu">
+    <CudaCompile Include="algos\sha256d\cuda_sha256csm.cu">
       <Filter>Source Files\CUDA\sha256</Filter>
     </CudaCompile>
-    <CudaCompile Include="sha256\sha256csm.cu">
+    <CudaCompile Include="algos\sha256d\sha256csm.cu">
       <Filter>Source Files\CUDA\sha256</Filter>
     </CudaCompile>
     <CudaCompile Include="argon2d\argon2d.cu" />

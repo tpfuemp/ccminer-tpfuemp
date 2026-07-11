@@ -25,30 +25,10 @@
 #include "miner.h"
 #include "cuda_helper.h"
 
+#include "cuda/sha256_device.cuh"
+
 #include <stdint.h>
 #include <string.h>
-
-// ---------------------------------------------------------------------------
-// SHA-256 building blocks (shared host + device constants)
-// ---------------------------------------------------------------------------
-
-static const uint32_t h_H256[8] = {
-	0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
-	0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
-};
-
-static const uint32_t h_K256[64] = {
-	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-	0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-	0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-	0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-	0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-	0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-	0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-	0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2
-};
-
-__device__ __constant__ static uint32_t d_K256[64];
 
 // Per-job constants uploaded via sha256dv_setBlock().
 __device__ __constant__ static uint32_t d_midstate[8]; // SHA-256 midstate of stage2 block 1
@@ -85,29 +65,11 @@ static bool     dv_sig_set[MAX_GPUS] = { 0 };
 // Host SHA-256 (for midstate precompute, CPU validation and self-test)
 // ---------------------------------------------------------------------------
 
-#define ROTR32(x,n) (((x) >> (n)) | ((x) << (32 - (n))))
-
 static void host_sha256_transform(uint32_t state[8], const uint32_t in[16])
 {
-	uint32_t w[64];
+	uint32_t w[16]; // sha256_transform_full consumes the block
 	for (int i = 0; i < 16; i++) w[i] = in[i];
-	for (int i = 16; i < 64; i++) {
-		uint32_t s0 = ROTR32(w[i-15], 7) ^ ROTR32(w[i-15], 18) ^ (w[i-15] >> 3);
-		uint32_t s1 = ROTR32(w[i-2], 17) ^ ROTR32(w[i-2], 19) ^ (w[i-2] >> 10);
-		w[i] = w[i-16] + s0 + w[i-7] + s1;
-	}
-	uint32_t a=state[0],b=state[1],c=state[2],d=state[3],e=state[4],f=state[5],g=state[6],h=state[7];
-	for (int i = 0; i < 64; i++) {
-		uint32_t S1 = ROTR32(e,6) ^ ROTR32(e,11) ^ ROTR32(e,25);
-		uint32_t ch = (e & f) ^ (~e & g);
-		uint32_t t1 = h + S1 + ch + h_K256[i] + w[i];
-		uint32_t S0 = ROTR32(a,2) ^ ROTR32(a,13) ^ ROTR32(a,22);
-		uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
-		uint32_t t2 = S0 + maj;
-		h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
-	}
-	state[0]+=a; state[1]+=b; state[2]+=c; state[3]+=d;
-	state[4]+=e; state[5]+=f; state[6]+=g; state[7]+=h;
+	sha256_transform_full(w, state, h_sha256_K);
 }
 
 // Precompute block-2 compression state through round 2, where only the nonce
@@ -120,22 +82,14 @@ static void sha256dv_precompute_pre(const uint32_t ms[8], const uint32_t block2[
 	uint32_t a=ms[0],b=ms[1],c=ms[2],d=ms[3],e=ms[4],f=ms[5],g=ms[6],h=ms[7];
 	const uint32_t w01[2] = { block2[0], block2[1] };   // rounds 0,1 message words
 	for (int i = 0; i < 2; i++) {
-		uint32_t S1 = ROTR32(e,6) ^ ROTR32(e,11) ^ ROTR32(e,25);
-		uint32_t ch = (e & f) ^ (~e & g);
-		uint32_t t1 = h + S1 + ch + h_K256[i] + w01[i];
-		uint32_t S0 = ROTR32(a,2) ^ ROTR32(a,13) ^ ROTR32(a,22);
-		uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
-		uint32_t t2 = S0 + maj;
+		uint32_t t1 = h + sha256_bsg1(e) + sha256_ch(e, f, g) + h_sha256_K[i] + w01[i];
+		uint32_t t2 = sha256_bsg0(a) + sha256_maj(a, b, c);
 		h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
 	}
 	// State here is a2..h2 (after rounds 0,1). Round 2 omits w[2]=w2 (added back
 	// on the device): t1 = T1c + w2, t2 = T2c, both T*c constant.
-	uint32_t S1  = ROTR32(e,6) ^ ROTR32(e,11) ^ ROTR32(e,25);
-	uint32_t ch  = (e & f) ^ (~e & g);
-	uint32_t T1c = h + S1 + ch + h_K256[2];
-	uint32_t S0  = ROTR32(a,2) ^ ROTR32(a,13) ^ ROTR32(a,22);
-	uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
-	uint32_t T2c = S0 + maj;
+	uint32_t T1c = h + sha256_bsg1(e) + sha256_ch(e, f, g) + h_sha256_K[2];
+	uint32_t T2c = sha256_bsg0(a) + sha256_maj(a, b, c);
 	pre[0] = T1c + T2c;   // a3 = const + w2
 	pre[1] = a;           // b3 = a2
 	pre[2] = b;           // c3 = b2
@@ -153,7 +107,7 @@ static void host_sha256dv(uint32_t hash_le[8], const uint8_t stage2[80])
 	uint32_t blk[16], st[8];
 
 	// First SHA-256 (two blocks).
-	memcpy(st, h_H256, sizeof(st));
+	memcpy(st, h_sha256_H, sizeof(st));
 	for (int i = 0; i < 16; i++) blk[i] = be32dec(stage2 + i*4);
 	host_sha256_transform(st, blk);
 	for (int i = 0; i < 4;  i++) blk[i] = be32dec(stage2 + 64 + i*4);
@@ -164,7 +118,7 @@ static void host_sha256dv(uint32_t hash_le[8], const uint8_t stage2[80])
 
 	// Second SHA-256 over the 32-byte first digest.
 	uint32_t st2[8];
-	memcpy(st2, h_H256, sizeof(st2));
+	memcpy(st2, h_sha256_H, sizeof(st2));
 	for (int i = 0; i < 8;  i++) blk[i] = st[i];
 	blk[8] = 0x80000000;
 	for (int i = 9; i < 15; i++) blk[i] = 0;
@@ -238,7 +192,7 @@ void sha256dv_gpu_hash(uint32_t threads, uint32_t startNonce, uint32_t *resNonce
 		for (int i = 3; i < 64; i++) {
 			uint32_t S1 = ROTR32(e,6) ^ ROTR32(e,11) ^ ROTR32(e,25);
 			uint32_t ch = (e & f) ^ (~e & g);
-			uint32_t t1 = h + S1 + ch + d_K256[i] + w[i];
+			uint32_t t1 = h + S1 + ch + c_sha256_K[i] + w[i];
 			uint32_t S0 = ROTR32(a,2) ^ ROTR32(a,13) ^ ROTR32(a,22);
 			uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
 			uint32_t t2 = S0 + maj;
@@ -277,7 +231,7 @@ void sha256dv_gpu_hash(uint32_t threads, uint32_t startNonce, uint32_t *resNonce
 		for (int i = 0; i <= 60; i++) {
 			uint32_t S1 = ROTR32(E,6) ^ ROTR32(E,11) ^ ROTR32(E,25);
 			uint32_t ch = (E & F) ^ (~E & G);
-			uint32_t t1 = H + S1 + ch + d_K256[i] + w2s[i];
+			uint32_t t1 = H + S1 + ch + c_sha256_K[i] + w2s[i];
 			uint32_t S0 = ROTR32(A,2) ^ ROTR32(A,13) ^ ROTR32(A,22);
 			uint32_t maj = (A & B) ^ (A & C) ^ (B & C);
 			uint32_t t2 = S0 + maj;
@@ -297,7 +251,7 @@ void sha256dv_gpu_hash(uint32_t threads, uint32_t startNonce, uint32_t *resNonce
 			for (int i = 61; i < 64; i++) {
 				uint32_t S1 = ROTR32(E,6) ^ ROTR32(E,11) ^ ROTR32(E,25);
 				uint32_t ch = (E & F) ^ (~E & G);
-				uint32_t t1 = H + S1 + ch + d_K256[i] + w2s[i];
+				uint32_t t1 = H + S1 + ch + c_sha256_K[i] + w2s[i];
 				uint32_t S0 = ROTR32(A,2) ^ ROTR32(A,13) ^ ROTR32(A,22);
 				uint32_t maj = (A & B) ^ (A & C) ^ (B & C);
 				uint32_t t2 = S0 + maj;
@@ -352,7 +306,7 @@ static bool sha256dv_self_test(int thr_id)
 	host_sha256dv(exp, stage2);
 
 	// midstate of block 1, plus the block-2 fixed words.
-	memcpy(ms, h_H256, sizeof(ms));
+	memcpy(ms, h_sha256_H, sizeof(ms));
 	for (int i = 0; i < 16; i++) blk[i] = be32dec(stage2 + i*4);
 	host_sha256_transform(ms, blk);
 	block2[0] = be32dec(stage2 + 64);
@@ -421,7 +375,6 @@ extern "C" int scanhash_sha256dv(int thr_id, struct work* work, uint32_t max_non
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads",
 			throughput2intensity(throughput), throughput);
 
-		cudaMemcpyToSymbol(d_K256, h_K256, sizeof(h_K256), 0, cudaMemcpyHostToDevice);
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)), 0);
 
 		if (!sha256dv_self_test(thr_id))
@@ -458,7 +411,7 @@ extern "C" int scanhash_sha256dv(int thr_id, struct work* work, uint32_t max_non
 	uint32_t ms[8], blk[16], block2[4];
 
 	sha256dv_build_stage2(stage2, work, pdata[19], nonce_hi);
-	memcpy(ms, h_H256, sizeof(ms));
+	memcpy(ms, h_sha256_H, sizeof(ms));
 	for (int i = 0; i < 16; i++) blk[i] = be32dec(stage2 + i*4);
 	host_sha256_transform(ms, blk);
 	block2[0] = be32dec(stage2 + 64);
