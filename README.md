@@ -8,12 +8,18 @@ GRLC donation address: GUZA18kQyjfKDPLdcrHKhvcvdoS1JcUr2V (fancyIX)
 
 This branck is for improving allium performance forked from [lenis0012](https://github.com/lenis0012/ccminer)
 
-This variant was tested and built on Linux (ubuntu server 14.04, 16.04, Fedora 22 to 25)
-It is also built for Windows 7 to 10 with VStudio 2013, to stay compatible with Windows 7 and Vista.
+Requirements (this fork)
+-------------------------
 
-Note that the x86 releases are generally faster than x64 ones on Windows, but that tend to change with the recent drivers.
+> **This fork targets modern NVIDIA hardware and CUDA 11.8 only.**
 
-The recommended CUDA Toolkit version was the [6.5.19](http://developer.download.nvidia.com/compute/cuda/6_5/rel/installers/cuda_6.5.19_windows_general_64.exe), but some light algos could be faster with the version 7.5 and 8.0 (like lbry, decred and skein).
+- **CUDA Toolkit:** 11.8 (fixed). Older toolkits (10.x, 11.0–11.7) are no longer supported.
+- **Build toolchain (Windows):** Visual Studio 2022, project file `ccminer.vcxproj`.
+- **Supported GPU architectures:** Pascal (`sm_61`, GTX 10-series) and newer — Turing (`sm_75`) and Ampere (`sm_86`). The default build ships native SASS for `sm_61 / sm_75 / sm_86` plus a `compute_86` PTX fallback for later cards.
+- **Dropped architectures:** Maxwell (`sm_50/52`), Kepler and Fermi are no longer supported. All architecture-specific code paths below `sm_61` have been removed.
+
+**On a pre-Pascal GPU (Maxwell/Kepler/Fermi), or do you need an older CUDA Toolkit?**
+This fork has intentionally dropped that support. Use the upstream project instead, which retains the wider hardware and toolkit range: **https://github.com/tpruvot/ccminer**
 
 About source code dependencies
 ------------------------------

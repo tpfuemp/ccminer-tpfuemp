@@ -278,12 +278,29 @@ I plan to add a json format later, if requests are formatted in json too..
 
 >>> Additional Notes <<<
 
-This code should be running on nVidia GPUs ranging from compute capability
-3.0 up to compute capability 5.2. Support for Compute 2.0 has been dropped
-so we can more efficiently implement new algorithms using the latest hardware
-features.
+This fork targets modern NVIDIA hardware and CUDA 11.8 only. It builds with the
+CUDA 11.8 Toolkit (Visual Studio 2022 on Windows, project file ccminer.vcxproj)
+and runs on GPUs of compute capability 6.1 and newer -- Pascal (sm_61, the
+GTX 10-series), Turing (sm_75) and Ampere (sm_86). The default build ships
+native SASS for sm_61/75/86 plus a compute_86 PTX fallback for later cards.
+
+Support for Maxwell (sm_50/52), Kepler and Fermi has been dropped, along with
+all architecture-specific code paths below sm_61, so we can implement and
+optimise new algorithms for the latest hardware without carrying legacy
+fallbacks.
+
+If you have a pre-Pascal GPU (Maxwell/Kepler/Fermi) or need an older CUDA
+Toolkit, use the upstream project instead -- it retains that wider hardware and
+toolkit range: https://github.com/tpruvot/ccminer
 
 >>> RELEASE HISTORY <<<
+  Jul. 12th 2026  ccminer-tpfuemp 1.0.0
+                  Require the CUDA 11.8 Toolkit (Visual Studio 2022); drop 10.x/11.0-11.7
+                  Build floor is now sm_61 (Pascal): default gencode sm_61/75/86 + compute_86 PTX
+                  Drop Maxwell (sm_50/52), Kepler and Fermi, and all arch-specific code below sm_61
+                  Remove the stale CUDA 10 project files (ccminer-cuda10.*)
+                  Pre-Pascal GPU or older CUDA needed: use upstream https://github.com/tpruvot/ccminer
+
   Jan. 04th 2017  v2.2.4
                   Improve lyra2v2
                   Higher keccak default intensity
