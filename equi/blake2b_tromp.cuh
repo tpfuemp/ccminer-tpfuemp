@@ -166,3 +166,48 @@ __device__ void blake2b_gpu_hash(blake2b_state *state, u32 idx, uchar *hash, u32
   state->h[7] ^= v[7] ^ v[15];
   memcpy(hash, (uchar *)state->h, outlen);
 }
+
+// Register-resident variant for the equihash index-hash case: the final blake
+// block's message is all zeros except m[0] (header tail) and m[1] (4 header
+// bytes | 32-bit hash-block index), so the state never has to exist in
+// (local) memory. Returns the first 56 output bytes as 7 u64 words; with all
+// loops unrolled and constant-indexed, h/hh/v/m all live in registers.
+__device__ __forceinline__
+void blake2b_gpu_hash_regs(const u64 h[8], const u64 m0, const u64 m1, const u64 counter, u64 hh[7]) {
+  u64 m[16];
+  m[0] = m0;
+  m[1] = m1;
+#pragma unroll
+  for (int i = 2; i < 16; i++)
+    m[i] = 0;
+
+  u64 v[16];
+#pragma unroll
+  for (int i = 0; i < 8; i++)
+    v[i] = h[i];
+  v[8] = 0x6a09e667f3bcc908;
+  v[9] = 0xbb67ae8584caa73b;
+  v[10] = 0x3c6ef372fe94f82b;
+  v[11] = 0xa54ff53a5f1d36f1;
+  v[12] = 0x510e527fade682d1 ^ counter;
+  v[13] = 0x9b05688c2b3e6c1f;
+  v[14] = 0x1f83d9abfb41bd6b ^ 0xffffffffffffffff;
+  v[15] = 0x5be0cd19137e2179;
+
+  ROUND( 0 );
+  ROUND( 1 );
+  ROUND( 2 );
+  ROUND( 3 );
+  ROUND( 4 );
+  ROUND( 5 );
+  ROUND( 6 );
+  ROUND( 7 );
+  ROUND( 8 );
+  ROUND( 9 );
+  ROUND( 10 );
+  ROUND( 11 );
+
+#pragma unroll
+  for (int i = 0; i < 7; i++)
+    hh[i] = h[i] ^ v[i] ^ v[i+8];
+}

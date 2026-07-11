@@ -443,13 +443,58 @@ struct equi {
   };
 };
 
+// little-endian byte / unaligned dword extraction from a u64-word array;
+// j must be a compile-time constant so the words stay in registers
+#define EQ_BYTE(w, j) ((u32)((w)[(j) >> 3] >> (((j) & 7) * 8)) & 0xff)
+#define EQ_WORD32(w, j) ((((j) & 7) <= 4) \
+  ? (u32)((w)[(j) >> 3] >> (((j) & 7) * 8)) \
+  : (u32)(((w)[(j) >> 3] >> (((j) & 7) * 8)) | ((w)[((j) >> 3) + 1] << (64 - ((j) & 7) * 8))))
+
+// no __launch_bounds__ here on purpose: the register-resident blake needs
+// ~90 regs; capping at 64 spills v[16] to local memory, recreating the
+// LG-throttle bottleneck this path exists to remove (occupancy was measured
+// irrelevant for this kernel: 18.9% -> 60.7% gave -2%).
 __global__ void digitH(equi *eq) {
+  const u32 id = blockIdx.x * blockDim.x + threadIdx.x;
+#if WN == 144 && BUCKBITS == 20 && RESTBITS == 4 && !defined(XINTREE)
+  // Register-resident fast path: header+nonce is always 140 bytes over
+  // stratum, so the final blake block is uniform except for the 32-bit block
+  // index. No blake2b_state copy, no local hash[] byte array, no byte-wise
+  // memcpy into the slot — hash bytes are extracted from registers and the
+  // 16-byte slot payload is written as 4 aligned u32 stores (nextbo == 0).
+  if (eq->blake_ctx.buflen == 12) {
+    u64 h[8], hh[7];
+#pragma unroll
+    for (int i = 0; i < 8; i++)
+      h[i] = eq->blake_ctx.h[i];
+    const u64 m0 = *(const u64 *)(eq->blake_ctx.buf);
+    const u64 m1lo = *(const u32 *)(eq->blake_ctx.buf + 8);
+    const u64 counter = eq->blake_ctx.counter + 16; // buflen 12 + 4-byte index
+    for (u32 block = id; block < NBLOCKS; block += gridDim.x * blockDim.x) {
+      blake2b_gpu_hash_regs(h, m0, m1lo | ((u64)block << 32), counter, hh);
+#pragma unroll
+      for (u32 i = 0; i < HASHESPERBLAKE; i++) {
+        const int b = 18 * i; // WN/8 bytes per hash in the blake output
+        const u32 bucketid = (EQ_BYTE(hh, b) << 12) | (EQ_BYTE(hh, b+1) << 4) | (EQ_BYTE(hh, b+2) >> 4);
+        const u32 slot = atomicAdd(&eq->nslots[0][bucketid], 1);
+        if (slot >= NSLOTS)
+          continue;
+        slot0 &s = eq->hta.trees0[0][bucketid][slot];
+        s.attr = tree(block*HASHESPERBLAKE+i);
+        s.hash[0].word = EQ_WORD32(hh, b+2);
+        s.hash[1].word = EQ_WORD32(hh, b+6);
+        s.hash[2].word = EQ_WORD32(hh, b+10);
+        s.hash[3].word = EQ_WORD32(hh, b+14);
+      }
+    }
+    return;
+  }
+#endif
   uchar hash[HASHOUT];
   blake2b_state state;
   equi::htlayout htl(eq, 0);
   const u32 hashbytes = hashsize(0);
-  const u32 id = blockIdx.x * blockDim.x + threadIdx.x;
-  for (u32 block = id; block < NBLOCKS; block += eq->nthreads) {
+  for (u32 block = id; block < NBLOCKS; block += gridDim.x * blockDim.x) {
     state = eq->blake_ctx;
     blake2b_gpu_hash(&state, block, hash, HASHOUT);
     for (u32 i = 0; i<HASHESPERBLAKE; i++) {
@@ -594,6 +639,98 @@ __global__ void digitE(equi *eq, const u32 r) {
     }
   }
 }
+
+#if WN == 144 && BUCKBITS == 20 && RESTBITS == 4 && !defined(XINTREE)
+// Round-templated, register-resident variants of digitO/digitE. With the
+// layout constants (prev/next hash units, byte offsets) compile-time, each
+// slot's hash words are loaded exactly ONCE into registers; the equality
+// check, xor-bucket extraction and xor payload run on registers, and the
+// payload is written as NEXTU aligned u32 stores. The generic kernels issue
+// ~2x the load/store instructions per collision pair (byte re-reads of both
+// slots), which is the measured LG-throttle bottleneck.
+#define EQ_HASHSIZE(r) ((WN - ((r)+1)*DIGITBITS + RESTBITS + 7) / 8)
+#define EQ_UNITS(r)    ((EQ_HASHSIZE(r) + 3) / 4)
+// byte j (compile-time) of a u32-word array held in registers
+#define EQ_BYTE32(w, j) (((w)[(j) >> 2] >> (((j) & 3) * 8)) & 0xff)
+
+template <u32 R>
+__global__ void digitOT(equi *eq) { // odd R: trees0[(R-1)/2] -> trees1[R/2]
+  const u32 PREVU  = EQ_UNITS(R-1);
+  const u32 DUN    = PREVU - EQ_UNITS(R);
+  const u32 PREVBO = PREVU * 4 - EQ_HASHSIZE(R-1);
+  equi::collisiondata cd;
+  const u32 id = blockIdx.x * blockDim.x + threadIdx.x;
+  for (u32 bucketid=id; bucketid < NBUCKETS; bucketid += gridDim.x * blockDim.x) {
+    cd.clear();
+    slot0 *buck = eq->hta.trees0[(R-1)/2][bucketid];
+    const u32 bsize = eq->getnslots0(bucketid);
+    for (u32 s1 = 0; s1 < bsize; s1++) {
+      u32 p1w[PREVU];
+#pragma unroll
+      for (u32 i = 0; i < PREVU; i++)
+        p1w[i] = buck[s1].hash[i].word;
+      for (cd.addslot(s1, EQ_BYTE32(p1w, PREVBO) & 0xf); cd.nextcollision(); ) {
+        const u32 s0 = cd.slot();
+        u32 xw[PREVU];
+#pragma unroll
+        for (u32 i = 0; i < PREVU; i++)
+          xw[i] = buck[s0].hash[i].word ^ p1w[i];
+        if (xw[PREVU-1] == 0) // equal last words -> likely duplicate hash
+          continue;
+        const u32 xorbucketid = (((EQ_BYTE32(xw, PREVBO+1) << 8) | EQ_BYTE32(xw, PREVBO+2)) << 4)
+                              | (EQ_BYTE32(xw, PREVBO+3) >> 4);
+        const u32 xorslot = atomicAdd(&eq->nslots[1][xorbucketid], 1);
+        if (xorslot >= NSLOTS)
+          continue;
+        slot1 &xs = eq->hta.trees1[R/2][xorbucketid][xorslot];
+        xs.attr = tree(bucketid, s0, s1);
+#pragma unroll
+        for (u32 i = DUN; i < PREVU; i++)
+          xs.hash[i-DUN].word = xw[i];
+      }
+    }
+  }
+}
+
+template <u32 R>
+__global__ void digitET(equi *eq) { // even R: trees1[(R-1)/2] -> trees0[R/2]
+  const u32 PREVU  = EQ_UNITS(R-1);
+  const u32 DUN    = PREVU - EQ_UNITS(R);
+  const u32 PREVBO = PREVU * 4 - EQ_HASHSIZE(R-1);
+  equi::collisiondata cd;
+  const u32 id = blockIdx.x * blockDim.x + threadIdx.x;
+  for (u32 bucketid=id; bucketid < NBUCKETS; bucketid += gridDim.x * blockDim.x) {
+    cd.clear();
+    slot1 *buck = eq->hta.trees1[(R-1)/2][bucketid];
+    const u32 bsize = eq->getnslots1(bucketid);
+    for (u32 s1 = 0; s1 < bsize; s1++) {
+      u32 p1w[PREVU];
+#pragma unroll
+      for (u32 i = 0; i < PREVU; i++)
+        p1w[i] = buck[s1].hash[i].word;
+      for (cd.addslot(s1, EQ_BYTE32(p1w, PREVBO) & 0xf); cd.nextcollision(); ) {
+        const u32 s0 = cd.slot();
+        u32 xw[PREVU];
+#pragma unroll
+        for (u32 i = 0; i < PREVU; i++)
+          xw[i] = buck[s0].hash[i].word ^ p1w[i];
+        if (xw[PREVU-1] == 0)
+          continue;
+        const u32 xorbucketid = (((EQ_BYTE32(xw, PREVBO+1) << 8) | EQ_BYTE32(xw, PREVBO+2)) << 4)
+                              | (EQ_BYTE32(xw, PREVBO+3) >> 4);
+        const u32 xorslot = atomicAdd(&eq->nslots[0][xorbucketid], 1);
+        if (xorslot >= NSLOTS)
+          continue;
+        slot0 &xs = eq->hta.trees0[R/2][xorbucketid][xorslot];
+        xs.attr = tree(bucketid, s0, s1);
+#pragma unroll
+        for (u32 i = DUN; i < PREVU; i++)
+          xs.hash[i-DUN].word = xw[i];
+      }
+    }
+  }
+}
+#endif // register-resident digitO/E variants
 
 #ifdef UNROLL
 // bucket mask

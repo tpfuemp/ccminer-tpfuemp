@@ -86,10 +86,23 @@ static int ctx_solve(solver_ctx *c, const char *headernonce, const char *persona
 	checkCudaErrors(cudaMemset((void*)c->heq.nslots, 0, 2 * NBUCKETS * sizeof(u32)));
 	checkCudaErrors(cudaMemcpy(c->device_eq, &c->heq, sizeof(equi), cudaMemcpyHostToDevice));
 
-	digitH<<<nt/tpb, tpb>>>(c->device_eq);
+	// digitH uses a grid-stride loop, so its grid can exceed eq->nthreads;
+	// at nt/tpb=64 blocks the GPU runs ~19% occupied (profiled 2026-07-02).
+	digitH<<<8 * (nt/tpb), tpb>>>(c->device_eq);
+#if WN == 144 && WK == 5 && BUCKBITS == 20 && RESTBITS == 4 && !defined(XINTREE)
+	// round-templated register-resident kernels (see equi_miner_tromp.cuh).
+	// Grid kept at nt/tpb: 8x grids regressed ~19% end-to-end — the collision
+	// kernels depend on bucket cache-residency, and 8x more buckets in flight
+	// thrash L2 (same lesson as the old nthreads sweep).
+	digitOT<1><<<nt/tpb, tpb>>>(c->device_eq);
+	digitET<2><<<nt/tpb, tpb>>>(c->device_eq);
+	digitOT<3><<<nt/tpb, tpb>>>(c->device_eq);
+	digitET<4><<<nt/tpb, tpb>>>(c->device_eq);
+#else
 	for (u32 r = 1; r < WK; r++)
 		r & 1 ? digitO<<<nt/tpb, tpb>>>(c->device_eq, r)
 		      : digitE<<<nt/tpb, tpb>>>(c->device_eq, r);
+#endif
 	digitK<<<nt/tpb, tpb>>>(c->device_eq);
 
 	checkCudaErrors(cudaMemcpy(&c->heq, c->device_eq, sizeof(equi), cudaMemcpyDeviceToHost));
