@@ -2011,6 +2011,7 @@ static void *miner_thread(void *userdata)
 	uint32_t max_nonce;
 	uint32_t end_nonce = UINT32_MAX / opt_n_threads * (thr_id + 1) - (thr_id + 1);
 	time_t tm_rate_log = 0;
+	time_t tm_total_log = 0;
 	bool work_done = false;
 	bool extrajob = false;
 	char s[16];
@@ -2277,6 +2278,8 @@ static void *miner_thread(void *userdata)
 		// prevent gpu scans before a job is received
 		if (opt_algo == ALGO_SIA) nodata_check_oft = 7; // no stratum version
 		else if (opt_algo == ALGO_DECRED) nodata_check_oft = 4; // testnet ver is 0
+		else if (opt_algo == ALGO_SHA256D || opt_algo == ALGO_SHA256T || opt_algo == ALGO_SHA256CSM)
+			nodata_check_oft = 17; // ntime; zpool sha256 jobs carry block version 0
 		else nodata_check_oft = 0;
 		if (have_stratum && work.data[nodata_check_oft] == 0 && !opt_benchmark) {
 			sleep(1);
@@ -2933,9 +2936,13 @@ static void *miner_thread(void *userdata)
 			for (int i = 0; i < opt_n_threads && thr_hashrates[i]; i++)
 				hashrate += stats_get_speed(i, thr_hashrates[i]);
 			pthread_mutex_unlock(&stats_lock);
-			if (opt_benchmark && bench_algo == -1 && loopcnt > 2) {
+			// throttled like the per-GPU rate line: fast algos return from
+			// scanhash many times per second (shares, max_nonce windows)
+			if (opt_benchmark && bench_algo == -1 && loopcnt > 2 &&
+					(time(NULL) - tm_total_log) > opt_maxlograte) {
 				format_hashrate(hashrate, s);
 				applog(LOG_NOTICE, "Total: %s", s);
+				tm_total_log = time(NULL);
 			}
 
 			// since pool start
@@ -4205,6 +4212,7 @@ int main(int argc, char *argv[])
 	parse_single_opt('q', argc, argv);
 
 	printf("*** ccminer-tpfuemp " PACKAGE_VERSION " for nVidia GPUs by tpfuemp@github ***\n");
+	printf("    fork of ccminer-kudaraidee 1.3.0 (tpruvot 2.3.1 base)\n");
 	if (!opt_quiet) {
 		const char* arch = is_x64() ? "64-bits" : "32-bits";
 #ifdef _MSC_VER

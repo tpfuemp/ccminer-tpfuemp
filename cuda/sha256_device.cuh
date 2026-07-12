@@ -4,10 +4,8 @@
  *
  * Round primitives and transforms extracted bit-identically from the
  * tpruvot-lineage sha256t implementation. Every cryptographic primitive is a
- * separately callable building block (coding-guideline.md §3); fused kernels
+ * separately callable building block (docs/coding-guideline.md §3); fused kernels
  * call these instead of re-implementing them.
- *
- * Plan: internal-docs/sha256d-cuda-optimization-plan.md §4 / §4b.
  */
 
 #ifndef CUDA_SHA256_DEVICE_CUH
@@ -173,7 +171,7 @@ void sha256_transform_full(uint32_t *in, uint32_t *state, const uint32_t *k)
  * whose results feed no earlier register in that lineage.
  *
  * ONLY legal where the hash output is compared directly against a target
- * (coding-guideline.md §3): the other six state words are NOT updated and
+ * (docs/coding-guideline.md §3): the other six state words are NOT updated and
  * the digest must never feed another hash stage, the CPU-verify path, or
  * share submission — the hit path recomputes the full hash on the CPU. */
 __host__ __device__ static inline
@@ -244,6 +242,94 @@ void sha256_final_to_target(uint32_t *in, uint32_t *state, const uint32_t *k)
 	state[7] += h;
 }
 
+/* Resume an 80-byte-header block-2 transform at round 4, from
+ * sha256_prehash_split_host() state (nsplit == 3: words 0..2 constant, word 3
+ * = nonce) and sha256_preextend_w3_host() schedule constants. `in[4..15]`
+ * must hold the padding words; in[0..3] are never read (the ring assigns
+ * w16..w19 before their first use). `ms` is the block input state for the
+ * feed-forward; `out` receives the full digest (KlausT-style prehash, cf.
+ * plan §4b). */
+__device__ static inline
+void sha256_transform_80_from_pre4(uint32_t *in, const uint32_t *pre, const uint32_t *wx,
+	const uint32_t nonce, const uint32_t *ms, uint32_t *out, const uint32_t *k)
+{
+	/* physical registers hold the logical round-4 state shifted by 4 (the
+	 * call pattern below continues the standard rotation at round 4) */
+	uint32_t e = pre[0] + nonce;
+	uint32_t f = pre[1];
+	uint32_t g = pre[2];
+	uint32_t h = pre[3];
+	uint32_t a = pre[4] + nonce;
+	uint32_t b = pre[5];
+	uint32_t c = pre[6];
+	uint32_t d = pre[7];
+
+	sha256_round(e, f, g, h, a, b, c, d, in[ 4], k[ 4]);
+	sha256_round(d, e, f, g, h, a, b, c, in[ 5], k[ 5]);
+	sha256_round(c, d, e, f, g, h, a, b, in[ 6], k[ 6]);
+	sha256_round(b, c, d, e, f, g, h, a, in[ 7], k[ 7]);
+	sha256_round(a, b, c, d, e, f, g, h, in[ 8], k[ 8]);
+	sha256_round(h, a, b, c, d, e, f, g, in[ 9], k[ 9]);
+	sha256_round(g, h, a, b, c, d, e, f, in[10], k[10]);
+	sha256_round(f, g, h, a, b, c, d, e, in[11], k[11]);
+	sha256_round(e, f, g, h, a, b, c, d, in[12], k[12]);
+	sha256_round(d, e, f, g, h, a, b, c, in[13], k[13]);
+	sha256_round(c, d, e, f, g, h, a, b, in[14], k[14]);
+	sha256_round(b, c, d, e, f, g, h, a, in[15], k[15]);
+
+	/* rounds 16..19: schedule words precomputed up to their nonce term */
+	in[0] = wx[0];
+	sha256_round(a, b, c, d, e, f, g, h, in[0], k[16]);
+	in[1] = wx[1];
+	sha256_round(h, a, b, c, d, e, f, g, in[1], k[17]);
+	in[2] = wx[2] + sha256_ssg0(nonce);
+	sha256_round(g, h, a, b, c, d, e, f, in[2], k[18]);
+	in[3] = wx[3] + nonce;
+	sha256_round(f, g, h, a, b, c, d, e, in[3], k[19]);
+
+	sha256_round_sched(e, f, g, h, a, b, c, d, in,  4, k[20]);
+	sha256_round_sched(d, e, f, g, h, a, b, c, in,  5, k[21]);
+	sha256_round_sched(c, d, e, f, g, h, a, b, in,  6, k[22]);
+	sha256_round_sched(b, c, d, e, f, g, h, a, in,  7, k[23]);
+	sha256_round_sched(a, b, c, d, e, f, g, h, in,  8, k[24]);
+	sha256_round_sched(h, a, b, c, d, e, f, g, in,  9, k[25]);
+	sha256_round_sched(g, h, a, b, c, d, e, f, in, 10, k[26]);
+	sha256_round_sched(f, g, h, a, b, c, d, e, in, 11, k[27]);
+	sha256_round_sched(e, f, g, h, a, b, c, d, in, 12, k[28]);
+	sha256_round_sched(d, e, f, g, h, a, b, c, in, 13, k[29]);
+	sha256_round_sched(c, d, e, f, g, h, a, b, in, 14, k[30]);
+	sha256_round_sched(b, c, d, e, f, g, h, a, in, 15, k[31]);
+
+	for (int i = 1; i < 3; i++)
+	{
+		sha256_round_sched(a, b, c, d, e, f, g, h, in,  0, k[16 + 16 * i]);
+		sha256_round_sched(h, a, b, c, d, e, f, g, in,  1, k[17 + 16 * i]);
+		sha256_round_sched(g, h, a, b, c, d, e, f, in,  2, k[18 + 16 * i]);
+		sha256_round_sched(f, g, h, a, b, c, d, e, in,  3, k[19 + 16 * i]);
+		sha256_round_sched(e, f, g, h, a, b, c, d, in,  4, k[20 + 16 * i]);
+		sha256_round_sched(d, e, f, g, h, a, b, c, in,  5, k[21 + 16 * i]);
+		sha256_round_sched(c, d, e, f, g, h, a, b, in,  6, k[22 + 16 * i]);
+		sha256_round_sched(b, c, d, e, f, g, h, a, in,  7, k[23 + 16 * i]);
+		sha256_round_sched(a, b, c, d, e, f, g, h, in,  8, k[24 + 16 * i]);
+		sha256_round_sched(h, a, b, c, d, e, f, g, in,  9, k[25 + 16 * i]);
+		sha256_round_sched(g, h, a, b, c, d, e, f, in, 10, k[26 + 16 * i]);
+		sha256_round_sched(f, g, h, a, b, c, d, e, in, 11, k[27 + 16 * i]);
+		sha256_round_sched(e, f, g, h, a, b, c, d, in, 12, k[28 + 16 * i]);
+		sha256_round_sched(d, e, f, g, h, a, b, c, in, 13, k[29 + 16 * i]);
+		sha256_round_sched(c, d, e, f, g, h, a, b, in, 14, k[30 + 16 * i]);
+		sha256_round_sched(b, c, d, e, f, g, h, a, in, 15, k[31 + 16 * i]);
+	}
+
+	out[0] = ms[0] + a;
+	out[1] = ms[1] + b;
+	out[2] = ms[2] + c;
+	out[3] = ms[3] + d;
+	out[4] = ms[4] + e;
+	out[5] = ms[5] + f;
+	out[6] = ms[6] + g;
+	out[7] = ms[7] + h;
+}
+
 /* --------------------------------------------------------------------------
  * Host helpers.
  * ------------------------------------------------------------------------ */
@@ -256,6 +342,46 @@ static inline void sha256_midstate_host(const uint32_t *data16, uint32_t midstat
 	for (int i = 0; i < 16; i++) in[i] = data16[i];
 	for (int i = 0; i < 8; i++)  midstate[i] = h_sha256_H[i];
 	sha256_transform_full(in, midstate, h_sha256_K);
+}
+
+/* State after the first `nsplit` rounds of a block whose words 0..nsplit-1
+ * are per-job constants and whose word `nsplit` is the nonce, with round
+ * `nsplit` split into its constant parts (KlausT prehash): pre[0] = T1c+T2c
+ * (a minus nonce), pre[4] = d+T1c (e minus nonce), the other slots hold the
+ * shifted round-`nsplit` state. The device resumes at round nsplit+1 after
+ * adding the nonce to pre[0]/pre[4]. */
+static inline void sha256_prehash_split_host(const uint32_t midstate[8], const uint32_t *w,
+	const int nsplit, uint32_t pre[8])
+{
+	uint32_t a = midstate[0], b = midstate[1], c = midstate[2], d = midstate[3];
+	uint32_t e = midstate[4], f = midstate[5], g = midstate[6], h = midstate[7];
+	for (int i = 0; i < nsplit; i++) {
+		const uint32_t t1 = h + sha256_bsg1(e) + sha256_ch(e, f, g) + h_sha256_K[i] + w[i];
+		const uint32_t t2 = sha256_bsg0(a) + sha256_maj(a, b, c);
+		h = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+	}
+	const uint32_t T1c = h + sha256_bsg1(e) + sha256_ch(e, f, g) + h_sha256_K[nsplit];
+	const uint32_t T2c = sha256_bsg0(a) + sha256_maj(a, b, c);
+	pre[0] = T1c + T2c;
+	pre[1] = a;
+	pre[2] = b;
+	pre[3] = c;
+	pre[4] = d + T1c;
+	pre[5] = e;
+	pre[6] = f;
+	pre[7] = g;
+}
+
+/* Schedule words 16..19 of a block whose word 3 is the nonce, precomputed up
+ * to their nonce terms: wx[0]/wx[1] are complete (w16/w17), the device adds
+ * ssg0(nonce) to wx[2] (-> w18) and the nonce to wx[3] (-> w19). `w` is the
+ * 16-word block template; the nonce slot w[3] is not read. */
+static inline void sha256_preextend_w3_host(const uint32_t *w, uint32_t wx[4])
+{
+	wx[0] = w[0] + sha256_ssg0(w[1]) + w[9]  + sha256_ssg1(w[14]);
+	wx[1] = w[1] + sha256_ssg0(w[2]) + w[10] + sha256_ssg1(w[15]);
+	wx[2] = w[2] + w[11] + sha256_ssg1(wx[0]);
+	wx[3] = sha256_ssg0(w[4]) + w[12] + sha256_ssg1(wx[1]);
 }
 
 #endif /* CUDA_SHA256_DEVICE_CUH */

@@ -79,25 +79,8 @@ static void host_sha256_transform(uint32_t state[8], const uint32_t in[16])
 static void sha256dv_precompute_pre(const uint32_t ms[8], const uint32_t block2[4],
                                     uint32_t pre[8])
 {
-	uint32_t a=ms[0],b=ms[1],c=ms[2],d=ms[3],e=ms[4],f=ms[5],g=ms[6],h=ms[7];
-	const uint32_t w01[2] = { block2[0], block2[1] };   // rounds 0,1 message words
-	for (int i = 0; i < 2; i++) {
-		uint32_t t1 = h + sha256_bsg1(e) + sha256_ch(e, f, g) + h_sha256_K[i] + w01[i];
-		uint32_t t2 = sha256_bsg0(a) + sha256_maj(a, b, c);
-		h=g; g=f; f=e; e=d+t1; d=c; c=b; b=a; a=t1+t2;
-	}
-	// State here is a2..h2 (after rounds 0,1). Round 2 omits w[2]=w2 (added back
-	// on the device): t1 = T1c + w2, t2 = T2c, both T*c constant.
-	uint32_t T1c = h + sha256_bsg1(e) + sha256_ch(e, f, g) + h_sha256_K[2];
-	uint32_t T2c = sha256_bsg0(a) + sha256_maj(a, b, c);
-	pre[0] = T1c + T2c;   // a3 = const + w2
-	pre[1] = a;           // b3 = a2
-	pre[2] = b;           // c3 = b2
-	pre[3] = c;           // d3 = c2
-	pre[4] = d + T1c;     // e3 = const + w2
-	pre[5] = e;           // f3 = e2
-	pre[6] = f;           // g3 = f2
-	pre[7] = g;           // h3 = g2
+	// rounds 0,1 constant, round 2 (w2 = nonce_lo word) split into T1c/T2c
+	sha256_prehash_split_host(ms, block2, 2, pre);
 }
 
 // Double SHA-256 of an 80-byte stage2 buffer -> 8 LE words (index 7 = MSW,
@@ -363,8 +346,10 @@ extern "C" int scanhash_sha256dv(int thr_id, struct work* work, uint32_t max_non
 	uint32_t throughput = cuda_default_throughput(thr_id, 1U << 24);
 	if (init_done[thr_id] && !dv_track) throughput = min(throughput, max_nonce - pdata[19]);
 
+	// 0x03 like the rest of the sha256 family: an easier target floods the log
+	// with one "share found" scanhash return (and Total: line) per ~2^24 hashes.
 	if (opt_benchmark)
-		ptarget[7] = 0x000000ff;
+		ptarget[7] = 0x00000003;
 
 	if (!init_done[thr_id]) {
 		cudaSetDevice(dev_id);

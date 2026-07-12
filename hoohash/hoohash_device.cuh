@@ -1,8 +1,8 @@
 // HoohashV110 (PEPEPOW) — CUDA device port
 //
 // Faithful translation of the consensus C reference
-// (internal-docs/hoohash-reference/crypto/hoohash/hoohash.c,
-//  Hoosat commit 9634f11410a2d71be21086e813263fa007fb6810, MIT).
+// (Hoosat crypto/hoohash/hoohash.c,
+//  commit 9634f11410a2d71be21086e813263fa007fb6810, MIT).
 //
 // BLAKE3-256 is provided by the bundled, self-contained blake3_hoo_device.cuh
 // (static __device__, integer-only) so this path links into its own TU without
