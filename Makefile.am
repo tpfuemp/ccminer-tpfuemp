@@ -54,9 +54,8 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  lyra2/Lyra2Z.c lyra2/lyra2Z.cu lyra2/cuda_lyra2Z.cu \
 			  Algo256/cuda_bmw256.cu Algo256/cuda_cubehash256.cu \
 			  Algo256/cuda_blake256.cu Algo256/cuda_groestl256.cu \
-			  Algo256/cuda_keccak256_sm3.cu Algo256/cuda_keccak256_sha3d.cu Algo256/cuda_keccak256.cu Algo256/cuda_skein256.cu \
-			  Algo256/blake256.cu Algo256/decred.cu Algo256/vanilla.cu Algo256/keccak256.cu Algo256/sha3d.cu \
-			  Algo256/cuda_sha3t.cu Algo256/sha3t.cu \
+			  Algo256/cuda_skein256.cu \
+			  Algo256/blake256.cu Algo256/decred.cu Algo256/vanilla.cu \
 			  Algo256/blake2s.cu sph/blake2s.c \
 			  Algo256/bmw.cu Algo256/bmw512.cu Algo256/cuda_bmw.cu \
 			  gost/cuda_gosthash.cu gost/gost.cu \
@@ -76,6 +75,10 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/sha256d/sha256d.cu algos/sha256d/cuda_sha256d.cu algos/sha256d/sha256t.cu algos/sha256d/cuda_sha256t.cu \
 			  algos/sha256d/cuda_sha256_selftest.cu cuda/sha256_device.cuh \
 			  algos/sha256dv/sha256dv.cu \
+			  algos/keccak/keccak256.cu algos/keccak/cuda_keccak256.cu \
+			  algos/keccak/cuda_keccak_selftest.cu cuda/keccak_device.cuh \
+			  algos/sha3d/sha3d.cu algos/sha3d/cuda_sha3d.cu \
+			  algos/sha3t/sha3t.cu algos/sha3t/cuda_sha3t.cu \
 			  sia/sia.cu sia/sia-rpc.cpp sph/blake2b.c \
 			  sph/bmw.c sph/blake.c sph/groestl.c sph/jh.c sph/keccak.c sph/skein.c \
 			  sph/cubehash.c sph/echo.c sph/luffa.c sph/sha2.c sph/shavite.c sph/simd.c \

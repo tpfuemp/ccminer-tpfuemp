@@ -249,6 +249,7 @@
     <ClCompile Include="compat\jansson\value.c" />
     <ClInclude Include="balloon\balloon.h" />
     <ClInclude Include="balloon\sha256.h" />
+    <ClInclude Include="cuda\keccak_device.cuh" />
     <ClInclude Include="cuda\sha256_device.cuh" />
     <ClInclude Include="compat\pthreads\pthread.h" />
     <ClCompile Include="compat\winansi.c" />
@@ -529,10 +530,12 @@
       <MaxRegCount>128</MaxRegCount>
     </CudaCompile>
     <CudaCompile Include="Algo256\vanilla.cu" />
-    <CudaCompile Include="Algo256\keccak256.cu" />
-    <CudaCompile Include="Algo256\sha3d.cu" />
-    <CudaCompile Include="Algo256\cuda_sha3t.cu" />
-    <CudaCompile Include="Algo256\sha3t.cu" />
+    <CudaCompile Include="algos\keccak\keccak256.cu" />
+    <CudaCompile Include="algos\keccak\cuda_keccak_selftest.cu" />
+    <CudaCompile Include="algos\sha3d\sha3d.cu" />
+    <CudaCompile Include="algos\sha3d\cuda_sha3d.cu" />
+    <CudaCompile Include="algos\sha3t\cuda_sha3t.cu" />
+    <CudaCompile Include="algos\sha3t\sha3t.cu" />
     <CudaCompile Include="equi\cuda_equi.cu">
       <CodeGeneration>compute_52,sm_52;compute_50,sm_50</CodeGeneration>
       <AdditionalOptions> -Xptxas -dlcm=ca -Xptxas -dscm=cs %(AdditionalOptions)</AdditionalOptions>
@@ -550,13 +553,7 @@
     <CudaCompile Include="Algo256\cuda_cubehash256.cu" />
     <CudaCompile Include="Algo256\cuda_fugue256.cu" />
     <CudaCompile Include="Algo256\cuda_groestl256.cu" />
-    <CudaCompile Include="Algo256\cuda_keccak256.cu" />
-    <CudaCompile Include="Algo256\cuda_keccak256_sm3.cu">
-      <MaxRegCount>92</MaxRegCount>
-    </CudaCompile>
-    <CudaCompile Include="Algo256\cuda_keccak256_sha3d.cu">
-      <MaxRegCount>128</MaxRegCount>
-    </CudaCompile>
+    <CudaCompile Include="algos\keccak\cuda_keccak256.cu" />
     <CudaCompile Include="Algo256\cuda_skein256.cu" />
     <CudaCompile Include="lbry\cuda_sha256_lbry.cu" />
     <CudaCompile Include="lbry\cuda_sha512_lbry.cu" />

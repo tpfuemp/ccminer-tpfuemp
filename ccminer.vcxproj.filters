@@ -97,6 +97,9 @@
     <Filter Include="Source Files\CUDA\sha256">
       <UniqueIdentifier>{86a896c0-1688-4854-98e3-285d166069a3}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\CUDA\keccak">
+      <UniqueIdentifier>{b41a1f81-6d21-4a70-b74a-6db518591a3e}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Source Files\sia">
       <UniqueIdentifier>{86a896c0-1688-4854-98e0-285d166069a3}</UniqueIdentifier>
     </Filter>
@@ -931,9 +934,6 @@
     <CudaCompile Include="Algo256\vanilla.cu">
       <Filter>Source Files\CUDA\Algo256</Filter>
     </CudaCompile>
-    <CudaCompile Include="Algo256\keccak256.cu">
-      <Filter>Source Files\CUDA\Algo256</Filter>
-    </CudaCompile>
     <CudaCompile Include="Algo256\cuda_blake256.cu">
       <Filter>Source Files\CUDA\Algo256</Filter>
     </CudaCompile>
@@ -949,11 +949,14 @@
     <CudaCompile Include="Algo256\cuda_groestl256.cu">
       <Filter>Source Files\CUDA\Algo256</Filter>
     </CudaCompile>
-    <CudaCompile Include="Algo256\cuda_keccak256.cu">
-      <Filter>Source Files\CUDA\Algo256</Filter>
+    <CudaCompile Include="algos\keccak\keccak256.cu">
+      <Filter>Source Files\CUDA\keccak</Filter>
     </CudaCompile>
-    <CudaCompile Include="Algo256\cuda_keccak256_sm3.cu">
-      <Filter>Source Files\CUDA\Algo256</Filter>
+    <CudaCompile Include="algos\keccak\cuda_keccak256.cu">
+      <Filter>Source Files\CUDA\keccak</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\keccak\cuda_keccak_selftest.cu">
+      <Filter>Source Files\CUDA\keccak</Filter>
     </CudaCompile>
     <CudaCompile Include="Algo256\cuda_skein256.cu">
       <Filter>Source Files\CUDA\Algo256</Filter>
@@ -1104,16 +1107,24 @@
     </CudaCompile>
     <CudaCompile Include="heavyhash/heavyhash.cu" />
     <CudaCompile Include="heavyhash/cuda_heavyhash.cu" />
-    <CudaCompile Include="Algo256\sha3d.cu" />
-    <CudaCompile Include="Algo256\cuda_sha3t.cu" />
-    <CudaCompile Include="Algo256\sha3t.cu" />
+    <CudaCompile Include="algos\sha3d\sha3d.cu">
+      <Filter>Source Files\CUDA\keccak</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\sha3d\cuda_sha3d.cu">
+      <Filter>Source Files\CUDA\keccak</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\sha3t\sha3t.cu">
+      <Filter>Source Files\CUDA\keccak</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\sha3t\cuda_sha3t.cu">
+      <Filter>Source Files\CUDA\keccak</Filter>
+    </CudaCompile>
     <CudaCompile Include="equi\cuda_equi.cu">
       <Filter>Source Files\equi</Filter>
     </CudaCompile>
     <CudaCompile Include="equi\cuda_equi_tromp.cu">
       <Filter>Source Files\equi</Filter>
     </CudaCompile>
-    <CudaCompile Include="Algo256\cuda_keccak256_sha3d.cu" />
     <CudaCompile Include="gost\cuda_gosthash.cu" />
     <CudaCompile Include="gost\gost.cu" />
     <CudaCompile Include="x16\cuda_x16_shavite512.cu" />
