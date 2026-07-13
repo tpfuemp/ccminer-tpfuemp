@@ -13,10 +13,7 @@
 #define TPB 256
 #define THF 4U
 
-#if __CUDA_ARCH__ >= 300
-#include "groestl_functions_quad.h"
-#include "groestl_transf_quad.h"
-#endif
+#include "cuda/groestl512_device.cuh"
 
 #define WANT_GROESTL80
 #ifdef WANT_GROESTL80
@@ -36,7 +33,6 @@ void quark_groestl512_gpu_hash_64_quad(const uint32_t threads, const uint32_t st
 	if (thread < threads)
 	{
 		uint32_t message[8];
-		uint32_t state[8];
 
 		uint32_t nounce = g_nonceVector ? g_nonceVector[thread] : (startNounce + thread);
 		off_t hashPosition = nounce - startNounce;
@@ -61,13 +57,8 @@ void quark_groestl512_gpu_hash_64_quad(const uint32_t threads, const uint32_t st
 		if (thr == 0) message[4] = 0x80U; // end of data tag
 		if (thr == 3) message[7] = 0x01000000U;
 
-		uint32_t msgBitsliced[8];
-		to_bitslice_quad(message, msgBitsliced);
-
-		groestl512_progressMessage_quad(state, msgBitsliced);
-
 		uint32_t hash[16];
-		from_bitslice_quad(state, hash);
+		groestl512_hash_quad(message, hash);
 
 		// uint4 = 4x4 uint32_t = 16 bytes
 		if (thr == 0) {
@@ -82,6 +73,10 @@ void quark_groestl512_gpu_hash_64_quad(const uint32_t threads, const uint32_t st
 #endif
 }
 
+/* Unit self-test for cuda/groestl512_device.cuh (docs/coding-guideline.md §7
+ * layer 1), defined in cuda/xfamily_selftest.cu. */
+extern bool groestl512_device_selftest(int thr_id);
+
 __host__
 void quark_groestl512_cpu_init(int thr_id, uint32_t threads)
 {
@@ -89,6 +84,8 @@ void quark_groestl512_cpu_init(int thr_id, uint32_t threads)
 	cuda_get_arch(thr_id);
 	if (device_sm[dev_id] < 300 || cuda_arch[dev_id] < 300)
 		quark_groestl512_sm20_init(thr_id, threads);
+
+	groestl512_device_selftest(thr_id);
 }
 
 __host__
@@ -161,14 +158,8 @@ void groestl512_gpu_hash_80_quad(const uint32_t threads, const uint32_t startNou
 			message[7] = 0x01000000U;
 		}
 
-		uint32_t msgBitsliced[8];
-		to_bitslice_quad(message, msgBitsliced);
-
-		uint32_t state[8];
-		groestl512_progressMessage_quad(state, msgBitsliced);
-
 		uint32_t hash[16];
-		from_bitslice_quad(state, hash);
+		groestl512_hash_quad(message, hash);
 
 		if (thr == 0) { /* 4 threads were done */
 			const off_t hashPosition = thread;

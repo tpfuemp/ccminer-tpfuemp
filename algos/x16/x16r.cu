@@ -291,11 +291,17 @@ extern "C" int scanhash_x16r(int thr_id, struct work* work, uint32_t max_nonce, 
 
 	if (opt_benchmark) {
 		((uint32_t*)ptarget)[7] = 0x003f;
-		//((uint8_t*)pdata)[8] = 0x90; // hashOrder[0] = '9'; for simd 80 + blake512 64
-		((uint8_t*)pdata)[8] = 0xAA; // hashOrder[0] = 'A'; for echo 80 + 64
-		//((uint8_t*)pdata)[8] = 0xB0; // hashOrder[0] = 'B'; for hamsi 80 + blake512 64
-		//((uint8_t*)pdata)[8] = 0xC0; // hashOrder[0] = 'C'; for fugue 80 + blake512 64
-		//((uint8_t*)pdata)[8] = 0xE0; // hashOrder[0] = 'E'; for whirlpool 80 + blake512 64
+		/* benchmark header runs all 16 stages exactly once (hashOrder
+		 * "0123456789ABCDEF"): deterministic full-chain rate, comparable
+		 * across runs; replaces the degenerate 0xAA echo/skein-only order */
+		((uint8_t*)pdata)[4]  = 0x89;
+		((uint8_t*)pdata)[5]  = 0xAB;
+		((uint8_t*)pdata)[6]  = 0xCD;
+		((uint8_t*)pdata)[7]  = 0xEF;
+		((uint8_t*)pdata)[8]  = 0x01;
+		((uint8_t*)pdata)[9]  = 0x23;
+		((uint8_t*)pdata)[10] = 0x45;
+		((uint8_t*)pdata)[11] = 0x67;
 	}
 	uint32_t _ALIGN(64) endiandata[20];
 
@@ -916,7 +922,6 @@ extern "C" int scanhash_x16rt(int thr_id, struct work* work, uint32_t max_nonce,
                 }
         }
 
-
         int warn = 0;
 
         do {
@@ -978,7 +983,6 @@ extern "C" int scanhash_x16rt(int thr_id, struct work* work, uint32_t max_nonce,
                                 break;
                 }
                 uint8_t algo;
-
 
                 for (int i = 1; i < 16; i++)
                 {

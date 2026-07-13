@@ -292,4 +292,94 @@ void sha512_transform_80_from_pre9(uint64_t *in, const uint64_t *pre, uint64_t *
 	state[7] += h;
 }
 
+
+/* ------------------------------------------------------------------------
+ * x17-lineage unrolled SHA-512 for a 64-byte input (x-family stage
+ * function), extracted bit-identically from x17/cuda_x17_sha512.cu
+ * (djm34 2014 / tpruvot 2017). Round constants come from c_sha512_K above
+ * (the same FIPS table the donor uploaded into its c_WB symbol).
+ * ------------------------------------------------------------------------ */
+
+#define SHA512_SWAB64(u64) cuda_swab64(u64)
+
+#define SHA512_BSG5_0(x) xor3(ROTR64(x,28), ROTR64(x,34), ROTR64(x,39))
+#define SHA512_SSG5_0(x) xor3(ROTR64(x, 1), ROTR64(x ,8), ((x) >> 7))
+#define SHA512_SSG5_1(x) xor3(ROTR64(x,19), ROTR64(x,61), ((x) >> 6))
+
+//#define SHA512_MAJ(X, Y, Z)   (((X) & (Y)) | (((X) | (Y)) & (Z)))
+#define SHA512_MAJ(x, y, z)   andor(x,y,z)
+
+__device__ __forceinline__
+uint64_t SHA512_TONE(uint64_t* K, uint64_t* r, uint64_t* W, const int a, const int i)
+{
+	//asm("// TONE \n");
+	const uint64_t e = r[(a+4) & 7];
+	uint64_t BSG51 = xor3(ROTR64(e, 14), ROTR64(e, 18), ROTR64(e, 41));
+	const uint64_t f = r[(a+5) & 7];
+	const uint64_t g = r[(a+6) & 7];
+	uint64_t CHl = ((f ^ g) & e) ^ g; // xandx(e, f, g);
+	return (r[(a+7) & 7] + BSG51 + CHl + K[i] + W[i]);
+}
+
+#define SHA512_STEP(K, r, W, ord, i) { \
+	const int a = (8 - ord) & 7; \
+	uint64_t T1 = SHA512_TONE(K, r, W, a, i); \
+	r[(a+3) & 7] += T1; \
+	uint64_t T2 = (SHA512_BSG5_0(r[a]) + SHA512_MAJ(r[a], r[(a+1) & 7], r[(a+2) & 7])); \
+	r[(a+7) & 7] = T1 + T2; \
+}
+
+/* SHA-512 of a 64-byte input, in place, d_hash word order in and out
+ * (big-endian message view handled internally). */
+__device__ __forceinline__
+void sha512_hash_64(uint64_t *pHash)
+{
+		uint64_t W[80];
+		#pragma unroll
+		for (int i = 0; i < 8; i ++) {
+			W[i] = SHA512_SWAB64(pHash[i]);
+		}
+		W[8] = 0x8000000000000000;
+
+		#pragma unroll 69
+		for (int i = 9; i<78; i++) {
+			W[i] = 0U;
+		}
+		W[15] = 0x0000000000000200;
+
+		#pragma unroll 64
+		for (int i = 16; i < 80; i ++) {
+			W[i] = SHA512_SSG5_1(W[i-2]) + W[i-7];
+			W[i] += SHA512_SSG5_0(W[i-15]) + W[i-16];
+		}
+
+		const uint64_t IV512[8] = {
+			0x6A09E667F3BCC908, 0xBB67AE8584CAA73B,
+			0x3C6EF372FE94F82B, 0xA54FF53A5F1D36F1,
+			0x510E527FADE682D1, 0x9B05688C2B3E6C1F,
+			0x1F83D9ABFB41BD6B, 0x5BE0CD19137E2179
+		};
+
+		uint64_t r[8];
+		#pragma unroll
+		for (int i = 0; i < 8; i ++) {
+			r[i] = IV512[i];
+		}
+
+#if CUDART_VERSION >= 7050
+		#pragma unroll 10
+#endif
+		for (int i = 0; i < 80; i += 8) {
+			#pragma unroll
+			for (int ord = 0; ord < 8; ord++) {
+				SHA512_STEP(c_sha512_K, r, W, ord, i+ord);
+			}
+		}
+
+	#pragma unroll
+	for (int u = 0; u < 8; u ++) {
+		pHash[u] = SHA512_SWAB64(r[u] + IV512[u]);
+	}
+}
+
 #endif // CUDA_SHA512_DEVICE_CUH

@@ -1,3 +1,5 @@
+#ifndef WHIRLPOOL_CONSTANT_TABLES_CUH
+#define WHIRLPOOL_CONSTANT_TABLES_CUH
 /* CUDA whirlpool huge constant tables */
 
 static const uint64_t old1_T0[256] = {
@@ -188,3 +190,5 @@ static const uint64_t plain_precomputed_round_key_64[72] = {
 	0x1385717FD59CB754, 0x7B0B7D978A4B4143, 0x7A15F6DBBB351963, 0x27820137F64E7A6A
 };
 
+
+#endif /* WHIRLPOOL_CONSTANT_TABLES_CUH */

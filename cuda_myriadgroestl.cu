@@ -11,11 +11,7 @@
 #define atomicExch(p,x) x
 #endif
 
-#if __CUDA_ARCH__ >= 300
-// 64 Registers Variant for Compute 3.0
-#include "quark/groestl_functions_quad.h"
-#include "quark/groestl_transf_quad.h"
-#endif
+#include "cuda/groestl512_device.cuh"
 
 // globaler Speicher für alle HeftyHashes aller Threads
 static uint32_t *d_outputHashes[MAX_GPUS];

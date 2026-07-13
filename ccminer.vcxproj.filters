@@ -564,11 +564,20 @@
     <ClInclude Include="lyra2\Sponge.h">
       <Filter>Header Files\lyra2</Filter>
     </ClInclude>
-    <ClInclude Include="quark\groestl_transf_quad.h">
+    <ClInclude Include="cuda\groestl512_device.cuh">
       <Filter>Source Files\CUDA\quark</Filter>
     </ClInclude>
-    <ClInclude Include="quark\groestl_functions_quad.h">
-      <Filter>Source Files\CUDA\quark</Filter>
+    <ClInclude Include="cuda\echo512_device.cuh">
+      <Filter>Source Files\CUDA\x11</Filter>
+    </ClInclude>
+    <ClInclude Include="cuda\shavite512_device.cuh">
+      <Filter>Source Files\CUDA\x11</Filter>
+    </ClInclude>
+    <ClInclude Include="cuda\whirlpool512_device.cuh">
+      <Filter>Source Files\CUDA\x15</Filter>
+    </ClInclude>
+    <ClInclude Include="cuda\tiger192_device.cuh">
+      <Filter>Source Files\CUDA\x21</Filter>
     </ClInclude>
     <ClInclude Include="res\resource.h">
       <Filter>Ressources</Filter>
@@ -656,7 +665,7 @@
     </ClInclude>
     <ClInclude Include="heavyhash/heavyhash-gate.h" />
     <ClInclude Include="heavyhash/keccak_tiny.h" />
-    <ClInclude Include="x16\cuda_x16.h">
+    <ClInclude Include="algos\x16\cuda_x16.h">
       <Filter>Header Files\CUDA</Filter>
     </ClInclude>
     <ClInclude Include="sph\sph_sha3d.h" />
@@ -1054,6 +1063,9 @@
     <CudaCompile Include="algos\sha512256d\cuda_sha512256d_selftest.cu">
       <Filter>Source Files\CUDA\sha256</Filter>
     </CudaCompile>
+    <CudaCompile Include="cuda\xfamily_selftest.cu">
+      <Filter>Source Files\CUDA\quark</Filter>
+    </CudaCompile>
     <CudaCompile Include="sia\sia.cu">
       <Filter>Source Files\sia</Filter>
     </CudaCompile>
@@ -1081,28 +1093,28 @@
     <CudaCompile Include="x15\cuda_x15_whirlpool_sm3.cu">
       <Filter>Source Files\CUDA\x15</Filter>
     </CudaCompile>
-    <CudaCompile Include="x16\cuda_x16_echo512.cu">
+    <CudaCompile Include="algos\x16\cuda_x16_echo512.cu">
       <Filter>Source Files\CUDA\x16</Filter>
     </CudaCompile>
-    <CudaCompile Include="x16\cuda_x16_echo512_64.cu">
+    <CudaCompile Include="algos\x16\cuda_x16_echo512_64.cu">
       <Filter>Source Files\CUDA\x16</Filter>
     </CudaCompile>
-    <CudaCompile Include="x16\cuda_x16_fugue512.cu">
+    <CudaCompile Include="algos\x16\cuda_x16_fugue512.cu">
       <Filter>Source Files\CUDA\x16</Filter>
     </CudaCompile>
-    <CudaCompile Include="x16\cuda_x16_shabal512.cu">
+    <CudaCompile Include="algos\x16\cuda_x16_shabal512.cu">
       <Filter>Source Files\CUDA\x16</Filter>
     </CudaCompile>
-    <CudaCompile Include="x16\cuda_x16_simd512_80.cu">
+    <CudaCompile Include="algos\x16\cuda_x16_simd512_80.cu">
       <Filter>Source Files\CUDA\x16</Filter>
     </CudaCompile>
-    <CudaCompile Include="x16\x16r.cu">
+    <CudaCompile Include="algos\x16\x16r.cu">
       <Filter>Source Files\CUDA\x16</Filter>
     </CudaCompile>
-    <CudaCompile Include="x16\x16rv2.cu">
+    <CudaCompile Include="algos\x16\x16rv2.cu">
       <Filter>Source Files\CUDA\x16</Filter>
     </CudaCompile>
-    <CudaCompile Include="x16\x16s.cu">
+    <CudaCompile Include="algos\x16\x16s.cu">
       <Filter>Source Files\CUDA\x16</Filter>
     </CudaCompile>
     <CudaCompile Include="x21\x21s.cu">
@@ -1136,7 +1148,7 @@
     </CudaCompile>
     <CudaCompile Include="gost\cuda_gosthash.cu" />
     <CudaCompile Include="gost\gost.cu" />
-    <CudaCompile Include="x16\cuda_x16_shavite512.cu" />
+    <CudaCompile Include="algos\x16\cuda_x16_shavite512.cu" />
     <CudaCompile Include="yescrypt\yescrypt.cu">
       <Filter>Source Files\CUDA\yescrypt</Filter>
     </CudaCompile>

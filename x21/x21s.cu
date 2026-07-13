@@ -37,7 +37,7 @@ extern "C" {
 
 #include "miner.h"
 #include "cuda_helper.h"
-#include "x16/cuda_x16.h"
+#include "algos/x16/cuda_x16.h"
 
 static uint32_t *d_hash[MAX_GPUS];
 static uint64_t* d_matrix[MAX_GPUS];
@@ -50,7 +50,6 @@ extern void streebog_cpu_hash_64_alexis(int thr_id, uint32_t threads, uint32_t *
 extern void lyra2v2_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix);
 extern void lyra2v2_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint64_t *g_hash, int order);
 
-extern void tiger192_cpu_hash_64(int thr_id, int threads, uint32_t *d_hash);
 extern void sha256_cpu_hash_64(int thr_id, int threads, uint32_t *d_hash);
 
 enum Algo {

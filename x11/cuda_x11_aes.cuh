@@ -1,11 +1,16 @@
 
 /* AES Helper for inline-usage from SPH */
+#ifndef CUDA_X11_AES_CUH
+#define CUDA_X11_AES_CUH
+
 #define AESx(x) (x ##UL) /* SPH_C32(x) */
 
-//#define DEVICE_DIRECT_CONSTANTS
+/* static-init tables: __constant__ in a header is per-TU, an init-time upload
+ * only fills one TU's copy (see cuda/*_device.cuh) */
+#define DEVICE_DIRECT_CONSTANTS
 
 #ifdef DEVICE_DIRECT_CONSTANTS
-__constant__ __align__(64) uint32_t d_AES0[256] = {
+static __constant__ __align__(64) uint32_t d_AES0[256] = {
 #else
 static const uint32_t h_AES0[256] = {
 #endif
@@ -76,7 +81,7 @@ static const uint32_t h_AES0[256] = {
 };
 
 #ifdef DEVICE_DIRECT_CONSTANTS
-__constant__ __align__(64) uint32_t d_AES1[256] = {
+static __constant__ __align__(64) uint32_t d_AES1[256] = {
 #else
 static const uint32_t h_AES1[256] = {
 #endif
@@ -147,7 +152,7 @@ static const uint32_t h_AES1[256] = {
 };
 
 #ifdef DEVICE_DIRECT_CONSTANTS
-__constant__ __align__(64) uint32_t d_AES2[256] = {
+static __constant__ __align__(64) uint32_t d_AES2[256] = {
 #else
 static const uint32_t h_AES2[256] = {
 #endif
@@ -218,7 +223,7 @@ static const uint32_t h_AES2[256] = {
 };
 
 #ifdef DEVICE_DIRECT_CONSTANTS
-__constant__ __align__(64) uint32_t d_AES3[256] = {
+static __constant__ __align__(64) uint32_t d_AES3[256] = {
 #else
 static const uint32_t h_AES3[256] = {
 #endif
@@ -398,3 +403,5 @@ static void aes_round(
 		sharedMemory[__byte_perm(x1, 0, 0x4442) + 512],
 		sharedMemory[__byte_perm(x2, 0, 0x4443) + 768]); // ^k3
 }
+
+#endif /* CUDA_X11_AES_CUH */

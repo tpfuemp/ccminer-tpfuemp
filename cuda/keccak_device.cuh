@@ -74,27 +74,12 @@ uint64_t keccak_xor5(const uint64_t a, const uint64_t b, const uint64_t c,
 	return r;
 }
 
-/* One full Keccak-f[1600] round: theta, rho-pi, chi, iota. */
+/* rho-pi, chi and iota — the round tail shared by the generic round and
+ * the keccak512 absorb specialization below. */
 __device__ __forceinline__
-void keccak_round(uint2 s[25], const uint2 rc)
+void keccak_rhopi_chi_iota(uint2 s[25], const uint2 rc)
 {
-	uint2 t[5], u[5], v, w;
-
-	/* theta: column parities and d[i] = c[i+4] ^ rotl(c[i+1],1) */
-	#pragma unroll 5
-	for (int j = 0; j < 5; j++)
-		t[j] = vectorize(keccak_xor5(devectorize(s[j]), devectorize(s[j+5]),
-		                             devectorize(s[j+10]), devectorize(s[j+15]),
-		                             devectorize(s[j+20])));
-	#pragma unroll 5
-	for (int j = 0; j < 5; j++)
-		u[j] = ROL2(t[j], 1);
-
-	s[ 4]=xor3x(s[ 4],t[3],u[0]); s[ 9]=xor3x(s[ 9],t[3],u[0]); s[14]=xor3x(s[14],t[3],u[0]); s[19]=xor3x(s[19],t[3],u[0]); s[24]=xor3x(s[24],t[3],u[0]);
-	s[ 0]=xor3x(s[ 0],t[4],u[1]); s[ 5]=xor3x(s[ 5],t[4],u[1]); s[10]=xor3x(s[10],t[4],u[1]); s[15]=xor3x(s[15],t[4],u[1]); s[20]=xor3x(s[20],t[4],u[1]);
-	s[ 1]=xor3x(s[ 1],t[0],u[2]); s[ 6]=xor3x(s[ 6],t[0],u[2]); s[11]=xor3x(s[11],t[0],u[2]); s[16]=xor3x(s[16],t[0],u[2]); s[21]=xor3x(s[21],t[0],u[2]);
-	s[ 2]=xor3x(s[ 2],t[1],u[3]); s[ 7]=xor3x(s[ 7],t[1],u[3]); s[12]=xor3x(s[12],t[1],u[3]); s[17]=xor3x(s[17],t[1],u[3]); s[22]=xor3x(s[22],t[1],u[3]);
-	s[ 3]=xor3x(s[ 3],t[2],u[4]); s[ 8]=xor3x(s[ 8],t[2],u[4]); s[13]=xor3x(s[13],t[2],u[4]); s[18]=xor3x(s[18],t[2],u[4]); s[23]=xor3x(s[23],t[2],u[4]);
+	uint2 v, w;
 
 	/* rho-pi: b[..] = rotl(a[..], ..) */
 	v = s[1];
@@ -118,6 +103,31 @@ void keccak_round(uint2 s[25], const uint2 rc)
 
 	/* iota */
 	s[0] ^= rc;
+}
+
+/* One full Keccak-f[1600] round: theta, rho-pi, chi, iota. */
+__device__ __forceinline__
+void keccak_round(uint2 s[25], const uint2 rc)
+{
+	uint2 t[5], u[5];
+
+	/* theta: column parities and d[i] = c[i+4] ^ rotl(c[i+1],1) */
+	#pragma unroll 5
+	for (int j = 0; j < 5; j++)
+		t[j] = vectorize(keccak_xor5(devectorize(s[j]), devectorize(s[j+5]),
+		                             devectorize(s[j+10]), devectorize(s[j+15]),
+		                             devectorize(s[j+20])));
+	#pragma unroll 5
+	for (int j = 0; j < 5; j++)
+		u[j] = ROL2(t[j], 1);
+
+	s[ 4]=xor3x(s[ 4],t[3],u[0]); s[ 9]=xor3x(s[ 9],t[3],u[0]); s[14]=xor3x(s[14],t[3],u[0]); s[19]=xor3x(s[19],t[3],u[0]); s[24]=xor3x(s[24],t[3],u[0]);
+	s[ 0]=xor3x(s[ 0],t[4],u[1]); s[ 5]=xor3x(s[ 5],t[4],u[1]); s[10]=xor3x(s[10],t[4],u[1]); s[15]=xor3x(s[15],t[4],u[1]); s[20]=xor3x(s[20],t[4],u[1]);
+	s[ 1]=xor3x(s[ 1],t[0],u[2]); s[ 6]=xor3x(s[ 6],t[0],u[2]); s[11]=xor3x(s[11],t[0],u[2]); s[16]=xor3x(s[16],t[0],u[2]); s[21]=xor3x(s[21],t[0],u[2]);
+	s[ 2]=xor3x(s[ 2],t[1],u[3]); s[ 7]=xor3x(s[ 7],t[1],u[3]); s[12]=xor3x(s[12],t[1],u[3]); s[17]=xor3x(s[17],t[1],u[3]); s[22]=xor3x(s[22],t[1],u[3]);
+	s[ 3]=xor3x(s[ 3],t[2],u[4]); s[ 8]=xor3x(s[ 8],t[2],u[4]); s[13]=xor3x(s[13],t[2],u[4]); s[18]=xor3x(s[18],t[2],u[4]); s[23]=xor3x(s[23],t[2],u[4]);
+
+	keccak_rhopi_chi_iota(s, rc);
 }
 
 /* Full 24-round Keccak-f[1600] permutation. Caller initializes s[0..24]
@@ -148,6 +158,146 @@ uint2 keccak_final_lane3(const uint2 s[25])
 	const uint2 b3 = ROL2(xor3x(s[18], t[2], ROL2(t[4], 1)), 21);
 	const uint2 b0 = xor3x(s[ 0], t[4], ROL2(t[1], 1));
 	return keccak_chi(b3, b4, b0);
+}
+
+/* ------------------------------------------------------------------------
+ * Keccak-512 (rate 72) building blocks for 64-byte chained inputs — the
+ * x-family stage function. Extracted bit-identically from the alexis
+ * quark_keccak512 kernels (quark/cuda_quark_keccak512.cu).
+ * ------------------------------------------------------------------------ */
+
+/* Round 0 with the absorb structure folded into theta: lanes 0..7 hold the
+ * 64-byte message, lane 8 the padding (0x01 start, 0x80 end-of-rate),
+ * lanes 9..24 are implicitly zero and must not be read before this call. */
+__device__ __forceinline__
+void keccak512_absorb_round_64(uint2 s[25])
+{
+	uint2 t[5], u[5];
+
+	t[0] = vectorize(devectorize(s[0]) ^ devectorize(s[5]));
+	t[1] = vectorize(devectorize(s[1]) ^ devectorize(s[6]));
+	t[2] = vectorize(devectorize(s[2]) ^ devectorize(s[7]));
+	t[3] = vectorize(devectorize(s[3]) ^ devectorize(s[8]));
+	t[4] = s[4];
+
+	#pragma unroll 5
+	for (int j = 0; j < 5; j++)
+		u[j] = ROL2(t[j], 1);
+
+	s[ 4] = xor3x(s[ 4], t[3], u[0]);
+	s[24] = s[19] = s[14] = s[ 9] = t[3] ^ u[0];
+	s[ 0] = xor3x(s[ 0], t[4], u[1]);
+	s[ 5] = xor3x(s[ 5], t[4], u[1]);
+	s[20] = s[15] = s[10] = t[4] ^ u[1];
+	s[ 1] = xor3x(s[ 1], t[0], u[2]);
+	s[ 6] = xor3x(s[ 6], t[0], u[2]);
+	s[21] = s[16] = s[11] = t[0] ^ u[2];
+	s[ 2] = xor3x(s[ 2], t[1], u[3]);
+	s[ 7] = xor3x(s[ 7], t[1], u[3]);
+	s[22] = s[17] = s[12] = t[1] ^ u[3];
+	s[ 3] = xor3x(s[ 3], t[2], u[4]);
+	s[ 8] = xor3x(s[ 8], t[2], u[4]);
+	s[23] = s[18] = s[13] = t[2] ^ u[4];
+
+	keccak_rhopi_chi_iota(s, c_keccak_rc[0]);
+}
+
+/* Truncated round 23: computes only the 8 digest lanes s[0..7] (theta,
+ * rho-pi and chi restricted to the lanes they need; iota on s[0]). The
+ * other 17 lanes are left stale — only for the last permutation of a
+ * keccak512 whose output is the 64-byte digest. */
+__device__ __forceinline__
+void keccak512_output_round(uint2 s[25])
+{
+	uint2 t[5], u[5], v, w;
+
+	#pragma unroll 5
+	for (int j = 0; j < 5; j++)
+		t[j] = xor3x(xor3x(s[j], s[j+5], s[j+10]), s[j+15], s[j+20]);
+	#pragma unroll 5
+	for (int j = 0; j < 5; j++)
+		u[j] = ROL2(t[j], 1);
+
+	s[ 9] = xor3x(s[ 9], t[3], u[0]);
+	s[24] = xor3x(s[24], t[3], u[0]);
+	s[ 0] = xor3x(s[ 0], t[4], u[1]);
+	s[10] = xor3x(s[10], t[4], u[1]);
+	s[ 6] = xor3x(s[ 6], t[0], u[2]);
+	s[16] = xor3x(s[16], t[0], u[2]);
+	s[12] = xor3x(s[12], t[1], u[3]);
+	s[22] = xor3x(s[22], t[1], u[3]);
+	s[ 3] = xor3x(s[ 3], t[2], u[4]);
+	s[18] = xor3x(s[18], t[2], u[4]);
+
+	/* rho-pi, only b0..b9 (b0 = a0, unrotated) */
+	s[ 1] = ROL2(s[ 6], 44);
+	s[ 2] = ROL2(s[12], 43);
+	s[ 5] = ROL2(s[ 3], 28);
+	s[ 7] = ROL2(s[10],  3);
+	s[ 3] = ROL2(s[18], 21);
+	s[ 4] = ROL2(s[24], 14);
+	s[ 6] = ROL2(s[ 9], 20);
+	s[ 8] = ROL2(s[16], 45);
+	s[ 9] = ROL2(s[22], 61);
+
+	/* chi rows 0 and 1 (partial) */
+	v = s[0]; w = s[1];
+	s[0] = keccak_chi(v, w, s[2]);
+	s[1] = keccak_chi(w, s[2], s[3]);
+	s[2] = keccak_chi(s[2], s[3], s[4]);
+	s[3] = keccak_chi(s[3], s[4], v);
+	s[4] = keccak_chi(s[4], v, w);
+	v = s[5]; w = s[6];
+	s[5] = keccak_chi(v, w, s[7]);
+	s[6] = keccak_chi(w, s[7], s[8]);
+	s[7] = keccak_chi(s[7], s[8], s[9]);
+
+	/* iota */
+	s[0] ^= c_keccak_rc[23];
+}
+
+/* Keccak-512 of a 64-byte input, in place, d_hash word order in and out
+ * (keccak is little-endian native — no byte swabbing). */
+__device__ __forceinline__
+void keccak512_hash_64(uint2 hash[8])
+{
+	uint2 s[25];
+
+	#pragma unroll 8
+	for (int i = 0; i < 8; i++)
+		s[i] = hash[i];
+	s[8] = make_uint2(1, 0x80000000);
+
+	keccak512_absorb_round_64(s);
+	#pragma unroll 4
+	for (int i = 1; i < 23; i++)
+		keccak_round(s, c_keccak_rc[i]);
+	keccak512_output_round(s);
+
+	#pragma unroll 8
+	for (int i = 0; i < 8; i++)
+		hash[i] = s[i];
+}
+
+/* Lane-3 projection for target-compare-only final stages: full 23 rounds,
+ * then keccak_final_lane3 (digest bytes 24..31). Never feed this into
+ * another hash stage or the submit path — the scanhash CPU re-verify
+ * stays authoritative. */
+__device__ __forceinline__
+uint2 keccak512_hash_64_lane3(const uint2 hash[8])
+{
+	uint2 s[25];
+
+	#pragma unroll 8
+	for (int i = 0; i < 8; i++)
+		s[i] = hash[i];
+	s[8] = make_uint2(1, 0x80000000);
+
+	keccak512_absorb_round_64(s);
+	#pragma unroll 4
+	for (int i = 1; i < 23; i++)
+		keccak_round(s, c_keccak_rc[i]);
+	return keccak_final_lane3(s);
 }
 
 #endif /* __CUDACC__ */

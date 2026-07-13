@@ -17,11 +17,7 @@ __constant__ uint32_t groestlcoin_gpu_msg[32];
 
 static uint32_t *d_resultNonce[MAX_GPUS];
 
-#if __CUDA_ARCH__ >= 300
-// 64 Registers Variant for Compute 3.0+
-#include "quark/groestl_functions_quad.h"
-#include "quark/groestl_transf_quad.h"
-#endif
+#include "cuda/groestl512_device.cuh"
 
 #define SWAB32(x) cuda_swab32(x)
 

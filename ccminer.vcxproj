@@ -249,9 +249,18 @@
     <ClCompile Include="compat\jansson\value.c" />
     <ClInclude Include="balloon\balloon.h" />
     <ClInclude Include="balloon\sha256.h" />
+    <ClInclude Include="cuda\blake512_device.cuh" />
+    <ClInclude Include="cuda\bmw512_device.cuh" />
+    <ClInclude Include="cuda\cubehash512_device.cuh" />
+    <ClInclude Include="cuda\fugue512_device.cuh" />
+    <ClInclude Include="cuda\hamsi512_device.cuh" />
+    <ClInclude Include="cuda\jh512_device.cuh" />
     <ClInclude Include="cuda\keccak_device.cuh" />
+    <ClInclude Include="cuda\luffa512_device.cuh" />
     <ClInclude Include="cuda\sha256_device.cuh" />
+    <ClInclude Include="cuda\shabal512_device.cuh" />
     <ClInclude Include="cuda\sha512_device.cuh" />
+    <ClInclude Include="cuda\skein512_device.cuh" />
     <ClInclude Include="compat\pthreads\pthread.h" />
     <ClCompile Include="compat\winansi.c" />
     <ClCompile Include="ccminer.cpp">
@@ -308,7 +317,7 @@
     <ClInclude Include="sph\yescrypt-platform.h" />
     <ClInclude Include="sph\yescrypt.h" />
     <ClInclude Include="x11\cuda_x11_simd512_sm2.cuh" />
-    <ClInclude Include="x16\cuda_x16.h" />
+    <ClInclude Include="algos\x16\cuda_x16.h" />
     <CudaCompile Include="Algo256\bmw.cu" />
     <CudaCompile Include="Algo256\bmw512.cu" />
     <CudaCompile Include="Algo256\cuda_bmw.cu">
@@ -465,8 +474,11 @@
     <ClInclude Include="lyra2\Lyra2Z.h" />
     <ClInclude Include="heavyhash/heavyhash-gate.h" />
     <ClInclude Include="heavyhash/keccak_tiny.h" />
-    <ClInclude Include="quark\groestl_transf_quad.h" />
-    <ClInclude Include="quark\groestl_functions_quad.h" />
+    <ClInclude Include="cuda\groestl512_device.cuh" />
+    <ClInclude Include="cuda\echo512_device.cuh" />
+    <ClInclude Include="cuda\shavite512_device.cuh" />
+    <ClInclude Include="cuda\whirlpool512_device.cuh" />
+    <ClInclude Include="cuda\tiger192_device.cuh" />
     <ClInclude Include="quark\cuda_quark.h" />
     <ClInclude Include="x11\cuda_x11.h" />
   </ItemGroup>
@@ -493,6 +505,7 @@
     <CudaCompile Include="algos\sha512256d\sha512256d.cu" />
     <CudaCompile Include="algos\sha512256d\cuda_sha512256d.cu" />
     <CudaCompile Include="algos\sha512256d\cuda_sha512256d_selftest.cu" />
+    <CudaCompile Include="cuda\xfamily_selftest.cu" />
     <CudaCompile Include="x11\cuda_x11_echo_sp.cu" />
     <CudaCompile Include="x11\cuda_x11_shavite512_sp.cu" />
     <CudaCompile Include="yescrypt\cuda_yescrypt.cu" />
@@ -670,15 +683,15 @@
     <CudaCompile Include="x15\x15.cu" />
     <CudaCompile Include="x15\whirlpool.cu" />
     <CudaCompile Include="x15\cuda_x15_whirlpool_sm3.cu" />
-    <CudaCompile Include="x16\x16r.cu" />
-    <CudaCompile Include="x16\x16rv2.cu" />
-    <CudaCompile Include="x16\x16s.cu" />
-    <CudaCompile Include="x16\cuda_x16_echo512.cu" />
-    <CudaCompile Include="x16\cuda_x16_fugue512.cu" />
-    <CudaCompile Include="x16\cuda_x16_shabal512.cu" />
-    <CudaCompile Include="x16\cuda_x16_shavite512.cu" />
-    <CudaCompile Include="x16\cuda_x16_simd512_80.cu" />
-    <CudaCompile Include="x16\cuda_x16_echo512_64.cu">
+    <CudaCompile Include="algos\x16\x16r.cu" />
+    <CudaCompile Include="algos\x16\x16rv2.cu" />
+    <CudaCompile Include="algos\x16\x16s.cu" />
+    <CudaCompile Include="algos\x16\cuda_x16_echo512.cu" />
+    <CudaCompile Include="algos\x16\cuda_x16_fugue512.cu" />
+    <CudaCompile Include="algos\x16\cuda_x16_shabal512.cu" />
+    <CudaCompile Include="algos\x16\cuda_x16_shavite512.cu" />
+    <CudaCompile Include="algos\x16\cuda_x16_simd512_80.cu" />
+    <CudaCompile Include="algos\x16\cuda_x16_echo512_64.cu">
       <CodeGeneration>compute_50,sm_50;compute_52,sm_52</CodeGeneration>
     </CudaCompile>
     <CudaCompile Include="x17\hmq17.cu" />

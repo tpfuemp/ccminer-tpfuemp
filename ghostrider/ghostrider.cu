@@ -41,7 +41,7 @@ extern "C" {
 
 #include "miner.h"
 #include "cuda_helper.h"
-#include "x16/cuda_x16.h"
+#include "algos/x16/cuda_x16.h"
 
 // CryptoNight-v1 variant wrappers (crypto/cryptonight-cpu.cpp) for CPU verify.
 extern "C" void cryptonight_gr_dark      (void* output, const void* input, size_t len);

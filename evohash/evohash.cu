@@ -22,7 +22,7 @@ extern "C" {
 
 #include "miner.h"
 #include "cuda_helper.h"
-#include "x16/cuda_x16.h"
+#include "algos/x16/cuda_x16.h"
 
 static uint64_t* d_matrix[MAX_GPUS];
 static uint32_t* d_hash[MAX_GPUS];

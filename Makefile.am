@@ -79,6 +79,10 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/sha256dv/sha256dv.cu \
 			  algos/keccak/keccak256.cu algos/keccak/cuda_keccak256.cu \
 			  algos/keccak/cuda_keccak_selftest.cu cuda/keccak_device.cuh \
+			  cuda/xfamily_selftest.cu cuda/blake512_device.cuh \
+			  cuda/jh512_device.cuh cuda/bmw512_device.cuh cuda/skein512_device.cuh \
+			  cuda/luffa512_device.cuh cuda/shabal512_device.cuh cuda/cubehash512_device.cuh \
+			  cuda/hamsi512_device.cuh cuda/fugue512_device.cuh cuda/groestl512_device.cuh cuda/echo512_device.cuh cuda/shavite512_device.cuh cuda/whirlpool512_device.cuh cuda/tiger192_device.cuh \
 			  algos/sha3d/sha3d.cu algos/sha3d/cuda_sha3d.cu \
 			  algos/sha3t/sha3t.cu algos/sha3t/cuda_sha3t.cu \
 			  sia/sia.cu sia/sia-rpc.cpp sph/blake2b.c \
@@ -98,9 +102,9 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  x13/hsr.cu x13/cuda_hsr_sm3.cu x13/sm3.c \
 			  x15/x14.cu x15/x15.cu x15/cuda_x14_shabal512.cu x15/cuda_x15_whirlpool.cu \
 			  x15/whirlpool.cu x15/cuda_x15_whirlpool_sm3.cu \
-			  x16/x16r.cu x16/x16rv2.cu x16/x16s.cu x16/cuda_x16_echo512.cu x16/cuda_x16_fugue512.cu \
-			  x16/cuda_x16_shabal512.cu x16/cuda_x16_shavite512.cu x16/cuda_x16_simd512_80.cu \
-			  x16/cuda_x16_echo512_64.cu \
+			  algos/x16/x16r.cu algos/x16/x16rv2.cu algos/x16/x16s.cu algos/x16/cuda_x16_echo512.cu algos/x16/cuda_x16_fugue512.cu \
+			  algos/x16/cuda_x16_shabal512.cu algos/x16/cuda_x16_shavite512.cu algos/x16/cuda_x16_simd512_80.cu \
+			  algos/x16/cuda_x16_echo512_64.cu \
 			  x17/x17.cu x17/skydoge.cu x17/hmq17.cu x17/cuda_x17_haval256.cu x17/cuda_x17_sha512.cu \
 			  x11/phi.cu x11/cuda_streebog_maxwell.cu \
 			  x11/c11.cu x11/s3.cu x11/sib.cu x11/veltor.cu x11/cuda_streebog.cu x11/0x10.cu \
