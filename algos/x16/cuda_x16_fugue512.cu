@@ -1,11 +1,17 @@
 
 #include <stdio.h>
-#include <cuda_helper.h>
+#include "cuda/fugue512_device.cuh"
 
 #define TPB 256
 
 /*
  * fugue512-80 x16r kernel implementation.
+ *
+ * The generic Fugue device pieces (mixtab access macros, TIX4/CMIX36/SMIX,
+ * SUB_ROR*, FUGUE512_3/FUGUE512_F, FUGUE_ROL/ROR helpers) live in
+ * cuda/fugue512_device.cuh (docs/coding-guideline.md §3). What remains here is
+ * x16-specific: the 80-byte block constant and the texture-backed mixtab load
+ * (a fragment kept distinct from the header's __constant__ path).
  *
  * ==========================(LICENSE BEGIN)============================
  *
@@ -42,11 +48,6 @@
 
 // store allocated textures device addresses
 static unsigned int* d_textures[MAX_GPUS][1];
-
-#define mixtab0(x) mixtabs[(x)]
-#define mixtab1(x) mixtabs[(x)+256]
-#define mixtab2(x) mixtabs[(x)+512]
-#define mixtab3(x) mixtabs[(x)+768]
 
 static texture<unsigned int, 1, cudaReadModeElementType> mixTab0Tex;
 
@@ -85,218 +86,10 @@ static const uint32_t mixtab0[] = {
 	0x4141dc1f, 0x9999e252, 0x2d2dc3b4, 0x0f0f2d3c, 0xb0b03df6, 0x5454b74b, 0xbbbb0cda, 0x16166258
 };
 
-#define TIX4(q, x00, x01, x04, x07, x08, x22, x24, x27, x30) { \
-	x22 ^= x00; \
-	x00 = (q); \
-	x08 ^= x00; \
-	x01 ^= x24; \
-	x04 ^= x27; \
-	x07 ^= x30; \
-}
-
-#define CMIX36(x00, x01, x02, x04, x05, x06, x18, x19, x20) { \
-	x00 ^= x04; \
-	x01 ^= x05; \
-	x02 ^= x06; \
-	x18 ^= x04; \
-	x19 ^= x05; \
-	x20 ^= x06; \
-}
-
-#define SMIX(x0, x1, x2, x3) { \
-	uint32_t tmp; \
-	uint32_t r0 = 0; \
-	uint32_t r1 = 0; \
-	uint32_t r2 = 0; \
-	uint32_t r3 = 0; \
-	uint32_t c0 = mixtab0(x0 >> 24); \
-	tmp = mixtab1((x0 >> 16) & 0xFF); \
-	c0 ^= tmp; \
-	r1 ^= tmp; \
-	tmp = mixtab2((x0 >>  8) & 0xFF); \
-	c0 ^= tmp; \
-	r2 ^= tmp; \
-	tmp = mixtab3(x0 & 0xFF); \
-	c0 ^= tmp; \
-	r3 ^= tmp; \
-	tmp = mixtab0(x1 >> 24); \
-	uint32_t c1 = tmp; \
-	r0 ^= tmp; \
-	tmp = mixtab1((x1 >> 16) & 0xFF); \
-	c1 ^= tmp; \
-	tmp = mixtab2((x1 >>  8) & 0xFF); \
-	c1 ^= tmp; \
-	r2 ^= tmp; \
-	tmp = mixtab3(x1 & 0xFF); \
-	c1 ^= tmp; \
-	r3 ^= tmp; \
-	tmp = mixtab0(x2 >> 24); \
-	uint32_t c2 = tmp; \
-	r0 ^= tmp; \
-	tmp = mixtab1((x2 >> 16) & 0xFF); \
-	c2 ^= tmp; \
-	r1 ^= tmp; \
-	tmp = mixtab2((x2 >>  8) & 0xFF); \
-	c2 ^= tmp; \
-	tmp = mixtab3(x2 & 0xFF); \
-	c2 ^= tmp; \
-	r3 ^= tmp; \
-	tmp = mixtab0(x3 >> 24); \
-	uint32_t c3 = tmp; \
-	r0 ^= tmp; \
-	tmp = mixtab1((x3 >> 16) & 0xFF); \
-	c3 ^= tmp; \
-	r1 ^= tmp; \
-	tmp = mixtab2((x3 >>  8) & 0xFF); \
-	c3 ^= tmp; \
-	r2 ^= tmp; \
-	tmp = mixtab3(x3 & 0xFF); \
-	c3 ^= tmp; \
-	x0 = ((c0 ^ r0) & 0xFF000000) | ((c1 ^ r1) & 0x00FF0000) \
-		| ((c2 ^ r2) & 0x0000FF00) | ((c3 ^ r3) & 0x000000FF); \
-	x1 = ((c1 ^ (r0 <<  8)) & 0xFF000000) | ((c2 ^ (r1 <<  8)) & 0x00FF0000) \
-		| ((c3 ^ (r2 <<  8)) & 0x0000FF00) | ((c0 ^ (r3 >> 24)) & 0x000000FF); \
-	x2 = ((c2 ^ (r0 << 16)) & 0xFF000000) | ((c3 ^ (r1 << 16)) & 0x00FF0000) \
-		| ((c0 ^ (r2 >> 16)) & 0x0000FF00) | ((c1 ^ (r3 >> 16)) & 0x000000FF); \
-	x3 = ((c3 ^ (r0 << 24)) & 0xFF000000) | ((c0 ^ (r1 >>  8)) & 0x00FF0000) \
-		| ((c1 ^ (r2 >>  8)) & 0x0000FF00) | ((c2 ^ (r3 >>  8)) & 0x000000FF); \
-}
-
-#define SUB_ROR3 { \
-	B33 = S33, B34 = S34, B35 = S35; \
-	S35 = S32; S34 = S31; S33 = S30; S32 = S29; S31 = S28; S30 = S27; S29 = S26; S28 = S25; S27 = S24; \
-	S26 = S23; S25 = S22; S24 = S21; S23 = S20; S22 = S19; S21 = S18; S20 = S17; S19 = S16; S18 = S15; \
-	S17 = S14; S16 = S13; S15 = S12; S14 = S11; S13 = S10; S12 = S09; S11 = S08; S10 = S07; S09 = S06; \
-	S08 = S05; S07 = S04; S06 = S03; S05 = S02; S04 = S01; S03 = S00; S02 = B35; S01 = B34; S00 = B33; \
-}
-
-#define SUB_ROR8 { \
-	B28 = S28, B29 = S29, B30 = S30, B31 = S31, B32 = S32, B33 = S33, B34 = S34, B35 = S35; \
-	S35 = S27; S34 = S26; S33 = S25; S32 = S24; S31 = S23; S30 = S22; S29 = S21; S28 = S20; S27 = S19; \
-	S26 = S18; S25 = S17; S24 = S16; S23 = S15; S22 = S14; S21 = S13; S20 = S12; S19 = S11; S18 = S10; \
-	S17 = S09; S16 = S08; S15 = S07; S14 = S06; S13 = S05; S12 = S04; S11 = S03; S10 = S02; S09 = S01; \
-	S08 = S00; S07 = B35; S06 = B34; S05 = B33; S04 = B32; S03 = B31; S02 = B30; S01 = B29; S00 = B28; \
-}
-
-#define SUB_ROR9 { \
-	B27 = S27, B28 = S28, B29 = S29, B30 = S30, B31 = S31, B32 = S32, B33 = S33, B34 = S34, B35 = S35; \
-	S35 = S26; S34 = S25; S33 = S24; S32 = S23; S31 = S22; S30 = S21; S29 = S20; S28 = S19; S27 = S18; \
-	S26 = S17; S25 = S16; S24 = S15; S23 = S14; S22 = S13; S21 = S12; S20 = S11; S19 = S10; S18 = S09; \
-	S17 = S08; S16 = S07; S15 = S06; S14 = S05; S13 = S04; S12 = S03; S11 = S02; S10 = S01; S09 = S00; \
-	S08 = B35; S07 = B34; S06 = B33; S05 = B32; S04 = B31; S03 = B30; S02 = B29; S01 = B28; S00 = B27; \
-}
-
-#define SUB_ROR9_3 { \
-	SUB_ROR3; SUB_ROR3; SUB_ROR3; \
-}
-
-#define SUB_ROR12 { /* to fix */ \
-	B24 = S00; B25 = S01; B26 = S02; B27 = S03; B28 = S04; B29 = S05; B30 = S06; B31 = S07; B32 = S08; B33 = S09; B34 = S10; B35 = S11; \
-	S00 = S12; S01 = S13; S02 = S14; S03 = S15; S04 = S16; S05 = S17; S06 = S18; S07 = S19; S08 = S20; S09 = S21; S10 = S22; S11 = S23; \
-	S12 = S24; S13 = S25; S14 = S26; S15 = S27; S16 = S28; S17 = S29; S18 = S30; S19 = S31; S20 = S32; S21 = S33; S22 = S34; S23 = S35; \
-	S24 = B24; S25 = B25; S26 = B26; S27 = B27; S28 = B28; S29 = B29; S30 = B30; S31 = B31; S32 = B32; S33 = B33; S34 = B34; S35 = B35; \
-}
-
-#define FUGUE512_3(x, y, z) { \
-	TIX4(x, S00, S01, S04, S07, S08, S22, S24, S27, S30); \
-	CMIX36(S33, S34, S35, S01, S02, S03, S15, S16, S17); \
-	SMIX(S33, S34, S35, S00); \
-	CMIX36(S30, S31, S32, S34, S35, S00, S12, S13, S14); \
-	SMIX(S30, S31, S32, S33); \
-	CMIX36(S27, S28, S29, S31, S32, S33, S09, S10, S11); \
-	SMIX(S27, S28, S29, S30); \
-	CMIX36(S24, S25, S26, S28, S29, S30, S06, S07, S08); \
-	SMIX(S24, S25, S26, S27); \
-	\
-	TIX4(y, S24, S25, S28, S31, S32, S10, S12, S15, S18); \
-	CMIX36(S21, S22, S23, S25, S26, S27, S03, S04, S05); \
-	SMIX(S21, S22, S23, S24); \
-	CMIX36(S18, S19, S20, S22, S23, S24, S00, S01, S02); \
-	SMIX(S18, S19, S20, S21); \
-	CMIX36(S15, S16, S17, S19, S20, S21, S33, S34, S35); \
-	SMIX(S15, S16, S17, S18); \
-	CMIX36(S12, S13, S14, S16, S17, S18, S30, S31, S32); \
-	SMIX(S12, S13, S14, S15); \
-	\
-	TIX4(z, S12, S13, S16, S19, S20, S34, S00, S03, S06); \
-	CMIX36(S09, S10, S11, S13, S14, S15, S27, S28, S29); \
-	SMIX(S09, S10, S11, S12); \
-	CMIX36(S06, S07, S08, S10, S11, S12, S24, S25, S26); \
-	SMIX(S06, S07, S08, S09); \
-	CMIX36(S03, S04, S05, S07, S08, S09, S21, S22, S23); \
-	SMIX(S03, S04, S05, S06); \
-	CMIX36(S00, S01, S02, S04, S05, S06, S18, S19, S20); \
-	SMIX(S00, S01, S02, S03); \
-}
-
-#define FUGUE512_F(w, x, y, z) { \
-	TIX4(w, S00, S01, S04, S07, S08, S22, S24, S27, S30); \
-	CMIX36(S33, S34, S35, S01, S02, S03, S15, S16, S17); \
-	SMIX(S33, S34, S35, S00); \
-	CMIX36(S30, S31, S32, S34, S35, S00, S12, S13, S14); \
-	SMIX(S30, S31, S32, S33); \
-	CMIX36(S27, S28, S29, S31, S32, S33, S09, S10, S11); \
-	SMIX(S27, S28, S29, S30); \
-	CMIX36(S24, S25, S26, S28, S29, S30, S06, S07, S08); \
-	SMIX(S24, S25, S26, S27); \
-	\
-	TIX4(x, S24, S25, S28, S31, S32, S10, S12, S15, S18); \
-	CMIX36(S21, S22, S23, S25, S26, S27, S03, S04, S05); \
-	SMIX(S21, S22, S23, S24); \
-	CMIX36(S18, S19, S20, S22, S23, S24, S00, S01, S02); \
-	SMIX(S18, S19, S20, S21); \
-	CMIX36(S15, S16, S17, S19, S20, S21, S33, S34, S35); \
-	SMIX(S15, S16, S17, S18); \
-	CMIX36(S12, S13, S14, S16, S17, S18, S30, S31, S32); \
-	SMIX(S12, S13, S14, S15); \
-	\
-	TIX4(y, S12, S13, S16, S19, S20, S34, S00, S03, S06); \
-	CMIX36(S09, S10, S11, S13, S14, S15, S27, S28, S29); \
-	SMIX(S09, S10, S11, S12); \
-	CMIX36(S06, S07, S08, S10, S11, S12, S24, S25, S26); \
-	SMIX(S06, S07, S08, S09); \
-	CMIX36(S03, S04, S05, S07, S08, S09, S21, S22, S23); \
-	SMIX(S03, S04, S05, S06); \
-	CMIX36(S00, S01, S02, S04, S05, S06, S18, S19, S20); \
-	SMIX(S00, S01, S02, S03); \
-	\
-	TIX4(z, S00, S01, S04, S07, S08, S22, S24, S27, S30); \
-	CMIX36(S33, S34, S35, S01, S02, S03, S15, S16, S17); \
-	SMIX(S33, S34, S35, S00); \
-	CMIX36(S30, S31, S32, S34, S35, S00, S12, S13, S14); \
-	SMIX(S30, S31, S32, S33); \
-	CMIX36(S27, S28, S29, S31, S32, S33, S09, S10, S11); \
-	SMIX(S27, S28, S29, S30); \
-	CMIX36(S24, S25, S26, S28, S29, S30, S06, S07, S08); \
-	SMIX(S24, S25, S26, S27); \
-}
-
-#undef ROL8
-#ifdef __CUDA_ARCH__
-__device__ __forceinline__
-uint32_t ROL8(const uint32_t a) {
-	return __byte_perm(a, 0, 0x2103);
-}
-__device__ __forceinline__
-uint32_t ROR8(const uint32_t a) {
-	return __byte_perm(a, 0, 0x0321);
-}
-__device__ __forceinline__
-uint32_t ROL16(const uint32_t a) {
-	return __byte_perm(a, 0, 0x1032);
-}
-#else
-#define ROL8(u)  ROTL32(u, 8)
-#define ROR8(u)  ROTR32(u, 8)
-#define ROL16(u) ROTL32(u,16)
-#endif
-
-//#define AS_UINT4(addr) *((uint4*)(addr))
-
 __constant__ static uint64_t c_PaddedMessage80[10];
 
 __host__
-void x16_fugue512_setBlock_80(void *pdata)
+void fugue512_setBlock_80(void *pdata)
 {
 	cudaMemcpyToSymbol(c_PaddedMessage80, pdata, sizeof(c_PaddedMessage80), 0, cudaMemcpyHostToDevice);
 }
@@ -305,7 +98,7 @@ void x16_fugue512_setBlock_80(void *pdata)
 
 __global__
 __launch_bounds__(TPB)
-void x16_fugue512_gpu_hash_80(const uint32_t threads, const uint32_t startNonce, uint64_t *g_hash)
+void fugue512_gpu_hash_80(const uint32_t threads, const uint32_t startNonce, uint64_t *g_hash)
 {
 	__shared__ uint32_t mixtabs[1024];
 
@@ -313,17 +106,17 @@ void x16_fugue512_gpu_hash_80(const uint32_t threads, const uint32_t startNonce,
 	const uint32_t thr = threadIdx.x & 0xFF;
 	const uint32_t tmp = tex1Dfetch(mixTab0Tex, thr);
 	mixtabs[thr] = tmp;
-	mixtabs[thr+256] = ROR8(tmp);
-	mixtabs[thr+512] = ROL16(tmp);
-	mixtabs[thr+768] = ROL8(tmp);
+	mixtabs[thr+256] = FUGUE_ROR8(tmp);
+	mixtabs[thr+512] = FUGUE_ROL16(tmp);
+	mixtabs[thr+768] = FUGUE_ROL8(tmp);
 #if TPB <= 256
 	if (blockDim.x < 256) {
 		const uint32_t thr = (threadIdx.x + 0x80) & 0xFF;
 		const uint32_t tmp = tex1Dfetch(mixTab0Tex, thr);
 		mixtabs[thr] = tmp;
-		mixtabs[thr + 256] = ROR8(tmp);
-		mixtabs[thr + 512] = ROL16(tmp);
-		mixtabs[thr + 768] = ROL8(tmp);
+		mixtabs[thr + 256] = FUGUE_ROR8(tmp);
+		mixtabs[thr + 512] = FUGUE_ROL16(tmp);
+		mixtabs[thr + 768] = FUGUE_ROL8(tmp);
 	}
 #endif
 
@@ -456,12 +249,29 @@ void x16_fugue512_cpu_free(int thr_id)
 }
 
 __host__
-void x16_fugue512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_hash)
+void fugue512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_hash)
 {
 	const uint32_t threadsperblock = TPB;
 
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
 	dim3 block(threadsperblock);
 
-	x16_fugue512_gpu_hash_80 <<<grid, block>>> (threads, startNonce, (uint64_t*)d_hash);
+	fugue512_gpu_hash_80 <<<grid, block>>> (threads, startNonce, (uint64_t*)d_hash);
+}
+
+/* Legacy forwarders — ghostrider and x21s still call these names; remove once
+ * they call the bare fugue512_* launchers directly. cpu_init/cpu_free stay
+ * x16_-named: the bare fugue512_cpu_init/free are the 64-byte x13 fugue (bridge
+ * in cuda_x16.h) and this 80-byte texture lifecycle is distinct (pending the
+ * "merge with x13_fugue512" TODO). */
+__host__
+void x16_fugue512_setBlock_80(void *pdata)
+{
+	fugue512_setBlock_80(pdata);
+}
+
+__host__
+void x16_fugue512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_hash)
+{
+	fugue512_cuda_hash_80(thr_id, threads, startNonce, d_hash);
 }

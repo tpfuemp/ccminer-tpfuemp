@@ -83,13 +83,13 @@ void cubehash512_hash_64(uint32_t *Hash)
 	
 		// erste Hälfte des Hashes (32 bytes)
 		//Update32(x, (const BitSequence*)Hash);
-		*(uint2x4*)&x[ 0] ^= __ldg4((uint2x4*)&Hash[0]);
+		*(uint2x4*)&x[ 0] ^= *(uint2x4*)&Hash[0];
 
 		cubehash512_rrounds(x);
 
 		// zweite Hälfte des Hashes (32 bytes)
 	//        Update32(x, (const BitSequence*)(Hash+8));
-		*(uint2x4*)&x[ 0] ^= __ldg4((uint2x4*)&Hash[8]);
+		*(uint2x4*)&x[ 0] ^= *(uint2x4*)&Hash[8];
 		
 		cubehash512_rrounds(x);
 

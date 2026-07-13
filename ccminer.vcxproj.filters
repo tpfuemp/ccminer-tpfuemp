@@ -1111,6 +1111,9 @@
     <CudaCompile Include="algos\x16\x16r.cu">
       <Filter>Source Files\CUDA\x16</Filter>
     </CudaCompile>
+    <CudaCompile Include="algos\x16\cuda_x16_fused.cu">
+      <Filter>Source Files\CUDA\x16</Filter>
+    </CudaCompile>
     <CudaCompile Include="algos\x16\x16rv2.cu">
       <Filter>Source Files\CUDA\x16</Filter>
     </CudaCompile>

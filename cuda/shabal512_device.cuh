@@ -332,6 +332,86 @@ void shabal512_hash_64(uint32_t *Hash)
 		Hash[15] = BF;
 }
 
+/* Shabal-512 of an 80-byte header, digest OUT in Hash[0..15]. msg points at
+ * the 20-word padded block constant: words 0..15 are the first message block,
+ * words 16..18 are the head of the second block (word 3 of that block is the
+ * nonce, word 4 is the 0x80 pad). The x16-family 80-byte first-stage path. */
+__device__ __forceinline__
+void shabal512_hash_80(const uint32_t *msg, const uint32_t nonce, uint32_t *Hash)
+{
+		uint32_t A00 = c_shabal_A512[0], A01 = c_shabal_A512[1], A02 = c_shabal_A512[2], A03 = c_shabal_A512[3],
+			A04 = c_shabal_A512[4], A05 = c_shabal_A512[5], A06 = c_shabal_A512[6], A07 = c_shabal_A512[7],
+			A08 = c_shabal_A512[8], A09 = c_shabal_A512[9], A0A = c_shabal_A512[10], A0B = c_shabal_A512[11];
+		uint32_t B0 = c_shabal_B512[0], B1 = c_shabal_B512[1], B2 = c_shabal_B512[2], B3 = c_shabal_B512[3],
+			B4 = c_shabal_B512[4], B5 = c_shabal_B512[5], B6 = c_shabal_B512[6], B7 = c_shabal_B512[7],
+			B8 = c_shabal_B512[8], B9 = c_shabal_B512[9], BA = c_shabal_B512[10], BB = c_shabal_B512[11],
+			BC = c_shabal_B512[12], BD = c_shabal_B512[13], BE = c_shabal_B512[14], BF = c_shabal_B512[15];
+		uint32_t C0 = c_shabal_C512[0], C1 = c_shabal_C512[1], C2 = c_shabal_C512[2], C3 = c_shabal_C512[3],
+			C4 = c_shabal_C512[4], C5 = c_shabal_C512[5], C6 = c_shabal_C512[6], C7 = c_shabal_C512[7],
+			C8 = c_shabal_C512[8], C9 = c_shabal_C512[9], CA = c_shabal_C512[10], CB = c_shabal_C512[11],
+			CC = c_shabal_C512[12], CD = c_shabal_C512[13], CE = c_shabal_C512[14], CF = c_shabal_C512[15];
+		uint32_t M0, M1, M2, M3, M4, M5, M6, M7, M8, M9, MA, MB, MC, MD, ME, MF;
+		uint32_t Wlow = 1, Whigh = 0;
+
+		M0 = msg[0];
+		M1 = msg[1];
+		M2 = msg[2];
+		M3 = msg[3];
+		M4 = msg[4];
+		M5 = msg[5];
+		M6 = msg[6];
+		M7 = msg[7];
+		M8 = msg[8];
+		M9 = msg[9];
+		MA = msg[10];
+		MB = msg[11];
+		MC = msg[12];
+		MD = msg[13];
+		ME = msg[14];
+		MF = msg[15];
+
+		SHABAL_INPUT_BLOCK_ADD;
+		SHABAL_XOR_W;
+		SHABAL_APPLY_P;
+		SHABAL_INPUT_BLOCK_SUB;
+		SHABAL_SWAP_BC;
+		SHABAL_INCR_W;
+
+		M0 = msg[16];
+		M1 = msg[17];
+		M2 = msg[18];
+		M3 = cuda_swab32(nonce);
+		M4 = 0x80;
+		M5 = M6 = M7 = M8 = M9 = MA = MB = MC = MD = ME = MF = 0;
+
+		SHABAL_INPUT_BLOCK_ADD;
+		SHABAL_XOR_W;
+		SHABAL_APPLY_P;
+
+		for (unsigned i = 0; i < 3; i++) {
+			SHABAL_SWAP_BC;
+			SHABAL_XOR_W;
+			SHABAL_APPLY_P;
+		}
+
+		Hash[0] = B0;
+		Hash[1] = B1;
+		Hash[2] = B2;
+		Hash[3] = B3;
+		Hash[4] = B4;
+		Hash[5] = B5;
+		Hash[6] = B6;
+		Hash[7] = B7;
+		Hash[8] = B8;
+		Hash[9] = B9;
+		Hash[10] = BA;
+		Hash[11] = BB;
+		Hash[12] = BC;
+		Hash[13] = BD;
+		Hash[14] = BE;
+		Hash[15] = BF;
+}
+
 #undef SHABAL_sM
 #undef SHABAL_C32
 #undef SHABAL_T32

@@ -1670,7 +1670,7 @@ __constant__ static const s32 SIMD_Q_80[] = {
 __constant__ static uint32_t c_PaddedMessage80[20];
 
 __host__
-void x16_simd512_setBlock_80(void *pdata)
+void simd512_setBlock_80(void *pdata)
 {
 	cudaMemcpyToSymbol(c_PaddedMessage80, pdata, sizeof(c_PaddedMessage80), 0, cudaMemcpyHostToDevice);
 }
@@ -1678,7 +1678,7 @@ void x16_simd512_setBlock_80(void *pdata)
 #define TPB_SIMD 128
 __global__
 __launch_bounds__(TPB_SIMD,1)
-static void x16_simd512_gpu_80(const uint32_t threads, const uint32_t startNonce, uint64_t *g_outputhash)
+static void simd512_gpu_80(const uint32_t threads, const uint32_t startNonce, uint64_t *g_outputhash)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
@@ -1827,10 +1827,24 @@ static void x16_simd512_gpu_80(const uint32_t threads, const uint32_t startNonce
 /***************************************************/
 
 __host__
-void x16_simd512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_hash)
+void simd512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_hash)
 {
 	const uint32_t tpb = 128;
 	const dim3 grid((threads + tpb - 1) / tpb);
 	const dim3 block(tpb);
-	x16_simd512_gpu_80 <<<grid, block>>> (threads, startNonce, (uint64_t*) d_hash);
+	simd512_gpu_80 <<<grid, block>>> (threads, startNonce, (uint64_t*) d_hash);
+}
+
+/* Legacy forwarders — ghostrider and x21s still call these names; remove once
+ * they call the bare simd512_* launchers directly. */
+__host__
+void x16_simd512_setBlock_80(void *pdata)
+{
+	simd512_setBlock_80(pdata);
+}
+
+__host__
+void x16_simd512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_hash)
+{
+	simd512_cuda_hash_80(thr_id, threads, startNonce, d_hash);
 }

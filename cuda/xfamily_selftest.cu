@@ -1804,6 +1804,126 @@ bool whirlpool512_device_selftest(int thr_id)
 	return passed;
 }
 
+/* ------------------------------------------------------- x16 fused chain */
+
+/* Validates the fused multi-stage kernel (algos/x16/cuda_x16_fused.cu)
+ * against the sph chain: per-stage single launches first (pinpoints a broken
+ * glue path), then one chained launch (validates register-resident state
+ * carry). Uses the caller-visible launcher, so the constant order array is
+ * clobbered — callers must re-upload their order afterwards. */
+extern void x16_fused_setOrder(const uint8_t *ids, int count);
+extern void x16_fused_cpu_hash_64(int thr_id, uint32_t threads, int start, int len, int has_tiger, uint32_t *d_hash);
+
+static void x16_fused_sph_stage(int id, uint8_t *h /* 64 bytes in/out */)
+{
+	switch (id) {
+	case 0:  { sph_blake512_context c;   sph_blake512_init(&c);   sph_blake512(&c, h, 64);   sph_blake512_close(&c, h);   break; }
+	case 1:  { sph_bmw512_context c;     sph_bmw512_init(&c);     sph_bmw512(&c, h, 64);     sph_bmw512_close(&c, h);     break; }
+	case 3:  { sph_jh512_context c;      sph_jh512_init(&c);      sph_jh512(&c, h, 64);      sph_jh512_close(&c, h);      break; }
+	case 4:  { sph_keccak512_context c;  sph_keccak512_init(&c);  sph_keccak512(&c, h, 64);  sph_keccak512_close(&c, h);  break; }
+	case 5:  { sph_skein512_context c;   sph_skein512_init(&c);   sph_skein512(&c, h, 64);   sph_skein512_close(&c, h);   break; }
+	case 6:  { sph_luffa512_context c;   sph_luffa512_init(&c);   sph_luffa512(&c, h, 64);   sph_luffa512_close(&c, h);   break; }
+	case 7:  { sph_cubehash512_context c; sph_cubehash512_init(&c); sph_cubehash512(&c, h, 64); sph_cubehash512_close(&c, h); break; }
+	case 11: { sph_hamsi512_context c;   sph_hamsi512_init(&c);   sph_hamsi512(&c, h, 64);   sph_hamsi512_close(&c, h);   break; }
+	case 13: { sph_shabal512_context c;  sph_shabal512_init(&c);  sph_shabal512(&c, h, 64);  sph_shabal512_close(&c, h);  break; }
+	case 15: { sph_sha512_context c;     sph_sha512_init(&c);     sph_sha512(&c, h, 64);     sph_sha512_close(&c, h);     break; }
+	case 16: { /* tiger192, zero-padded */
+		sph_tiger_context c; uint8_t d[24];
+		sph_tiger_init(&c); sph_tiger(&c, h, 64); sph_tiger_close(&c, d);
+		memcpy(h, d, 24); memset(h + 24, 0, 40); break; }
+	}
+}
+
+static bool x16_fused_selftest_run(const uint8_t *ids, int nids, int has_tiger,
+	const uint8_t msg[64], uint8_t dig[64])
+{
+	uint32_t *d_io = NULL;
+	if (cudaMalloc(&d_io, 64) != cudaSuccess)
+		return false;
+
+	x16_fused_setOrder(ids, nids);
+	bool ok = (cudaMemcpy(d_io, msg, 64, cudaMemcpyHostToDevice) == cudaSuccess);
+	x16_fused_cpu_hash_64(0, 1, 0, nids, has_tiger, d_io);
+	cudaDeviceSynchronize();
+	cudaError_t e = cudaGetLastError();
+	if (e != cudaSuccess)
+		applog(LOG_WARNING, "x16-fused run(nids=%d id0=%u tiger=%d) cuda error %d: %s",
+			nids, ids[0], has_tiger, (int)e, cudaGetErrorString(e));
+	ok = ok && (cudaMemcpy(dig, d_io, 64, cudaMemcpyDeviceToHost) == cudaSuccess);
+	cudaFree(d_io);
+	return ok;
+}
+
+__host__
+bool x16_fused_device_selftest(int thr_id)
+{
+	static bool tested = false, passed = false;
+	if (tested) return passed;
+	tested = true;
+
+	static const uint8_t all_ids[11] = { 0, 1, 3, 4, 5, 6, 7, 11, 13, 15, 16 };
+
+	uint8_t msg[64];
+	uint32_t seed = 0x46555345; /* 'FUSE' */
+	for (int i = 0; i < 64; i++) {
+		seed = seed * 1664525u + 1013904223u;
+		msg[i] = (uint8_t)(seed >> 24);
+	}
+
+	// --- each fusible stage alone vs its sph reference ---
+	bool single_ok = true;
+	for (int k = 0; k < 11; k++) {
+		const uint8_t id = all_ids[k];
+		uint8_t ref[64], gpu[64];
+		memcpy(ref, msg, 64);
+		x16_fused_sph_stage(id, ref);
+		if (!x16_fused_selftest_run(&id, 1, (id == 16), msg, gpu)
+		    || memcmp(gpu, ref, 64) != 0) {
+			gpulog(LOG_WARNING, thr_id, "x16-fused stage id %u FAILED single-stage check", id);
+			single_ok = false;
+		}
+	}
+
+	// --- the full fusible set as one chained launch ---
+	uint8_t ref[64], gpu[64];
+	memcpy(ref, msg, 64);
+	for (int k = 0; k < 11; k++)
+		x16_fused_sph_stage(all_ids[k], ref);
+	const bool chain_ok = x16_fused_selftest_run(all_ids, 11, 1, msg, gpu)
+	                   && (memcmp(gpu, ref, 64) == 0);
+
+	// --- specific fused-run adjacencies seen in live x16r orders that the
+	//     degenerate benchmark order (0123456789ABCDEF) never exercises:
+	//     it leaves bmw/hamsi/shabal/sha512 standalone, so a fused sha512 or a
+	//     bmw.bmw pair is otherwise untested. Regression coverage. ---
+	static const uint8_t adj_runs[3][4] = {
+		{ 15, 5, 4, 0 },   /* sha512,skein,keccak         (len 3) */
+		{ 3, 4, 1, 1 },    /* jh,keccak,bmw,bmw           (len 4) */
+		{ 1, 1, 15, 0 },   /* bmw,bmw,sha512              (len 3) */
+	};
+	static const int adj_len[3] = { 3, 4, 3 };
+	bool adj_ok = true;
+	for (int r = 0; r < 3; r++) {
+		uint8_t rref[64], rgpu[64];
+		memcpy(rref, msg, 64);
+		for (int k = 0; k < adj_len[r]; k++)
+			x16_fused_sph_stage(adj_runs[r][k], rref);
+		if (!x16_fused_selftest_run(adj_runs[r], adj_len[r], 0, msg, rgpu)
+		    || memcmp(rgpu, rref, 64) != 0) {
+			gpulog(LOG_WARNING, thr_id, "x16-fused adjacency run %d FAILED", r);
+			adj_ok = false;
+		}
+	}
+
+	passed = single_ok && chain_ok && adj_ok;
+	if (!passed)
+		gpulog(LOG_WARNING, thr_id, "x16-fused device self-test FAILED (single %d chain %d)",
+			(int) single_ok, (int) chain_ok);
+	else
+		gpulog(LOG_DEBUG, thr_id, "x16-fused device self-test passed");
+	return passed;
+}
+
 /* ---------------------------------------------------------------- tiger192 */
 
 #define TIGER192_ST_VEC 4

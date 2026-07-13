@@ -1,5 +1,5 @@
 /**
- * Echo512-64 kernel for maxwell — thin wrapper.
+ * ECHO-512 64-byte launcher (optimised alexis formulation) — thin wrapper.
  *
  * The alexis ECHO-512 device implementation (c_echo_AES tables,
  * echo_round_alexis, echo512_hash_64_alexis) lives in
@@ -11,7 +11,7 @@
 #include "cuda/echo512_device.cuh"
 
 __global__ __launch_bounds__(128, 5) /* will force 80 registers */
-static void x16_echo512_gpu_hash_64(uint32_t threads, uint32_t* g_hash, uint32_t* const d_filter, const uint32_t filter_val)
+static void x16_echo512_gpu_hash_64(uint32_t threads, uint32_t* g_hash)
 {
 	__shared__ uint32_t sharedMemory[4][256];
 
@@ -21,9 +21,6 @@ static void x16_echo512_gpu_hash_64(uint32_t threads, uint32_t* g_hash, uint32_t
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
 	{
-		// phi2 filter (2 hash chain branches)
-		if (d_filter && d_filter[thread] != filter_val) return;
-
 		uint32_t *Hash = &g_hash[thread<<4];
 		uint32_t hash[16];
 
@@ -44,7 +41,7 @@ static void x16_echo512_gpu_hash_64(uint32_t threads, uint32_t* g_hash, uint32_t
 extern bool echo512_alexis_device_selftest(int thr_id);
 
 __host__
-void x16_echo512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash)
+void echo512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash)
 {
 	echo512_alexis_device_selftest(thr_id);
 
@@ -53,16 +50,14 @@ void x16_echo512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash)
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
 	dim3 block(threadsperblock);
 
-	x16_echo512_gpu_hash_64 <<<grid, block>>> (threads, d_hash, NULL, 0);
+	x16_echo512_gpu_hash_64 <<<grid, block>>> (threads, d_hash);
 }
 
+/* Legacy forwarder — consumers not yet migrated (x17, skydoge, x21s,
+ * ghostrider) still call this name; remove once they call echo512_cpu_hash_64
+ * directly. */
 __host__
-void phi_echo512_cpu_hash_64_filtered(int thr_id, const uint32_t threads, uint32_t* g_hash, uint32_t* d_filter)
+void x16_echo512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash)
 {
-	const uint32_t threadsperblock = 128;
-
-	dim3 grid((threads + threadsperblock - 1) / threadsperblock);
-	dim3 block(threadsperblock);
-
-	x16_echo512_gpu_hash_64 <<<grid, block>>> (threads, g_hash, d_filter, 0);
+	echo512_cpu_hash_64(thr_id, threads, d_hash);
 }

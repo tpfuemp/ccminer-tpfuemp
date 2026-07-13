@@ -684,6 +684,7 @@
     <CudaCompile Include="x15\whirlpool.cu" />
     <CudaCompile Include="x15\cuda_x15_whirlpool_sm3.cu" />
     <CudaCompile Include="algos\x16\x16r.cu" />
+    <CudaCompile Include="algos\x16\cuda_x16_fused.cu" />
     <CudaCompile Include="algos\x16\x16rv2.cu" />
     <CudaCompile Include="algos\x16\x16s.cu" />
     <CudaCompile Include="algos\x16\cuda_x16_echo512.cu" />
@@ -692,7 +693,7 @@
     <CudaCompile Include="algos\x16\cuda_x16_shavite512.cu" />
     <CudaCompile Include="algos\x16\cuda_x16_simd512_80.cu" />
     <CudaCompile Include="algos\x16\cuda_x16_echo512_64.cu">
-      <CodeGeneration>compute_50,sm_50;compute_52,sm_52</CodeGeneration>
+      <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
     </CudaCompile>
     <CudaCompile Include="x17\hmq17.cu" />
     <CudaCompile Include="x17\x17.cu" />
