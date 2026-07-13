@@ -332,6 +332,7 @@ extern int scanhash_sha256d(int thr_id, struct work *work, uint32_t max_nonce, u
 extern int scanhash_sha256t(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_sha256csm(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done);
 extern int scanhash_sha3d(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_sha512256d(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_sia(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_sib(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_skeincoin(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
@@ -418,6 +419,7 @@ extern void free_sha256d(int thr_id);
 extern void free_sha256csm(int thr_id);
 extern void free_sha256t(int thr_id);
 extern void free_sha3d(int thr_id);
+extern void free_sha512256d(int thr_id);
 extern void free_sia(int thr_id);
 extern void free_sib(int thr_id);
 extern void free_skeincoin(int thr_id);

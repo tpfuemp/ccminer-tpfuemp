@@ -1045,6 +1045,15 @@
     <CudaCompile Include="algos\sha256dv\sha256dv.cu">
       <Filter>Source Files\CUDA\sha256</Filter>
     </CudaCompile>
+    <CudaCompile Include="algos\sha512256d\sha512256d.cu">
+      <Filter>Source Files\CUDA\sha256</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\sha512256d\cuda_sha512256d.cu">
+      <Filter>Source Files\CUDA\sha256</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\sha512256d\cuda_sha512256d_selftest.cu">
+      <Filter>Source Files\CUDA\sha256</Filter>
+    </CudaCompile>
     <CudaCompile Include="sia\sia.cu">
       <Filter>Source Files\sia</Filter>
     </CudaCompile>

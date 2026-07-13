@@ -307,6 +307,7 @@ Options:\n\
 			sha256dv	SHA256d Veil\n\
 			sha3d		Bsha3, Yilacoin and Kylacoin\n\
 			sha3t		Fjarcode and Bitcoin III\n\
+			sha512256d	Double SHA512/256 (Radiant)\n\
 			sia		SIA (Blake2B)\n\
 			sib		Sibcoin (X11+Streebog)\n\
 			scrypt		Scrypt\n\
@@ -2278,7 +2279,7 @@ static void *miner_thread(void *userdata)
 		// prevent gpu scans before a job is received
 		if (opt_algo == ALGO_SIA) nodata_check_oft = 7; // no stratum version
 		else if (opt_algo == ALGO_DECRED) nodata_check_oft = 4; // testnet ver is 0
-		else if (opt_algo == ALGO_SHA256D || opt_algo == ALGO_SHA256T || opt_algo == ALGO_SHA256CSM)
+		else if (opt_algo == ALGO_SHA256D || opt_algo == ALGO_SHA256T || opt_algo == ALGO_SHA256CSM || opt_algo == ALGO_SHA512256D)
 			nodata_check_oft = 17; // ntime; zpool sha256 jobs carry block version 0
 		else nodata_check_oft = 0;
 		if (have_stratum && work.data[nodata_check_oft] == 0 && !opt_benchmark) {
@@ -2433,6 +2434,7 @@ static void *miner_thread(void *userdata)
 			case ALGO_SHA256D:
 			case ALGO_SHA256T:
 			case ALGO_SHA256DV:
+			case ALGO_SHA512256D:
 			//case ALGO_WHIRLPOOLX:
 				minmax = 0x40000000U;
 				break;
@@ -2719,6 +2721,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_SHA3D:
 			rc = scanhash_sha3d(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_SHA512256D:
+			rc = scanhash_sha512256d(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_SIA:
 			rc = scanhash_sia(thr_id, &work, max_nonce, &hashes_done);

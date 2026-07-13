@@ -101,6 +101,7 @@ enum sha_algos {
 	ALGO_HOOHASH,
 	ALGO_GHOSTRIDER,
 	ALGO_SHA3T,
+	ALGO_SHA512256D,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -204,6 +205,7 @@ static const char *algo_names[] = {
 	"hoohash",
 	"ghostrider",
 	"sha3t",
+	"sha512256d",
 	"auto", /* reserved for multi algo */
 	""
 };

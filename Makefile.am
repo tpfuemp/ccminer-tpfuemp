@@ -74,6 +74,8 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  skunk/skunk.cu skunk/cuda_skunk.cu skunk/cuda_skunk_streebog.cu \
 			  algos/sha256d/sha256d.cu algos/sha256d/cuda_sha256d.cu algos/sha256d/sha256t.cu algos/sha256d/cuda_sha256t.cu \
 			  algos/sha256d/cuda_sha256_selftest.cu cuda/sha256_device.cuh \
+			  algos/sha512256d/sha512256d.cu algos/sha512256d/cuda_sha512256d.cu \
+			  algos/sha512256d/cuda_sha512256d_selftest.cu cuda/sha512_device.cuh \
 			  algos/sha256dv/sha256dv.cu \
 			  algos/keccak/keccak256.cu algos/keccak/cuda_keccak256.cu \
 			  algos/keccak/cuda_keccak_selftest.cu cuda/keccak_device.cuh \
