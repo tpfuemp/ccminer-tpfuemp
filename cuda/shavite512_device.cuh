@@ -10,7 +10,7 @@
  * deliberately reads table 0 from global memory via __ldg and tables 1..3
  * from shared memory, so it carries its own AES tables (renamed
  * d_shavite_AES0..3, shavite_aes_round) and does NOT reuse
- * x11/cuda_x11_aes.cuh.
+ * cuda/aes_device.cuh.
  */
 
 #ifndef CUDA_SHAVITE512_DEVICE_CUH

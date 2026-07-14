@@ -1,8 +1,24 @@
 /*
-Based upon the 2 Christians,klaus_t's, Tanguy Pruvot's and SP's work (2013-2016)
-Provos Alexis - 2016
-optimized by sp - 2018 (+50% faster on the gtx 1080ti)
-*/
+ * Shared sp-optimised AES device helper (x-family) — the sp/alexis AES round
+ * machinery (2 base tables d_AES0/d_AES3 as __device__ static, rotation-derived
+ * columns, the many block-size init variants + the 1024*8 "_32" layout used by
+ * the sp shavite/echo kernels). Promoted from x11/cuda_x11_aes_sp.cuh into the
+ * generic device-lib dir (docs/coding-guideline.md §3).
+ *
+ * Backs: cuda_x11_shavite512_sp.cu (the canonical bare shavite512_cpu_hash_64)
+ * and cuda_x11_simd512.cu.
+ *
+ * Based upon the 2 Christians, klaus_t, Tanguy Pruvot and SP (2013-2016);
+ * Provos Alexis 2016; optimised by sp 2018.
+ *
+ * NOTE: symbol names (d_AES0, aes_round, AES_ROUND_NOKEY, KEY_EXPAND_ELT) match
+ * cuda/aes_device.cuh's — the two AES headers must never be included in the same
+ * TU (they aren't today). Renaming to fully de-risk + merging the duplicated
+ * AES tables is the deferred cross-consumer AES consolidation.
+ */
+#ifndef CUDA_AES_SP_DEVICE_CUH
+#define CUDA_AES_SP_DEVICE_CUH
+
 #include "miner.h"
 
 __device__  static uint32_t __align__(16) d_AES0[256] = {
@@ -583,3 +599,5 @@ void aes_gpu_init128_32(uint32_t sharedMemory[1024 * 8])
 	sharedMemory[31 + thread2] = temp2;
 
 }
+
+#endif /* CUDA_AES_SP_DEVICE_CUH */

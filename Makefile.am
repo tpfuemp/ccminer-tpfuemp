@@ -71,7 +71,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  quark/quarkcoin.cu quark/cuda_quark_compactionTest.cu \
 			  neoscrypt/neoscrypt.cpp neoscrypt/neoscrypt-cpu.c neoscrypt/cuda_neoscrypt.cu \
 			  pentablake.cu skein.cu cuda_skeincoin.cu skein2.cpp zr5.cu \
-			  skunk/skunk.cu skunk/cuda_skunk.cu skunk/cuda_skunk_streebog.cu \
+			  skunk/skunk.cu skunk/cuda_skunk.cu algos/stages/cuda_streebog.cu \
 			  algos/sha256d/sha256d.cu algos/sha256d/cuda_sha256d.cu algos/sha256d/sha256t.cu algos/sha256d/cuda_sha256t.cu \
 			  algos/sha256d/cuda_sha256_selftest.cu cuda/sha256_device.cuh \
 			  algos/sha512256d/sha512256d.cu algos/sha512256d/cuda_sha512256d.cu \
@@ -91,23 +91,23 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  sph/hamsi.c sph/hamsi_helper.c sph/streebog.c sph/tiger.c \
 			  sph/shabal.c sph/whirlpool.c sph/sha2big.c sph/haval.c \
 			  sph/ripemd.c sph/sph_sha2.c sph/sha3d.c sph/sha3.c \
-			  polytimos.cu \
+			  algos/polytimos/polytimos.cu \
 			  lbry/lbry.cu lbry/cuda_sha256_lbry.cu lbry/cuda_sha512_lbry.cu lbry/cuda_lbry_merged.cu \
 			  qubit/qubit.cu qubit/qubit_luffa512.cu qubit/deep.cu qubit/luffa.cu \
 			  tribus/tribus.cu tribus/cuda_echo512_final.cu \
-			  x11/x11.cu x11/fresh.cu x11/cuda_x11_luffa512.cu x11/cuda_x11_cubehash512.cu x11/cuda_x11_cubehash512_80.cu \
-			  x11/cuda_x11_shavite512.cu x11/cuda_x11_shavite512_sp.cu x11/cuda_x11_simd512.cu x11/cuda_x11_echo.cu \
-			  x11/cuda_x11_luffa512_Cubehash.cu x11/x11evo.cu x11/timetravel.cu x11/bitcore.cu \
+			  algos/x11/x11.cu algos/x11/fresh.cu algos/stages/cuda_luffa512.cu algos/stages/cuda_cubehash512.cu algos/stages/cuda_cubehash512_80.cu \
+			  algos/stages/cuda_shavite512_legacy.cu algos/stages/cuda_shavite512.cu algos/stages/cuda_simd512.cu algos/stages/cuda_echo512_compat.cu \
+			  algos/stages/cuda_luffaCubehash512.cu algos/x11/x11evo.cu algos/x11/timetravel.cu algos/x11/bitcore.cu \
 			  x13/x13.cu x13/cuda_x13_hamsi512.cu x13/cuda_x13_fugue512.cu \
 			  x13/hsr.cu x13/cuda_hsr_sm3.cu x13/sm3.c \
 			  x15/x14.cu x15/x15.cu x15/cuda_x14_shabal512.cu x15/cuda_x15_whirlpool.cu \
 			  x15/whirlpool.cu x15/cuda_x15_whirlpool_sm3.cu \
-			  algos/x16/x16r.cu algos/x16/x16rv2.cu algos/x16/x16s.cu algos/x16/cuda_x16_echo512.cu algos/x16/cuda_x16_fugue512.cu \
-			  algos/x16/cuda_x16_shabal512.cu algos/x16/cuda_x16_shavite512.cu algos/x16/cuda_x16_simd512_80.cu \
-			  algos/x16/cuda_x16_echo512_64.cu algos/x16/cuda_x16_fused.cu \
+			  algos/x16/x16r.cu algos/x16/x16rv2.cu algos/x16/x16s.cu algos/stages/cuda_echo512_80.cu algos/stages/cuda_fugue512_80.cu \
+			  algos/stages/cuda_shabal512_80.cu algos/stages/cuda_shavite512_80.cu algos/stages/cuda_simd512_80.cu \
+			  algos/stages/cuda_echo512_64.cu algos/common/cuda_x_fused.cu \
 			  x17/x17.cu x17/skydoge.cu x17/hmq17.cu x17/cuda_x17_haval256.cu x17/cuda_x17_sha512.cu \
-			  x11/phi.cu x11/cuda_streebog_maxwell.cu \
-			  x11/c11.cu x11/s3.cu x11/sib.cu x11/veltor.cu x11/cuda_streebog.cu x11/0x10.cu \
+			  algos/x11/phi.cu \
+			  algos/x11/c11.cu algos/x11/s3.cu algos/x11/sib.cu algos/x11/veltor.cu algos/x11/0x10.cu \
 			  x21/x21s.cu x21/cuda_sha256_2.cu x21/cuda_tiger192.cu 
 			  
 # scrypt
@@ -184,13 +184,13 @@ qubit/qubit_luffa512.o: qubit/qubit_luffa512.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
 # Luffa and Echo are faster with 80 registers than 128
-x11/cuda_x11_luffa512.o: x11/cuda_x11_luffa512.cu
+algos/stages/cuda_luffa512.o: algos/stages/cuda_luffa512.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
-x11/cuda_x11_luffa512_Cubehash.o: x11/cuda_x11_luffa512_Cubehash.cu
+algos/stages/cuda_luffaCubehash512.o: algos/stages/cuda_luffaCubehash512.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=76 -o $@ -c $<
 
-x11/cuda_x11_simd512.o: x11/cuda_x11_simd512.cu
+algos/stages/cuda_simd512.o: algos/stages/cuda_simd512.cu
 	$(NVCC) $(nvcc_FLAGS) -Xcompiler -Wno-unused-variable -o $@ -c $<
 
 x13/cuda_x13_hamsi512.o: x13/cuda_x13_hamsi512.cu

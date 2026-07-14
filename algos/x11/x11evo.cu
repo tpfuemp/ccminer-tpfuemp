@@ -1,6 +1,16 @@
 /**
  * X11EVO algo implementation
  * Cuda implementation by tpruvot@github - May 2016
+ *
+ * Migrated to the shared x-family machinery (docs/coding-guideline.md §2/§3):
+ * the 11 stages (blake..echo, permuted per block-epoch) call the bare <prim>512
+ * device-launcher names through the cuda_x_stages.h bridge (sp shavite, alexis
+ * echo). This is a VARIABLE-ORDER chain (like x16r/bitcore) with a fixed blake
+ * 80-byte first stage: the fusible-run structure is recomputed whenever the
+ * order changes (fused_run[] + an x11evo->fused-kernel id map, since the stage
+ * enums differ) and consecutive register-resident stages run via the shared
+ * fused kernel. The terminal is order-dependent so the terminal-compare
+ * (echo/skein _final) is NOT applied (like x16/bitcore).
  */
 #include <stdio.h>
 #include <memory.h>
@@ -21,7 +31,7 @@ extern "C" {
 
 #include "miner.h"
 #include "cuda_helper.h"
-#include "cuda_x11.h"
+#include "algos/common/cuda_x_stages.h"
 
 static uint32_t *d_hash[MAX_GPUS];
 
@@ -39,6 +49,14 @@ enum Algo {
 	ECHO,
 	HASH_FUNC_COUNT
 };
+
+/* x11evo's stage enum differs from the shared fused kernel's (x11evo has
+ * SKEIN=3,JH=4,KECCAK=5 vs the fused kernel's JH=3,KECCAK=4,SKEIN=5); map
+ * x11evo ids -> fused-kernel ids so the shared fused kernel + x_fusible[]
+ * predicate select the right stages. */
+static const uint8_t evo_to_fused[HASH_FUNC_COUNT] = { 0, 1, 2, 5, 3, 4, 6, 7, 8, 9, 10 };
+static __thread int s_fused_seq = -1;
+static __thread uint8_t fused_run[HASH_FUNC_COUNT] = { 0 };
 
 static void swap8(uint8_t *a, uint8_t *b)
 {
@@ -222,15 +240,15 @@ extern "C" void x11evo_hash(void *output, const void *input)
 #include "cuda_debug.cuh"
 
 static bool init[MAX_GPUS] = { 0 };
-
-extern void quark_blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_outputHash, int order);
+static bool use_compat_kernels[MAX_GPUS] = { 0 };
 
 extern "C" int scanhash_x11evo(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done)
 {
 	uint32_t *pdata = work->data;
 	uint32_t *ptarget = work->target;
 	const uint32_t first_nonce = pdata[19];
-	int intensity = (device_sm[device_map[thr_id]] >= 500 && !is_windows()) ? 20 : 19;
+	const int dev_id = device_map[thr_id];
+	int intensity = (device_sm[dev_id] >= 500 && !is_windows()) ? 20 : 19;
 	uint32_t throughput = cuda_default_throughput(thr_id, 1U << intensity); // 19=256*256*8;
 	//if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
@@ -259,17 +277,20 @@ extern "C" int scanhash_x11evo(int thr_id, struct work* work, uint32_t max_nonce
 		}
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
-		quark_blake512_cpu_init(thr_id, throughput);
-		quark_bmw512_cpu_init(thr_id, throughput);
-		quark_groestl512_cpu_init(thr_id, throughput);
-		quark_skein512_cpu_init(thr_id, throughput);
-		quark_keccak512_cpu_init(thr_id, throughput);
-		quark_jh512_cpu_init(thr_id, throughput);
-		x11_luffa512_cpu_init(thr_id, throughput);
-//		x11_cubehash512_cpu_init(thr_id, throughput);
-		x11_shavite512_cpu_init(thr_id, throughput);
-		x11_echo512_cpu_init(thr_id, throughput);
-		if (x11_simd512_cpu_init(thr_id, throughput) != 0) {
+		cuda_get_arch(thr_id);
+		use_compat_kernels[thr_id] = (cuda_arch[dev_id] < 500);
+		if (use_compat_kernels[thr_id])
+			echo512_cpu_init_compat(thr_id, throughput);
+
+		blake512_cpu_init(thr_id, throughput);
+		bmw512_cpu_init(thr_id, throughput);
+		groestl512_cpu_init(thr_id, throughput);
+		skein512_cpu_init(thr_id, throughput);
+		keccak512_cpu_init(thr_id, throughput);
+		jh512_cpu_init(thr_id, throughput);
+		luffa512_cpu_init(thr_id, throughput); // 64
+		shavite512_cpu_init(thr_id, throughput);
+		if (simd512_cpu_init(thr_id, throughput) != 0) {
 			return 0;
 		}
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput), 0);
@@ -284,68 +305,107 @@ extern "C" int scanhash_x11evo(int thr_id, struct work* work, uint32_t max_nonce
 		be32enc(&endiandata[k], pdata[k]);
 
 	cuda_check_cpu_setTarget(ptarget);
-	quark_blake512_cpu_setBlock_80(thr_id, endiandata);
+	blake512_cpu_setBlock_80(thr_id, endiandata);
 
 	const int hashes = (int) strlen(hashOrder);
+
+	/* (re)build the per-permutation fused-run structure + upload the mapped
+	 * 64-byte stage ids whenever the order changes (rarely — once per block
+	 * epoch); done post-init so the device is ready. Positions 1..hashes-1 are
+	 * the 64-byte stages (pos 0 is the blake-80). */
+	if (s_fused_seq != s_sequence) {
+		uint8_t ids[HASH_FUNC_COUNT];
+		memset(fused_run, 0, sizeof(fused_run));
+		for (int i = 1; i < hashes; i++) {
+			const char e = hashOrder[i];
+			const uint8_t a = e >= 'A' ? e - 'A' + 10 : e - '0';
+			ids[i] = evo_to_fused[a];
+		}
+		for (int i = 1; i < hashes; ) {
+			int len = 0;
+			while (i + len < hashes && x_fusible[ids[i + len]]) len++;
+			if (len >= 2) fused_run[i] = (uint8_t) len;
+			i += (len > 0) ? len : 1;
+		}
+		/* selftest clobbers the order constant, so run it before the real upload */
+		x_fused_device_selftest(thr_id);
+		x_fused_setOrder(&ids[1], hashes - 1);
+		s_fused_seq = s_sequence;
+	}
 
 	do {
 		int order = 1;
 
 		// Hash with CUDA
-		quark_blake512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id]);
+		blake512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id]);
 		TRACE("blake80:");
 
-		for (int i = 1; i < hashes; i++)
+		for (int i = 1; i < hashes; )
 		{
+			/* fused run of >= 2 consecutive register-resident stages */
+			if (fused_run[i] >= 2) {
+				const int len = fused_run[i];
+				x_fused_cpu_hash_64(thr_id, throughput, i - 1, len, 0, d_hash[thr_id]);
+				TRACE("fused  :");
+				i += len;
+				order += len;
+				continue;
+			}
+
 			const char elem = hashOrder[i];
 			const uint8_t algo64 = elem >= 'A' ? elem - 'A' + 10 : elem - '0';
 
 			switch (algo64) {
 			case BLAKE:
-				quark_blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+				blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 				TRACE("blake  :");
 				break;
 			case BMW:
-				quark_bmw512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+				bmw512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 				TRACE("bmw    :");
 				break;
 			case GROESTL:
-				quark_groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+				groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 				TRACE("groestl:");
 				break;
 			case SKEIN:
-				quark_skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+				skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 				TRACE("skein  :");
 				break;
 			case JH:
-				quark_jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+				jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 				TRACE("jh512  :");
 				break;
 			case KECCAK:
-				quark_keccak512_cpu_hash_64(thr_id, throughput, NULL, d_hash[thr_id]); order++;
+				keccak512_cpu_hash_64(thr_id, throughput, NULL, d_hash[thr_id]); order++;
 				TRACE("keccak :");
 				break;
 			case LUFFA:
-				x11_luffa512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+				luffa512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 				TRACE("luffa  :");
 				break;
 			case CUBEHASH:
-				x11_cubehash512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
+				cubehash512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
 				TRACE("cube   :");
 				break;
 			case SHAVITE:
-				x11_shavite512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+				shavite512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
 				TRACE("shavite:");
 				break;
 			case SIMD:
-				x11_simd512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+				simd512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 				TRACE("simd   :");
 				break;
 			case ECHO:
-				x11_echo512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+				if (use_compat_kernels[thr_id])
+					echo512_cpu_hash_64_compat(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+				else {
+					echo512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
+				}
 				TRACE("echo   :");
 				break;
 			}
+			i++;
 		}
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
@@ -403,9 +463,9 @@ extern "C" void free_x11evo(int thr_id)
 
 	cudaFree(d_hash[thr_id]);
 
-	quark_blake512_cpu_free(thr_id);
-	quark_groestl512_cpu_free(thr_id);
-	x11_simd512_cpu_free(thr_id);
+	blake512_cpu_free(thr_id);
+	groestl512_cpu_free(thr_id);
+	simd512_cpu_free(thr_id);
 
 	cuda_check_cpu_free(thr_id);
 	init[thr_id] = false;

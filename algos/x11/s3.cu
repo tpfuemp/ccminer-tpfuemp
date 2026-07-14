@@ -1,5 +1,13 @@
 /**
  * S3 Hash (Also called Triple S - Used by 1Coin)
+ *
+ * shavite(80) - simd - skein
+ *
+ * Migrated to the shared x-family machinery (docs/coding-guideline.md §2/§3):
+ * the stages call the bare device-launcher names through the cuda_x_stages.h
+ * bridge (shavite512_* is the optimised sp 80-byte launcher, same as the x16
+ * family). No fusible run of >= 2 consecutive register-resident stages exists
+ * (shavite/simd are boundaries, skein is isolated), so there is no fused kernel.
  */
 
 extern "C" {
@@ -10,14 +18,12 @@ extern "C" {
 
 #include "miner.h"
 #include "cuda_helper.h"
-#include "cuda_x11.h"
-
-extern void x11_shavite512_setBlock_80(void *pdata);
-extern void x11_shavite512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash, int order);
+#include "algos/common/cuda_x_stages.h"
 
 #include <stdint.h>
 
 static uint32_t *d_hash[MAX_GPUS];
+static uint32_t *d_resNonce[MAX_GPUS];
 
 /* CPU HASH */
 extern "C" void s3hash(void *output, const void *input)
@@ -89,12 +95,11 @@ extern "C" int scanhash_s3(int thr_id, struct work* work, uint32_t max_nonce, un
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
 		CUDA_SAFE_CALL(cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput));
+		CUDA_SAFE_CALL(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)));
 
-		x11_shavite512_cpu_init(thr_id, throughput);
-		x11_simd512_cpu_init(thr_id, throughput);
-		quark_skein512_cpu_init(thr_id, throughput);
-
-		cuda_check_cpu_init(thr_id, throughput);
+		shavite512_cpu_init(thr_id, throughput);
+		simd512_cpu_init(thr_id, throughput);
+		skein512_cpu_init(thr_id, throughput);
 
 		init[thr_id] = true;
 	}
@@ -103,34 +108,37 @@ extern "C" int scanhash_s3(int thr_id, struct work* work, uint32_t max_nonce, un
 	for (int k=0; k < 20; k++)
 		be32enc(&endiandata[k], pdata[k]);
 
-	x11_shavite512_setBlock_80((void*)endiandata);
-	cuda_check_cpu_setTarget(ptarget);
+	shavite512_setBlock_80((void*)endiandata);
+	cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
 
 	do {
 		int order = 0;
 
-		x11_shavite512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
+		shavite512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
 		TRACE("shavite:");
-		x11_simd512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		simd512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 		TRACE("simd   :");
-		quark_skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		/* skein terminal + on-device target compare, 2 nonces via atomicExch chain */
+		skein512_cpu_hash_64_final(thr_id, throughput, d_hash[thr_id], AS_U64(&ptarget[6]), d_resNonce[thr_id]);
+		cudaMemcpy(&work->nonces[0], d_resNonce[thr_id], 2 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
 		TRACE("skein  :");
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
 
-		work->nonces[0] = cuda_check_hash(thr_id, throughput, pdata[19], d_hash[thr_id]);
 		if (work->nonces[0] != UINT32_MAX)
 		{
-			const uint32_t Htarg = ptarget[7];
 			uint32_t _ALIGN(64) vhash[8];
+			const uint32_t Htarg = ptarget[7];
+			const uint32_t startNounce = pdata[19];
+			work->nonces[0] += startNounce;
 			be32enc(&endiandata[19], work->nonces[0]);
 			s3hash(vhash, endiandata);
 
 			if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
 				work->valid_nonces = 1;
 				work_set_target_ratio(work, vhash);
-				work->nonces[1] = cuda_check_hash_suppl(thr_id, throughput, pdata[19], d_hash[thr_id], 1);
-				if (work->nonces[1] != 0) {
+				if (work->nonces[1] != UINT32_MAX) {
+					work->nonces[1] += startNounce;
 					be32enc(&endiandata[19], work->nonces[1]);
 					s3hash(vhash, endiandata);
 					bn_set_target_ratio(work, vhash, 1);
@@ -145,6 +153,7 @@ extern "C" int scanhash_s3(int thr_id, struct work* work, uint32_t max_nonce, un
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
 				gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
+				cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
 				pdata[19] = work->nonces[0] + 1;
 				continue;
 			}
@@ -172,9 +181,9 @@ extern "C" void free_s3(int thr_id)
 	cudaDeviceSynchronize();
 
 	cudaFree(d_hash[thr_id]);
-	x11_simd512_cpu_free(thr_id);
+	cudaFree(d_resNonce[thr_id]);
+	simd512_cpu_free(thr_id);
 
-	cuda_check_cpu_free(thr_id);
 	init[thr_id] = false;
 
 	cudaDeviceSynchronize();

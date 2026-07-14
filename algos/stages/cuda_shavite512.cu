@@ -7,7 +7,7 @@
 #include "cuda_vectors_alexis.h"
 
 #define INTENSIVE_GMF
-#include "cuda_x11_aes_sp.cuh"
+#include "cuda/aes_sp_device.cuh"
 __constant__ uint32_t c_PaddedMessage80[20]; // padded message (80 bytes + padding)
 
 __device__ __forceinline__ void aes_round_s(const uint32_t sharedMemory[256][32], const uint32_t x0, const uint32_t x1, const uint32_t x2, const uint32_t x3, const uint32_t k0, uint32_t &y0, uint32_t &y1, uint32_t &y2, uint32_t &y3)
@@ -969,7 +969,11 @@ void x11_shavite512_gpu_hash_64_sp_final(const uint32_t threads, uint64_t *g_has
 
 
 __host__
-void x11_shavite512_cpu_hash_64_sp(int thr_id, uint32_t threads, uint32_t *d_hash)
+/* Canonical optimised 64-byte SHAvite-512 launcher for the migrated x-family
+ * (bare name). Self-contained sp kernel: in-kernel AES-table init, vectorised
+ * __ldg4 I/O. The legacy 6-arg x11_shavite512_cpu_hash_64 (shared c512) stays
+ * for the not-yet-migrated x11-family consumers (c11/sib/fresh/...). */
+void shavite512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash)
 {
 	dim3 grid((threads + 256 - 1) / 256);
 	dim3 block(256);

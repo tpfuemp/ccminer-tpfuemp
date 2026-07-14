@@ -1,4 +1,20 @@
 // (c) SP may 2016
+//
+// CubeHash-512 80-byte first-stage launcher (bare cubehash512_setBlock_80 /
+// cubehash512_cuda_hash_80), consumed by the migrated x16 chains + timetravel /
+// evohash / ghostrider / x21s when cubehash is the first stage.
+//
+// DUPE NOTE: the round function below (rrounds, in the classic 5-D
+// x[2][2][2][2][2] notation) is the same CubeHash transform as the flat
+// cubehash512_rrounds in cuda/cubehash512_device.cuh — bridging it is DEFERRED,
+// not overlooked: (1) the shared header's rrounds is __device__-only while
+// cubehash512_setBlock_80 runs the rounds on the HOST to precompute c_x, so a
+// bridge would have to host-enable the shared header (xchg etc.) and risk the
+// family-wide 64-byte path; (2) the 80-byte first-stage path has no --benchmark
+// coverage (benchmark hash order is blake-first, so this kernel never runs
+// there), so a consensus-critical reformulation can't be cheaply validated.
+// Kept verbatim (behaviour-preserving) pending a host-enabled shared rrounds
+// + a dedicated 80-byte KAT.
 
 #include <cuda_helper.h>
 #include <cuda_vectors_alexis.h>

@@ -262,7 +262,7 @@ void fugue512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_t st
 /* Legacy forwarders — ghostrider and x21s still call these names; remove once
  * they call the bare fugue512_* launchers directly. cpu_init/cpu_free stay
  * x16_-named: the bare fugue512_cpu_init/free are the 64-byte x13 fugue (bridge
- * in cuda_x16.h) and this 80-byte texture lifecycle is distinct (pending the
+ * in cuda_x_stages.h) and this 80-byte texture lifecycle is distinct (pending the
  * "merge with x13_fugue512" TODO). */
 __host__
 void x16_fugue512_setBlock_80(void *pdata)

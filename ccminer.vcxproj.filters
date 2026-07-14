@@ -61,6 +61,12 @@
     <Filter Include="Source Files\CUDA\x16">
       <UniqueIdentifier>{55dfae6a-66ba-43e2-8ceb-98ee70cbdf16}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\CUDA\common">
+      <UniqueIdentifier>{c0ffee00-1234-4b22-b69a-230f3cc96abc}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="Source Files\CUDA\stages">
+      <UniqueIdentifier>{c0ffee01-1234-4b22-b69a-230f3cc96abd}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Source Files\CUDA\x17">
       <UniqueIdentifier>{85dfae6a-66ca-4332-8cec-98ee70cbdf2f}</UniqueIdentifier>
     </Filter>
@@ -618,9 +624,6 @@
     <ClInclude Include="quark\cuda_quark_groestl512_sm2.cuh">
       <Filter>Source Files\CUDA\quark</Filter>
     </ClInclude>
-    <ClInclude Include="x11\cuda_x11_simd512_sm2.cuh">
-      <Filter>Source Files\CUDA\x11</Filter>
-    </ClInclude>
     <ClInclude Include="sia\sia-rpc.h">
       <Filter>Source Files\sia</Filter>
     </ClInclude>
@@ -665,7 +668,7 @@
     </ClInclude>
     <ClInclude Include="heavyhash/heavyhash-gate.h" />
     <ClInclude Include="heavyhash/keccak_tiny.h" />
-    <ClInclude Include="algos\x16\cuda_x16.h">
+    <ClInclude Include="algos\common\cuda_x_stages.h">
       <Filter>Header Files\CUDA</Filter>
     </ClInclude>
     <ClInclude Include="sph\sph_sha3d.h" />
@@ -787,55 +790,52 @@
     <CudaCompile Include="qubit\qubit_luffa512.cu">
       <Filter>Source Files\CUDA\qubit</Filter>
     </CudaCompile>
-    <ClInclude Include="x11\cuda_x11_aes.cuh">
-      <Filter>Source Files\CUDA\x11</Filter>
+    <ClInclude Include="cuda\aes_device.cuh">
+      <Filter>Header Files\CUDA</Filter>
     </ClInclude>
-    <ClInclude Include="x11\cuda_x11_aes_sp.cuh">
-      <Filter>Source Files\CUDA\x11</Filter>
+    <ClInclude Include="cuda\aes_sp_device.cuh">
+      <Filter>Header Files\CUDA</Filter>
     </ClInclude>
-    <CudaCompile Include="x11\cuda_x11_cubehash512.cu">
-      <Filter>Source Files\CUDA\x11</Filter>
+    <CudaCompile Include="algos\stages\cuda_cubehash512.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\cuda_x11_cubehash512_80.cu">
-      <Filter>Source Files\CUDA\x11</Filter>
+    <CudaCompile Include="algos\stages\cuda_cubehash512_80.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\cuda_x11_echo.cu">
-      <Filter>Source Files\CUDA\x11</Filter>
+    <CudaCompile Include="algos\stages\cuda_echo512_compat.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\cuda_x11_echo_sp.cu">
-      <Filter>Source Files\CUDA\x11</Filter>
+    <CudaCompile Include="algos\stages\cuda_luffa512.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\cuda_x11_luffa512.cu">
-      <Filter>Source Files\CUDA\x11</Filter>
+    <CudaCompile Include="algos\stages\cuda_luffaCubehash512.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\cuda_x11_luffa512_Cubehash.cu">
-      <Filter>Source Files\CUDA\x11</Filter>
+    <CudaCompile Include="algos\stages\cuda_shavite512_legacy.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\cuda_x11_shavite512.cu">
-      <Filter>Source Files\CUDA\x11</Filter>
+    <CudaCompile Include="algos\stages\cuda_shavite512.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\cuda_x11_shavite512_sp.cu">
-      <Filter>Source Files\CUDA\x11</Filter>
+    <CudaCompile Include="algos\stages\cuda_simd512.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\cuda_x11_simd512.cu">
-      <Filter>Source Files\CUDA\x11</Filter>
-    </CudaCompile>
-    <ClInclude Include="x11\cuda_x11_simd512_func.cuh">
-      <Filter>Source Files\CUDA\x11</Filter>
+    <ClInclude Include="algos\stages\cuda_simd512_func.cuh">
+      <Filter>Source Files\CUDA\stages</Filter>
     </ClInclude>
-    <CudaCompile Include="x11\c11.cu">
+    <CudaCompile Include="algos\x11\c11.cu">
       <Filter>Source Files\CUDA\x11</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\fresh.cu">
+    <CudaCompile Include="algos\x11\fresh.cu">
       <Filter>Source Files\CUDA\x11</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\0x10.cu">
+    <CudaCompile Include="algos\x11\0x10.cu">
       <Filter>Source Files\CUDA\x11</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\x11.cu">
+    <CudaCompile Include="algos\x11\x11.cu">
       <Filter>Source Files\CUDA\x11</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\x11evo.cu">
+    <CudaCompile Include="algos\x11\x11evo.cu">
       <Filter>Source Files\CUDA\x11</Filter>
     </CudaCompile>
     <CudaCompile Include="x13\cuda_x13_fugue512.cu">
@@ -889,7 +889,7 @@
     <CudaCompile Include="pentablake.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
-    <CudaCompile Include="polytimos.cu">
+    <CudaCompile Include="algos\polytimos\polytimos.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="skunk\skunk.cu">
@@ -898,8 +898,8 @@
     <CudaCompile Include="skunk\cuda_skunk.cu">
       <Filter>Source Files\CUDA\skunk</Filter>
     </CudaCompile>
-    <CudaCompile Include="skunk\cuda_skunk_streebog.cu">
-      <Filter>Source Files\CUDA\skunk</Filter>
+    <CudaCompile Include="algos\stages\cuda_streebog.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
     <CudaCompile Include="tribus\tribus.cu">
       <Filter>Source Files\CUDA\tribus</Filter>
@@ -910,28 +910,22 @@
     <ClInclude Include="tribus\cuda_echo512_aes.cuh">
       <Filter>Source Files\CUDA\tribus</Filter>
     </ClInclude>
-    <CudaCompile Include="x11\phi.cu">
+    <CudaCompile Include="algos\x11\phi.cu">
       <Filter>Source Files\CUDA\x11</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\sib.cu">
+    <CudaCompile Include="algos\x11\sib.cu">
       <Filter>Source Files\CUDA\x11</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\cuda_streebog.cu">
+    <CudaCompile Include="algos\x11\s3.cu">
       <Filter>Source Files\CUDA\x11</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\cuda_streebog_maxwell.cu">
+    <CudaCompile Include="algos\x11\timetravel.cu">
       <Filter>Source Files\CUDA\x11</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\s3.cu">
+    <CudaCompile Include="algos\x11\bitcore.cu">
       <Filter>Source Files\CUDA\x11</Filter>
     </CudaCompile>
-    <CudaCompile Include="x11\timetravel.cu">
-      <Filter>Source Files\CUDA\x11</Filter>
-    </CudaCompile>
-    <CudaCompile Include="x11\bitcore.cu">
-      <Filter>Source Files\CUDA\x11</Filter>
-    </CudaCompile>
-    <CudaCompile Include="x11\veltor.cu">
+    <CudaCompile Include="algos\x11\veltor.cu">
       <Filter>Source Files\CUDA\x11</Filter>
     </CudaCompile>
     <CudaCompile Include="Algo256\blake256.cu">
@@ -1093,26 +1087,26 @@
     <CudaCompile Include="x15\cuda_x15_whirlpool_sm3.cu">
       <Filter>Source Files\CUDA\x15</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\x16\cuda_x16_echo512.cu">
-      <Filter>Source Files\CUDA\x16</Filter>
+    <CudaCompile Include="algos\stages\cuda_echo512_80.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\x16\cuda_x16_echo512_64.cu">
-      <Filter>Source Files\CUDA\x16</Filter>
+    <CudaCompile Include="algos\stages\cuda_echo512_64.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\x16\cuda_x16_fugue512.cu">
-      <Filter>Source Files\CUDA\x16</Filter>
+    <CudaCompile Include="algos\stages\cuda_fugue512_80.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\x16\cuda_x16_shabal512.cu">
-      <Filter>Source Files\CUDA\x16</Filter>
+    <CudaCompile Include="algos\stages\cuda_shabal512_80.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\x16\cuda_x16_simd512_80.cu">
-      <Filter>Source Files\CUDA\x16</Filter>
+    <CudaCompile Include="algos\stages\cuda_simd512_80.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\x16\x16r.cu">
       <Filter>Source Files\CUDA\x16</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\x16\cuda_x16_fused.cu">
-      <Filter>Source Files\CUDA\x16</Filter>
+    <CudaCompile Include="algos\common\cuda_x_fused.cu">
+      <Filter>Source Files\CUDA\common</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\x16\x16rv2.cu">
       <Filter>Source Files\CUDA\x16</Filter>
@@ -1151,7 +1145,9 @@
     </CudaCompile>
     <CudaCompile Include="gost\cuda_gosthash.cu" />
     <CudaCompile Include="gost\gost.cu" />
-    <CudaCompile Include="algos\x16\cuda_x16_shavite512.cu" />
+    <CudaCompile Include="algos\stages\cuda_shavite512_80.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
+    </CudaCompile>
     <CudaCompile Include="yescrypt\yescrypt.cu">
       <Filter>Source Files\CUDA\yescrypt</Filter>
     </CudaCompile>

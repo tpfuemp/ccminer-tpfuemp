@@ -316,8 +316,7 @@
     <ClInclude Include="sph\SHA3api_ref.h" />
     <ClInclude Include="sph\yescrypt-platform.h" />
     <ClInclude Include="sph\yescrypt.h" />
-    <ClInclude Include="x11\cuda_x11_simd512_sm2.cuh" />
-    <ClInclude Include="algos\x16\cuda_x16.h" />
+    <ClInclude Include="algos\common\cuda_x_stages.h" />
     <CudaCompile Include="Algo256\bmw.cu" />
     <CudaCompile Include="Algo256\bmw512.cu" />
     <CudaCompile Include="Algo256\cuda_bmw.cu">
@@ -506,8 +505,7 @@
     <CudaCompile Include="algos\sha512256d\cuda_sha512256d.cu" />
     <CudaCompile Include="algos\sha512256d\cuda_sha512256d_selftest.cu" />
     <CudaCompile Include="cuda\xfamily_selftest.cu" />
-    <CudaCompile Include="x11\cuda_x11_echo_sp.cu" />
-    <CudaCompile Include="x11\cuda_x11_shavite512_sp.cu" />
+    <CudaCompile Include="algos\stages\cuda_shavite512.cu" />
     <CudaCompile Include="yescrypt\cuda_yescrypt.cu" />
     <CudaCompile Include="yescrypt\yescrypt.cu" />
     <CudaCompile Include="zr5.cu" />
@@ -620,7 +618,7 @@
     <CudaCompile Include="lyra2\lyra2Z.cu" />
     <CudaCompile Include="lyra2\cuda_lyra2Z.cu" />
     <ClInclude Include="lyra2\cuda_lyra2Z_sm5.cuh" />
-    <CudaCompile Include="polytimos.cu" />
+    <CudaCompile Include="algos\polytimos\polytimos.cu" />
     <CudaCompile Include="sia\sia.cu" />
     <CudaCompile Include="skein.cu">
       <MaxRegCount>64</MaxRegCount>
@@ -633,42 +631,38 @@
       <CodeGeneration>compute_50,sm_50;compute_52,sm_52</CodeGeneration>
       <MaxRegCount>64</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="skunk\cuda_skunk_streebog.cu" />
+    <CudaCompile Include="algos\stages\cuda_streebog.cu" />
     <ClInclude Include="tribus\cuda_echo512_aes.cuh" />
-    <CudaCompile Include="tribus\cuda_echo512_final.cu">
-      <CodeGeneration>compute_50,sm_50;compute_52,sm_52</CodeGeneration>
-    </CudaCompile>
+    <CudaCompile Include="tribus\cuda_echo512_final.cu" />
     <CudaCompile Include="tribus\tribus.cu" />
-    <ClInclude Include="x11\cuda_x11_aes.cuh" />
-    <ClInclude Include="x11\cuda_x11_aes_sp.cuh" />
-    <CudaCompile Include="x11\cuda_x11_cubehash512.cu" />
-    <CudaCompile Include="x11\cuda_x11_cubehash512_80.cu" />
-    <CudaCompile Include="x11\cuda_x11_echo.cu">
+    <ClInclude Include="cuda\aes_device.cuh" />
+    <ClInclude Include="cuda\aes_sp_device.cuh" />
+    <CudaCompile Include="algos\stages\cuda_cubehash512.cu" />
+    <CudaCompile Include="algos\stages\cuda_cubehash512_80.cu" />
+    <CudaCompile Include="algos\stages\cuda_echo512_compat.cu">
     </CudaCompile>
-    <CudaCompile Include="x11\cuda_x11_luffa512.cu" />
-    <CudaCompile Include="x11\cuda_x11_luffa512_Cubehash.cu">
+    <CudaCompile Include="algos\stages\cuda_luffa512.cu" />
+    <CudaCompile Include="algos\stages\cuda_luffaCubehash512.cu">
       <MaxRegCount>76</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="x11\cuda_x11_shavite512.cu">
+    <CudaCompile Include="algos\stages\cuda_shavite512_legacy.cu">
       <MaxRegCount>80</MaxRegCount>
     </CudaCompile>
-    <ClInclude Include="x11\cuda_x11_simd512_func.cuh" />
-    <CudaCompile Include="x11\cuda_x11_simd512.cu">
+    <ClInclude Include="algos\stages\cuda_simd512_func.cuh" />
+    <CudaCompile Include="algos\stages\cuda_simd512.cu">
       <MaxRegCount>64</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="x11\cuda_streebog.cu" />
-    <CudaCompile Include="x11\cuda_streebog_maxwell.cu" />
-    <CudaCompile Include="x11\c11.cu" />
-    <CudaCompile Include="x11\fresh.cu" />
-    <CudaCompile Include="x11\phi.cu" />
-    <CudaCompile Include="x11\sib.cu" />
-    <CudaCompile Include="x11\s3.cu" />
-    <CudaCompile Include="x11\timetravel.cu" />
-    <CudaCompile Include="x11\bitcore.cu" />
-    <CudaCompile Include="x11\veltor.cu" />
-    <CudaCompile Include="x11\0x10.cu" />
-    <CudaCompile Include="x11\x11.cu" />
-    <CudaCompile Include="x11\x11evo.cu" />
+    <CudaCompile Include="algos\x11\c11.cu" />
+    <CudaCompile Include="algos\x11\fresh.cu" />
+    <CudaCompile Include="algos\x11\phi.cu" />
+    <CudaCompile Include="algos\x11\sib.cu" />
+    <CudaCompile Include="algos\x11\s3.cu" />
+    <CudaCompile Include="algos\x11\timetravel.cu" />
+    <CudaCompile Include="algos\x11\bitcore.cu" />
+    <CudaCompile Include="algos\x11\veltor.cu" />
+    <CudaCompile Include="algos\x11\0x10.cu" />
+    <CudaCompile Include="algos\x11\x11.cu" />
+    <CudaCompile Include="algos\x11\x11evo.cu" />
     <CudaCompile Include="x13\cuda_x13_hamsi512.cu">
       <MaxRegCount>72</MaxRegCount>
     </CudaCompile>
@@ -684,15 +678,15 @@
     <CudaCompile Include="x15\whirlpool.cu" />
     <CudaCompile Include="x15\cuda_x15_whirlpool_sm3.cu" />
     <CudaCompile Include="algos\x16\x16r.cu" />
-    <CudaCompile Include="algos\x16\cuda_x16_fused.cu" />
+    <CudaCompile Include="algos\common\cuda_x_fused.cu" />
     <CudaCompile Include="algos\x16\x16rv2.cu" />
     <CudaCompile Include="algos\x16\x16s.cu" />
-    <CudaCompile Include="algos\x16\cuda_x16_echo512.cu" />
-    <CudaCompile Include="algos\x16\cuda_x16_fugue512.cu" />
-    <CudaCompile Include="algos\x16\cuda_x16_shabal512.cu" />
-    <CudaCompile Include="algos\x16\cuda_x16_shavite512.cu" />
-    <CudaCompile Include="algos\x16\cuda_x16_simd512_80.cu" />
-    <CudaCompile Include="algos\x16\cuda_x16_echo512_64.cu">
+    <CudaCompile Include="algos\stages\cuda_echo512_80.cu" />
+    <CudaCompile Include="algos\stages\cuda_fugue512_80.cu" />
+    <CudaCompile Include="algos\stages\cuda_shabal512_80.cu" />
+    <CudaCompile Include="algos\stages\cuda_shavite512_80.cu" />
+    <CudaCompile Include="algos\stages\cuda_simd512_80.cu" />
+    <CudaCompile Include="algos\stages\cuda_echo512_64.cu">
       <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
     </CudaCompile>
     <CudaCompile Include="x17\hmq17.cu" />

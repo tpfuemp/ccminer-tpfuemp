@@ -1,7 +1,16 @@
-
-/* AES Helper for inline-usage from SPH */
-#ifndef CUDA_X11_AES_CUH
-#define CUDA_X11_AES_CUH
+/*
+ * Shared AES T-table device helper (x-family) — the AES SBOX/round tables
+ * (d_AES0..3, static-init under DEVICE_DIRECT_CONSTANTS), the cooperative
+ * shared-table fill (aes_gpu_init) and the two aes_round variants used by the
+ * SPH-derived AES-based hashes. Promoted from x11/cuda_x11_aes.cuh into the
+ * generic device-lib dir (docs/coding-guideline.md §3); currently the AES
+ * backing for cuda/echo512_device.cuh (tpruvot ECHO). NOTE: cuda/shavite512_
+ * device.cuh still carries its own renamed copy of these tables (d_shavite_AES);
+ * collapsing the two onto this header is the deferred cross-consumer AES
+ * consolidation.
+ */
+#ifndef CUDA_AES_DEVICE_CUH
+#define CUDA_AES_DEVICE_CUH
 
 #define AESx(x) (x ##UL) /* SPH_C32(x) */
 

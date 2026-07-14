@@ -13,7 +13,7 @@
 #include "cuda/luffa512_device.cuh"
 
 // Die Hash-Funktion
-__global__ void x11_luffa512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t *g_hash, uint32_t *g_nonceVector)
+__global__ void luffa512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t *g_hash, uint32_t *g_nonceVector)
 {
     uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
     if (thread < threads)
@@ -33,12 +33,12 @@ extern bool luffa512_device_selftest(int thr_id);
 
 // Setup Function
 __host__
-void x11_luffa512_cpu_init(int thr_id, uint32_t threads)
+void luffa512_cpu_init(int thr_id, uint32_t threads)
 {
     luffa512_device_selftest(thr_id);
 }
 
-__host__ void x11_luffa512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
+__host__ void luffa512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
     const uint32_t threadsperblock = 256;
 
@@ -49,6 +49,14 @@ __host__ void x11_luffa512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t st
     // Größe des dynamischen Shared Memory Bereichs
     size_t shared_size = 0;
 
-    x11_luffa512_gpu_hash_64<<<grid, block, shared_size>>>(threads, startNounce, (uint64_t*)d_hash, d_nonceVector);
+    luffa512_gpu_hash_64<<<grid, block, shared_size>>>(threads, startNounce, (uint64_t*)d_hash, d_nonceVector);
     MyStreamSynchronize(NULL, order, thr_id);
+}
+
+/* Legacy forwarders — not-yet-migrated consumers (ghostrider/evohash/bastion/
+ * polytimos/x21s/0x10/skydoge/bitcore/hmq17/timetravel/x11evo) call the x11_
+ * names; removed once they call the bare luffa512_cpu_* ones. */
+__host__ void x11_luffa512_cpu_init(int thr_id, uint32_t threads){ luffa512_cpu_init(thr_id, threads); }
+__host__ void x11_luffa512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order){
+    luffa512_cpu_hash_64(thr_id, threads, startNounce, d_nonceVector, d_hash, order);
 }

@@ -31,7 +31,7 @@ extern "C" {
 
 #include "miner.h"
 #include "cuda_helper.h"
-#include "cuda_x16.h"
+#include "algos/common/cuda_x_stages.h"
 
 static uint32_t *d_hash[MAX_GPUS];
 
@@ -318,16 +318,16 @@ extern "C" int scanhash_x16s(int thr_id, struct work* work, uint32_t max_nonce, 
 		}
 		for (int i = 1; i < 16; ) {
 			int len = 0;
-			while (i + len < 16 && x16_fusible[ids[i + len]]) len++;
+			while (i + len < 16 && x_fusible[ids[i + len]]) len++;
 			if (len >= 2) fused_run[i] = (uint8_t) len;
 			i += (len > 0) ? len : 1;
 		}
 
 		/* fused-kernel unit test (clobbers the order constant, so run it
 		 * before the real upload) */
-		x16_fused_device_selftest(thr_id);
+		x_fused_device_selftest(thr_id);
 
-		x16_fused_setOrder(&ids[1], 15);
+		x_fused_setOrder(&ids[1], 15);
 	}
 
 	cuda_check_cpu_setTarget(ptarget);
@@ -467,7 +467,7 @@ extern "C" int scanhash_x16s(int thr_id, struct work* work, uint32_t max_nonce, 
 		{
 			if (fused_run[i] >= 2) {
 				const int len = fused_run[i];
-				x16_fused_cpu_hash_64(thr_id, throughput, i - 1, len, 0, d_hash[thr_id]);
+				x_fused_cpu_hash_64(thr_id, throughput, i - 1, len, 0, d_hash[thr_id]);
 				order += len;
 				i += len;
 				TRACE("fused  :");
@@ -512,7 +512,7 @@ extern "C" int scanhash_x16s(int thr_id, struct work* work, uint32_t max_nonce, 
 				TRACE("cube   :");
 				break;
 			case SHAVITE:
-				shavite512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+				shavite512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
 				TRACE("shavite:");
 				break;
 			case SIMD:

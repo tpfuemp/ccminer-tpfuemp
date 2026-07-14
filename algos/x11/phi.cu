@@ -6,6 +6,12 @@
 //  Implemented by anorganix @ bitcointalk on 01.10.2017
 //  Feel free to send some satoshis to 1Bitcoin8tfbtGAQNFxDRUVUfFgFWKoWi9
 //
+//  Migrated to the shared x-family machinery (docs/coding-guideline.md §2/§3):
+//  the stages call the bare device-launcher names through the cuda_x_stages.h
+//  bridge. The terminal echo uses the fused-compare launcher
+//  echo512_cpu_hash_64_final (echo + on-device target compare, 2 nonces via its
+//  atomicExch chain), so there is no separate cuda_check_hash pass. jh+cubehash
+//  are a fusible run (not yet fused here).
 //
 
 extern "C" {
@@ -19,24 +25,24 @@ extern "C" {
 
 #include "miner.h"
 #include "cuda_helper.h"
-#include "cuda_x11.h"
+#include "algos/common/cuda_x_stages.h"
 
-extern void skein512_cpu_setBlock_80(void *pdata);
-extern void skein512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_hash, int swap);
+/* consolidated streebog stage (algos/stages/cuda_streebog.cu) */
 extern void streebog_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash);
-extern void streebog_hash_64_maxwell(int thr_id, uint32_t threads, uint32_t *d_hash);
-
-extern void x13_fugue512_cpu_init(int thr_id, uint32_t threads);
-extern void x13_fugue512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
-extern void x13_fugue512_cpu_free(int thr_id);
-
-extern void tribus_echo512_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t *d_resNonce, const uint64_t target);
 
 #include <stdio.h>
 #include <memory.h>
 
 static uint32_t *d_hash[MAX_GPUS];
 static uint32_t *d_resNonce[MAX_GPUS];
+
+/* stage ids match enum Algo in x16r.cu / the fused kernel switch */
+enum Algo {
+	BLAKE = 0, BMW, GROESTL, JH, KECCAK, SKEIN, LUFFA, CUBEHASH, SHAVITE, SIMD, ECHO
+};
+
+/* the fusible run in phi's fixed order: jh -> cubehash (register-resident) */
+static const uint8_t phi_fused_ids[2] = { JH, CUBEHASH };
 
 extern "C" void phihash(void *output, const void *input)
 {
@@ -80,7 +86,6 @@ extern "C" void phihash(void *output, const void *input)
 #include "cuda_debug.cuh"
 
 static bool init[MAX_GPUS] = { 0 };
-static bool use_compat_kernels[MAX_GPUS] = { 0 };
 
 extern "C" int scanhash_phi(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done)
 {
@@ -110,20 +115,18 @@ extern "C" int scanhash_phi(int thr_id, struct work* work, uint32_t max_nonce, u
 		}
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
-		cuda_get_arch(thr_id);
-		use_compat_kernels[thr_id] = (cuda_arch[dev_id] < 500);
-
-		quark_skein512_cpu_init(thr_id, throughput);
-		quark_jh512_cpu_init(thr_id, throughput);
-//		x11_cubehash512_cpu_init(thr_id, throughput);
-		x13_fugue512_cpu_init(thr_id, throughput);
-		if (use_compat_kernels[thr_id])
-			x11_echo512_cpu_init(thr_id, throughput);
+		skein512_cpu_init(thr_id, throughput);
+		jh512_cpu_init(thr_id, throughput);
+		fugue512_cpu_init(thr_id, throughput);
 
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_hash[thr_id], (size_t)64 * throughput), -1);
 		CUDA_SAFE_CALL(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)));
 
-		cuda_check_cpu_init(thr_id, throughput);
+		/* fused-kernel unit test (clobbers the order constant) must run before
+		 * the real upload of the fixed phi fused sequence */
+		x_fused_device_selftest(thr_id);
+		x_fused_setOrder(phi_fused_ids, 2);
+
 		init[thr_id] = true;
 	}
 
@@ -133,34 +136,26 @@ extern "C" int scanhash_phi(int thr_id, struct work* work, uint32_t max_nonce, u
 		be32enc(&endiandata[k], pdata[k]);
 
 	skein512_cpu_setBlock_80((void*)endiandata);
-	if (use_compat_kernels[thr_id])
-		cuda_check_cpu_setTarget(ptarget);
-	else
-		cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
+	cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
 
 	do {
 		int order = 0;
 
 		skein512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], 1); order++;
-		quark_jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		x11_cubehash512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
-		x13_fugue512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		if (use_compat_kernels[thr_id]) {
-			streebog_cpu_hash_64(thr_id, throughput, d_hash[thr_id]);
-			x11_echo512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-			work->nonces[0] = cuda_check_hash(thr_id, throughput, pdata[19], d_hash[thr_id]);
-		} else {
-			streebog_hash_64_maxwell(thr_id, throughput, d_hash[thr_id]);
-			tribus_echo512_final(thr_id, throughput, d_hash[thr_id], d_resNonce[thr_id], AS_U64(&ptarget[6]));
-			cudaMemcpy(&work->nonces[0], d_resNonce[thr_id], 2 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
-		}
+		/* fused: jh - cubehash (register-resident) */
+		x_fused_cpu_hash_64(thr_id, throughput, 0, 2, 0, d_hash[thr_id]); order += 2;
+		fugue512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		streebog_cpu_hash_64(thr_id, throughput, d_hash[thr_id]);
+		/* echo + on-device target compare, 2 nonces via atomicExch chain */
+		echo512_cpu_hash_64_final(thr_id, throughput, d_hash[thr_id], d_resNonce[thr_id], AS_U64(&ptarget[6]));
+		cudaMemcpy(&work->nonces[0], d_resNonce[thr_id], 2 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
 
 		if (work->nonces[0] != UINT32_MAX)
 		{
 			const uint32_t Htarg = ptarget[7];
 			const uint32_t startNonce = pdata[19];
 			uint32_t _ALIGN(64) vhash[8];
-			if (!use_compat_kernels[thr_id]) work->nonces[0] += startNonce;
+			work->nonces[0] += startNonce;
 			be32enc(&endiandata[19], work->nonces[0]);
 			phihash(vhash, endiandata);
 
@@ -168,8 +163,6 @@ extern "C" int scanhash_phi(int thr_id, struct work* work, uint32_t max_nonce, u
 				work->valid_nonces = 1;
 				work_set_target_ratio(work, vhash);
 				*hashes_done = pdata[19] - first_nonce + throughput;
-				//work->nonces[1] = cuda_check_hash_suppl(thr_id, throughput, pdata[19], d_hash[thr_id], 1);
-				//if (work->nonces[1] != 0) {
 				if (work->nonces[1] != UINT32_MAX) {
 					work->nonces[1] += startNonce;
 					be32enc(&endiandata[19], work->nonces[1]);
@@ -214,9 +207,8 @@ extern "C" void free_phi(int thr_id)
 	cudaDeviceSynchronize();
 	cudaFree(d_hash[thr_id]);
 	cudaFree(d_resNonce[thr_id]);
-	x13_fugue512_cpu_free(thr_id);
+	fugue512_cpu_free(thr_id);
 
-	cuda_check_cpu_free(thr_id);
 	init[thr_id] = false;
 
 	cudaDeviceSynchronize();

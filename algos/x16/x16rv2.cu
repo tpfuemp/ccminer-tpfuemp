@@ -34,7 +34,7 @@ extern "C" {
 
 #include "miner.h"
 #include "cuda_helper.h"
-#include "cuda_x16.h"
+#include "algos/common/cuda_x_stages.h"
 
 static uint32_t *d_hash[MAX_GPUS];
 
@@ -81,7 +81,7 @@ static const char* algo_strings[] = {
 static __thread uint32_t s_ntime = UINT32_MAX;
 static __thread char hashOrder[HASH_FUNC_COUNT + 1] = { 0 };
 
-#define X16RV2_TIGER 16 /* pseudo-stage id (see cuda_x16.h / cuda_x16_fused.cu) */
+#define X16RV2_TIGER 16 /* pseudo-stage id (see cuda_x_stages.h / cuda_x_fused.cu) */
 static __thread uint8_t eff_ids[20];          /* 64-byte stage sequence incl. tiger insertions */
 static __thread uint8_t eff_run[20] = { 0 };  /* fused run length starting at eff index, 0 = none */
 static __thread int eff_count = 0;
@@ -338,16 +338,16 @@ extern "C" int scanhash_x16rv2(int thr_id, struct work* work, uint32_t max_nonce
 		memset(eff_run, 0, sizeof(eff_run));
 		for (int j = 0; j < eff_count; ) {
 			int len = 0;
-			while (j + len < eff_count && x16_fusible[eff_ids[j + len]]) len++;
+			while (j + len < eff_count && x_fusible[eff_ids[j + len]]) len++;
 			if (len >= 2) eff_run[j] = (uint8_t) len;
 			j += (len > 0) ? len : 1;
 		}
 
 		/* fused-kernel unit test (clobbers the order constant, so run it
 		 * before the real upload) */
-		x16_fused_device_selftest(thr_id);
+		x_fused_device_selftest(thr_id);
 
-		x16_fused_setOrder(eff_ids, eff_count);
+		x_fused_setOrder(eff_ids, eff_count);
 	}
 
 	cuda_check_cpu_setTarget(ptarget);
@@ -493,7 +493,7 @@ extern "C" int scanhash_x16rv2(int thr_id, struct work* work, uint32_t max_nonce
 				int has_tiger = 0;
 				for (int k = 0; k < len; k++)
 					has_tiger |= (eff_ids[j + k] == X16RV2_TIGER);
-				x16_fused_cpu_hash_64(thr_id, throughput, j, len, has_tiger, d_hash[thr_id]);
+				x_fused_cpu_hash_64(thr_id, throughput, j, len, has_tiger, d_hash[thr_id]);
 				order += len;
 				j += len;
 				TRACE("fused  :");
@@ -537,7 +537,7 @@ extern "C" int scanhash_x16rv2(int thr_id, struct work* work, uint32_t max_nonce
 				TRACE("cube   :");
 				break;
 			case SHAVITE:
-				shavite512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+				shavite512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
 				TRACE("shavite:");
 				break;
 			case SIMD:

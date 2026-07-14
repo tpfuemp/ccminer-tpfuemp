@@ -10,61 +10,37 @@ Guideline: `docs/coding-guideline.md`
 - `x16rv2.cu` — penfold 2019: x16r with Tiger-192 inserted before the keccak,
   luffa and sha512 stages (`tiger192_cpu_hash_64` with `zero_pad_64=1`;
   `tiger192_cpu_hash_80` when the tiger'd stage comes first).
-- `cuda_x16_*.cu` — 80-byte first-stage variants (echo, fugue, shabal,
-  shavite, simd) plus the alexis 64-byte echo. Each (except simd) now sources
-  its generic device code from the matching `cuda/*_device.cuh`. The launchers
-  are de-branded to bare `<prim>512_setBlock_80` / `<prim>512_cuda_hash_80`
-  (matching the `groestl512_*`/`jh512_*` precedent); `x16_<prim>512_*` remain as
-  forwarders until the other consumers (ghostrider, x21s) migrate to the bare
-  names. Only `c_PaddedMessage80` is genuinely local. `cuda_x16_simd512_80.cu`
-  is de-branded the same way but has no device library (simd is deliberately
-  kept multi-kernel, a fusion boundary — see below), so its FFT machinery stays
-  self-contained. Fugue keeps `x16_fugue512_cpu_init`/`cpu_free` `x16_`-named
-  (the bare `fugue512_cpu_init`/`free` are the 64-byte x13 fugue bridge; the
-  80-byte texture lifecycle is distinct, pending the x13/x16 fugue merge). The
-  hamsi/whirlpool/sha512 80-byte launchers still live in their legacy family
-  folders (`x13/`, `x15/`, `x17/`) and de-brand when those families migrate.
-- `cuda_x16_echo512.cu` — the 80-byte first-stage echo launcher. Its generic
-  device functions (`AES_2ROUND`, `echo_round`, `cuda_echo_round_80`,
-  `echo_gpu_init`) were moved into the tpruvot section of
-  `cuda/echo512_device.cuh`; only the `x16_echo512_*` launcher and the
-  `c_PaddedMessage80` constant remain.
-- `cuda_x16_fugue512.cu` — the 80-byte first-stage fugue launcher. Its generic
-  transform (`mixtab0..3`, `TIX4`/`CMIX36`/`SMIX`, `SUB_ROR*`,
-  `FUGUE512_3`/`FUGUE512_F`, `FUGUE_ROL/ROR`) lives in
-  `cuda/fugue512_device.cuh`; only the `x16_fugue512_*` launcher, the
-  `c_PaddedMessage80` constant, and the texture-backed mixtab load (kept
-  distinct from the header's `__constant__` `fugue512_load_shared` path)
-  remain.
-- `cuda_x16_shabal512.cu` — the 80-byte first-stage shabal launcher. The
-  generic transform + constants + the 80-byte hash body (`shabal512_hash_80`)
-  live in `cuda/shabal512_device.cuh` (that header `#undef`s its macros, so the
-  whole 80-byte body was relocated rather than the macros exposed). The
-  launcher is de-branded to the bare `shabal512_setBlock_80` /
-  `shabal512_cuda_hash_80` (matching the `groestl512_*`/`jh512_*` 80-byte
-  precedent); `x16_shabal512_*` remain as forwarders until ghostrider/x21s
-  migrate to the bare names. Only `c_PaddedMessage80` is genuinely local.
-- `cuda_x16_shavite512.cu` — the 80-byte first-stage shavite launcher. The AES
-  tables, `aes_round`, `AES_ROUND_NOKEY`, `KEY_EXPAND_ELT`, `c512` and
-  `shavite_gpu_init` live in `cuda/shavite512_device.cuh`; only
-  `c_PaddedMessage80` is local. The launcher is de-branded to the bare
-  `shavite512_setBlock_80` / `shavite512_cpu_hash_80`; `x16_shavite512_*` remain
-  as forwarders until ghostrider/x21s migrate (the dead `x16_shavite512_cpu_init`
-  no-op was dropped). The kernel builds the padded 128-byte block and calls the
-  shared `c512` with `count=640` (the header's `count==512` branch is 64-byte
-  only, skipped here — verified identical for the 80-byte path). The dead
-  `c512_80` was dropped.
-- `cuda_x16_echo512_64.cu` — thin launcher over the alexis section of
-  `cuda/echo512_device.cuh` (`echo512_hash_64_alexis`). Its canonical host name
-  is the bare `echo512_cpu_hash_64` (the optimised 64-byte echo); the tpruvot
-  compat variant is `echo512_cpu_hash_64_compat` (bridge to `x11_echo512_*`),
-  used only in the `use_compat_kernels` branch (arch < 500, below the sm_61
-  build floor — effectively dead). `x16_echo512_cpu_hash_64` remains as a
-  forwarder for the not-yet-migrated consumers (x17, skydoge, x21s,
-  ghostrider); it is removed once they call the bare name. The vcxproj
-  CodeGeneration was normalised from the legacy `compute_50/52`-only override
-  to the project default `compute_61/75/86` (native sm_86 cubin instead of
-  PTX-JIT).
+- **Stage launchers moved out.** `x16/` is now dispatcher-only. The 80-byte
+  first-stage launchers (echo, fugue, shabal, shavite, simd) plus the alexis
+  64-byte echo were de-branded and relocated to the shared `algos/stages/` home
+  (layout B): `cuda_echo512_80.cu`, `cuda_fugue512_80.cu`, `cuda_shabal512_80.cu`,
+  `cuda_shavite512_80.cu`, `cuda_simd512_80.cu`, `cuda_echo512_64.cu`. Each
+  (except simd) sources its generic device code from the matching
+  `cuda/*_device.cuh`; the launchers carry the bare `<prim>512_setBlock_80` /
+  `<prim>512_cuda_hash_80` symbols (matching the `groestl512_*`/`jh512_*`
+  precedent), with `x16_<prim>512_*` forwarders kept until the remaining
+  consumers (ghostrider, x21s, x17, skydoge) migrate to the bare names. Only
+  `c_PaddedMessage80` stays local to each. Notable exceptions retained across the
+  move:
+  - **simd** (`cuda_simd512_80.cu`) — no device library (simd is deliberately
+    multi-kernel, a fusion boundary — see below), so its FFT machinery stays
+    self-contained.
+  - **fugue** (`cuda_fugue512_80.cu`) — keeps `x16_fugue512_cpu_init`/`cpu_free`
+    `x16_`-named (the bare `fugue512_cpu_init`/`free` are the 64-byte x13 fugue
+    bridge; the 80-byte texture lifecycle is distinct, pending the x13/x16 fugue
+    merge).
+  - **shavite** (`cuda_shavite512_80.cu`) — builds the padded 128-byte block and
+    calls the shared `c512` with `count=640` (dead `c512_80`/`x16_shavite512_cpu_init`
+    dropped).
+  - **echo-64** (`cuda_echo512_64.cu`) — bare `echo512_cpu_hash_64` is canonical
+    (optimised alexis 64-byte echo); the tpruvot compat variant is
+    `echo512_cpu_hash_64_compat` (arch < 500, below the sm_61 floor — dead). Its
+    vcxproj CodeGeneration is the project default `compute_61/75/86` (native
+    sm_86 cubin, not the legacy `compute_50/52`-only PTX-JIT).
+
+  The hamsi/whirlpool/sha512 80-byte launchers still live in their legacy family
+  folders (`x13/`, `x15/`, `x17/`) and de-brand + relocate when those families
+  migrate.
 
 ## Device library
 
@@ -83,16 +59,24 @@ The migrated sources call each 64-byte stage by its bare `<prim>512_cpu_*`
 name (`blake512_cpu_hash_64`, `keccak512_cpu_hash_64`, ...). The launcher TUs
 that define them still live in their originating family folders and keep the
 old family prefix (`quark_`/`x11_`/`x13_`/`x14_`/`x15_`/`x17_`), so a name
-bridge in `cuda_x16.h` forwards the bare names to the current real symbols.
+bridge in `algos/common/cuda_x_stages.h` forwards the bare names to the current real symbols.
 Each family drops its bridge line and renames its launcher to the bare form
 when it migrates; the prefixed name then has no users left and is removed. The
 `_cpu_` infix keeps these host launchers distinct from the register-resident
 device primitives (`blake512_hash_64`) and the bare 80-byte launchers
 (`keccak512_cuda_hash_80`).
 
-## Fused stage runs (O1)
+Exception (fast-path promotion, like the alexis echo): the bare 64-byte
+`shavite512_cpu_hash_64` is now the **sp-optimised** launcher (3-arg,
+`cuda_x11_shavite512_sp.cu`; self-contained, in-kernel AES init, `__ldg4` I/O —
+~+2.5% on x11) rather than a bridge alias. The legacy 6-arg
+`x11_shavite512_cpu_hash_64` (shared `c512`) stays for the not-yet-migrated
+x11-family consumers. All migrated x-family sources (x11/x16r/x16rv2/x16s) get
+the faster shavite on their mid-chain 64-byte stage.
 
-`cuda_x16_fused.cu` executes maximal runs of >= 2 consecutive
+## Fused stage runs
+
+`algos/common/cuda_x_fused.cu` executes maximal runs of >= 2 consecutive
 register-resident stages in one launch (uniform in-kernel switch over a
 constant order array), keeping the 64-byte state in registers instead of
 bouncing it through `d_hash` between stages. Fusible set: blake, bmw, jh,
@@ -105,7 +89,7 @@ sequence with tiger pseudo-stages (id 16).
 The fused kernel is pinned to `__launch_bounds__(256, 2)` (128 regs, some
 spill): without the min-blocks clause ptxas allocates 235 regs and occupancy
 halves, eating the entire win. Fused-path unit test
-(`x16_fused_device_selftest`, runs once at first order change): per-stage
+(`x_fused_device_selftest`, runs once at first order change): per-stage
 single launches, an 11-stage chained launch vs the sph chain, and specific
 adjacency runs (`sha512·skein·keccak`, `jh·keccak·bmw·bmw`, `bmw·bmw·sha512`).
 Those last cover a real blind spot: the deterministic benchmark order leaves

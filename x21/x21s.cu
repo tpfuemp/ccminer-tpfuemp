@@ -37,7 +37,7 @@ extern "C" {
 
 #include "miner.h"
 #include "cuda_helper.h"
-#include "algos/x16/cuda_x16.h"
+#include "algos/common/cuda_x_stages.h"
 
 static uint32_t *d_hash[MAX_GPUS];
 static uint64_t* d_matrix[MAX_GPUS];
@@ -45,7 +45,7 @@ static uint64_t* d_matrix[MAX_GPUS];
 extern void x17_haval256_cpu_init(int thr_id, uint32_t threads);
 extern void x17_haval256_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash, const int outlen);
 
-extern void streebog_cpu_hash_64_alexis(int thr_id, uint32_t threads, uint32_t *d_hash);
+extern void streebog_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash);
 
 extern void lyra2v2_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix);
 extern void lyra2v2_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint64_t *g_hash, int order);
@@ -567,7 +567,7 @@ extern "C" int scanhash_x21s(int thr_id, struct work* work, uint32_t max_nonce, 
         x17_haval256_cpu_hash_64(thr_id, throughput, pdata[19], d_hash[thr_id], 512); order++;
         tiger192_cpu_hash_64(thr_id, throughput, 0, d_hash[thr_id]);
 		lyra2v2_cpu_hash_32(thr_id, throughput, pdata[19], (uint64_t*) d_hash[thr_id], order++);
-        streebog_cpu_hash_64_alexis(thr_id, throughput, d_hash[thr_id]);
+        streebog_cpu_hash_64(thr_id, throughput, d_hash[thr_id]);
         sha256_cpu_hash_64(thr_id, throughput, d_hash[thr_id]);
 
         *hashes_done = pdata[19] - first_nonce + throughput;

@@ -1804,17 +1804,17 @@ bool whirlpool512_device_selftest(int thr_id)
 	return passed;
 }
 
-/* ------------------------------------------------------- x16 fused chain */
+/* -------------------------------------------------------- x-fused chain */
 
-/* Validates the fused multi-stage kernel (algos/x16/cuda_x16_fused.cu)
+/* Validates the fused multi-stage kernel (algos/common/cuda_x_fused.cu)
  * against the sph chain: per-stage single launches first (pinpoints a broken
  * glue path), then one chained launch (validates register-resident state
  * carry). Uses the caller-visible launcher, so the constant order array is
  * clobbered — callers must re-upload their order afterwards. */
-extern void x16_fused_setOrder(const uint8_t *ids, int count);
-extern void x16_fused_cpu_hash_64(int thr_id, uint32_t threads, int start, int len, int has_tiger, uint32_t *d_hash);
+extern void x_fused_setOrder(const uint8_t *ids, int count);
+extern void x_fused_cpu_hash_64(int thr_id, uint32_t threads, int start, int len, int has_tiger, uint32_t *d_hash);
 
-static void x16_fused_sph_stage(int id, uint8_t *h /* 64 bytes in/out */)
+static void x_fused_sph_stage(int id, uint8_t *h /* 64 bytes in/out */)
 {
 	switch (id) {
 	case 0:  { sph_blake512_context c;   sph_blake512_init(&c);   sph_blake512(&c, h, 64);   sph_blake512_close(&c, h);   break; }
@@ -1834,20 +1834,20 @@ static void x16_fused_sph_stage(int id, uint8_t *h /* 64 bytes in/out */)
 	}
 }
 
-static bool x16_fused_selftest_run(const uint8_t *ids, int nids, int has_tiger,
+static bool x_fused_selftest_run(const uint8_t *ids, int nids, int has_tiger,
 	const uint8_t msg[64], uint8_t dig[64])
 {
 	uint32_t *d_io = NULL;
 	if (cudaMalloc(&d_io, 64) != cudaSuccess)
 		return false;
 
-	x16_fused_setOrder(ids, nids);
+	x_fused_setOrder(ids, nids);
 	bool ok = (cudaMemcpy(d_io, msg, 64, cudaMemcpyHostToDevice) == cudaSuccess);
-	x16_fused_cpu_hash_64(0, 1, 0, nids, has_tiger, d_io);
+	x_fused_cpu_hash_64(0, 1, 0, nids, has_tiger, d_io);
 	cudaDeviceSynchronize();
 	cudaError_t e = cudaGetLastError();
 	if (e != cudaSuccess)
-		applog(LOG_WARNING, "x16-fused run(nids=%d id0=%u tiger=%d) cuda error %d: %s",
+		applog(LOG_WARNING, "x-fused run(nids=%d id0=%u tiger=%d) cuda error %d: %s",
 			nids, ids[0], has_tiger, (int)e, cudaGetErrorString(e));
 	ok = ok && (cudaMemcpy(dig, d_io, 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
@@ -1855,7 +1855,7 @@ static bool x16_fused_selftest_run(const uint8_t *ids, int nids, int has_tiger,
 }
 
 __host__
-bool x16_fused_device_selftest(int thr_id)
+bool x_fused_device_selftest(int thr_id)
 {
 	static bool tested = false, passed = false;
 	if (tested) return passed;
@@ -1876,10 +1876,10 @@ bool x16_fused_device_selftest(int thr_id)
 		const uint8_t id = all_ids[k];
 		uint8_t ref[64], gpu[64];
 		memcpy(ref, msg, 64);
-		x16_fused_sph_stage(id, ref);
-		if (!x16_fused_selftest_run(&id, 1, (id == 16), msg, gpu)
+		x_fused_sph_stage(id, ref);
+		if (!x_fused_selftest_run(&id, 1, (id == 16), msg, gpu)
 		    || memcmp(gpu, ref, 64) != 0) {
-			gpulog(LOG_WARNING, thr_id, "x16-fused stage id %u FAILED single-stage check", id);
+			gpulog(LOG_WARNING, thr_id, "x-fused stage id %u FAILED single-stage check", id);
 			single_ok = false;
 		}
 	}
@@ -1888,8 +1888,8 @@ bool x16_fused_device_selftest(int thr_id)
 	uint8_t ref[64], gpu[64];
 	memcpy(ref, msg, 64);
 	for (int k = 0; k < 11; k++)
-		x16_fused_sph_stage(all_ids[k], ref);
-	const bool chain_ok = x16_fused_selftest_run(all_ids, 11, 1, msg, gpu)
+		x_fused_sph_stage(all_ids[k], ref);
+	const bool chain_ok = x_fused_selftest_run(all_ids, 11, 1, msg, gpu)
 	                   && (memcmp(gpu, ref, 64) == 0);
 
 	// --- specific fused-run adjacencies seen in live x16r orders that the
@@ -1907,20 +1907,20 @@ bool x16_fused_device_selftest(int thr_id)
 		uint8_t rref[64], rgpu[64];
 		memcpy(rref, msg, 64);
 		for (int k = 0; k < adj_len[r]; k++)
-			x16_fused_sph_stage(adj_runs[r][k], rref);
-		if (!x16_fused_selftest_run(adj_runs[r], adj_len[r], 0, msg, rgpu)
+			x_fused_sph_stage(adj_runs[r][k], rref);
+		if (!x_fused_selftest_run(adj_runs[r], adj_len[r], 0, msg, rgpu)
 		    || memcmp(rgpu, rref, 64) != 0) {
-			gpulog(LOG_WARNING, thr_id, "x16-fused adjacency run %d FAILED", r);
+			gpulog(LOG_WARNING, thr_id, "x-fused adjacency run %d FAILED", r);
 			adj_ok = false;
 		}
 	}
 
 	passed = single_ok && chain_ok && adj_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "x16-fused device self-test FAILED (single %d chain %d)",
+		gpulog(LOG_WARNING, thr_id, "x-fused device self-test FAILED (single %d chain %d)",
 			(int) single_ok, (int) chain_ok);
 	else
-		gpulog(LOG_DEBUG, thr_id, "x16-fused device self-test passed");
+		gpulog(LOG_DEBUG, thr_id, "x-fused device self-test passed");
 	return passed;
 }
 

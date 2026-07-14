@@ -1,5 +1,22 @@
 /*
  * Merged LUFFA512 64 + CUBE512 64 - from sp
+ *
+ * A single-launch FUSION of the luffa and cubehash 64-byte stages (one kernel
+ * does luffa then cubehash), used by the not-yet-migrated fixed-order chains
+ * (x13/x14/x15/x17/hmq17/hsr/c11/sib) where those two stages are always
+ * adjacent — the same idea as the migrated x-family's shared x_fused pipeline
+ * (algos/common/cuda_x_fused.cu), which is why the migrated x11.cu dropped this
+ * combined kernel for x_fused.
+ *
+ * DUPE NOTE: the luffa + cubehash device code below duplicates
+ * cuda/luffa512_device.cuh and cuda/cubehash512_device.cuh, but the bridge is
+ * DEFERRED deliberately, not overlooked: (1) the luffa here uses precomputed
+ * chaining values (c_IV) + a specialised rnd512_first that folds away the first
+ * round's message-independent prefix — a real speedup the shared luffa512_hash_64
+ * (standard IV + full luffa512_rnd on both blocks) does not have; (2) it is a
+ * fused kernel, so composing the two shared primitives is only equivalent, not
+ * faster. Retiring this file = migrating those chains onto x_fused (the proper
+ * fusion path), not swapping in the generic primitives here.
  */
 
 #include "cuda_helper.h"

@@ -23,15 +23,12 @@ extern void x11_cubehash512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *
 extern void x13_fugue512_cpu_init(int thr_id, uint32_t threads);
 extern void x13_fugue512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 extern void x13_fugue512_cpu_free(int thr_id);
-extern void streebog_sm3_set_target(uint32_t* ptarget);
-extern void streebog_sm3_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t* d_resNonce);
-
-// krnlx merged kernel (for high-end cards only)
+// krnlx merged kernel
 extern void skunk_cpu_init(int thr_id, uint32_t threads);
-extern void skunk_streebog_set_target(uint32_t* ptarget);
+extern void streebog_set_target(uint32_t* ptarget);
 extern void skunk_setBlock_80(int thr_id, void *pdata);
 extern void skunk_cuda_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash);
-extern void skunk_cuda_streebog(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t* d_resNonce);
+extern void streebog_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t* d_resNonce);
 
 #include <stdio.h>
 #include <memory.h>
@@ -115,25 +112,12 @@ extern "C" int scanhash_skunk(int thr_id, struct work* work, uint32_t max_nonce,
 		be32enc(&endiandata[k], pdata[k]);
 
 	cudaMemset(d_resNonce[thr_id], 0xff, NBN*sizeof(uint32_t));
-	if (use_compat_kernels[thr_id]) {
-		skein512_cpu_setBlock_80(endiandata);
-		streebog_sm3_set_target(ptarget);
-	} else {
-		skunk_setBlock_80(thr_id, endiandata);
-		skunk_streebog_set_target(ptarget);
-	}
+	skunk_setBlock_80(thr_id, endiandata);
+	streebog_set_target(ptarget);
 
 	do {
-		int order = 0;
-		if (use_compat_kernels[thr_id]) {
-			skein512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
-			x11_cubehash512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
-			x13_fugue512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-			streebog_sm3_hash_64_final(thr_id, throughput, d_hash[thr_id], d_resNonce[thr_id]);
-		} else {
-			skunk_cuda_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id]);
-			skunk_cuda_streebog(thr_id, throughput, d_hash[thr_id], d_resNonce[thr_id]);
-		}
+		skunk_cuda_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id]);
+		streebog_cpu_hash_64_final(thr_id, throughput, d_hash[thr_id], d_resNonce[thr_id]);
 		cudaMemcpy(h_resNonce, d_resNonce[thr_id], NBN*sizeof(uint32_t), cudaMemcpyDeviceToHost);
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
