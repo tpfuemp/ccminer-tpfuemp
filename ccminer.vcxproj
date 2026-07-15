@@ -299,7 +299,7 @@
     <ClCompile Include="api.cpp" />
     <ClCompile Include="sysinfos.cpp" />
     <ClCompile Include="crc32.c" />
-    <ClCompile Include="hefty1.c" />
+    <ClCompile Include="algos\heavy\hefty1.c" />
     <ClCompile Include="myriadgroestl.cpp" />
     <ClCompile Include="lyra2\Lyra2.c" />
     <ClCompile Include="lyra2\Sponge.c" />
@@ -322,16 +322,16 @@
     <CudaCompile Include="Algo256\cuda_bmw.cu">
       <MaxRegCount>76</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="allium.cu" />
+    <CudaCompile Include="algos\allium\allium.cu" />
     <CudaCompile Include="balloon\cuda_balloon.cu" />
     <CudaCompile Include="rinhash\rinhash.cu" />
-    <CudaCompile Include="hoohash\cuda_hoohashv110.cu">
+    <CudaCompile Include="algos\hoohash\cuda_hoohashv110.cu">
       <FastMath>false</FastMath>
       <FmadOptimization>false</FmadOptimization>
       <Defines>_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH</Defines>
       <AdditionalOptions>--fmad=false --prec-div=true --prec-sqrt=true --ftz=false -allow-unsupported-compiler --Wno-deprecated-gpu-targets %(AdditionalOptions)</AdditionalOptions>
     </CudaCompile>
-    <CudaCompile Include="hoohash\hoohash.cu" />
+    <CudaCompile Include="algos\hoohash\hoohash.cu" />
     <CudaCompile Include="evohash\evohash.cu" />
     <CudaCompile Include="ghostrider\ghostrider.cu" />
     <CudaCompile Include="odocrypt\cuda_odocrypt.cu" />
@@ -391,7 +391,7 @@
     <ClCompile Include="sph\hamsi.c" />
     <ClCompile Include="sph\hamsi_helper.c" />
     <ClCompile Include="sph\whirlpool.c" />
-    <ClCompile Include="x13\sm3.c" />
+    <ClCompile Include="algos\hsr\sm3.c" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="argon2d\argon2ref\argon2.h" />
@@ -433,7 +433,7 @@
     <ClInclude Include="cuda_vector_uint2x4.h" />
     <ClInclude Include="elist.h" />
     <ClInclude Include="algos\heavy\heavy.h" />
-    <ClInclude Include="hefty1.h" />
+    <ClInclude Include="algos\heavy\hefty1.h" />
     <ClInclude Include="algos.h" />
     <ClInclude Include="miner.h" />
     <ClInclude Include="nvml.h" />
@@ -525,12 +525,12 @@
     </CudaCompile>
     <CudaCompile Include="algos\heavy\bastion.cu" />
     <CudaCompile Include="algos\heavy\cuda_bastion.cu" />
-    <CudaCompile Include="JHA\jha.cu" />
-    <CudaCompile Include="JHA\jackpotcoin.cu" />
-    <CudaCompile Include="JHA\cuda_jha_compactionTest.cu">
+    <CudaCompile Include="algos\jha\jha.cu" />
+    <CudaCompile Include="algos\jha\jackpotcoin.cu" />
+    <CudaCompile Include="algos\jha\cuda_jha_compactionTest.cu">
       <AdditionalOptions>-Xptxas "-abi=yes" %(AdditionalOptions)</AdditionalOptions>
     </CudaCompile>
-    <CudaCompile Include="JHA\cuda_jha_keccak512.cu">
+    <CudaCompile Include="algos\stages\cuda_jha_keccak512.cu">
     </CudaCompile>
     <CudaCompile Include="Algo256\blake256.cu">
       <MaxRegCount>64</MaxRegCount>
@@ -567,10 +567,8 @@
     <CudaCompile Include="Algo256\cuda_groestl256.cu" />
     <CudaCompile Include="algos\keccak\cuda_keccak256.cu" />
     <CudaCompile Include="Algo256\cuda_skein256.cu" />
-    <CudaCompile Include="lbry\cuda_sha256_lbry.cu" />
-    <CudaCompile Include="lbry\cuda_sha512_lbry.cu" />
-    <CudaCompile Include="lbry\cuda_lbry_merged.cu" />
-    <CudaCompile Include="lbry\lbry.cu" />
+    <CudaCompile Include="algos\lbry\cuda_lbry_merged.cu" />
+    <CudaCompile Include="algos\lbry\lbry.cu" />
     <CudaCompile Include="pentablake.cu">
       <MaxRegCount>80</MaxRegCount>
       <AdditionalOptions Condition="'$(Configuration)'=='Release'">--ptxas-options="-dlcm=cg" %(AdditionalOptions)</AdditionalOptions>
@@ -659,20 +657,20 @@
     <CudaCompile Include="algos\x11\0x10.cu" />
     <CudaCompile Include="algos\x11\x11.cu" />
     <CudaCompile Include="algos\x11\x11evo.cu" />
-    <CudaCompile Include="x13\cuda_x13_hamsi512.cu">
+    <CudaCompile Include="algos\stages\cuda_hamsi512.cu">
       <MaxRegCount>72</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="x13\cuda_x13_fugue512.cu">
+    <CudaCompile Include="algos\stages\cuda_fugue512.cu">
     </CudaCompile>
-    <CudaCompile Include="x13\x13.cu" />
-    <CudaCompile Include="x13\cuda_hsr_sm3.cu" />
-    <CudaCompile Include="x13\hsr.cu" />
-    <CudaCompile Include="x15\x14.cu" />
-    <CudaCompile Include="x15\cuda_x14_shabal512.cu" />
-    <CudaCompile Include="x15\cuda_x15_whirlpool.cu" />
-    <CudaCompile Include="x15\x15.cu" />
-    <CudaCompile Include="x15\whirlpool.cu" />
-    <CudaCompile Include="x15\cuda_x15_whirlpool_sm3.cu" />
+    <CudaCompile Include="algos\x13\x13.cu" />
+    <CudaCompile Include="algos\hsr\cuda_hsr_sm3.cu" />
+    <CudaCompile Include="algos\hsr\hsr.cu" />
+    <CudaCompile Include="algos\x15\x14.cu" />
+    <CudaCompile Include="algos\stages\cuda_shabal512.cu" />
+    <CudaCompile Include="algos\stages\cuda_whirlpool512.cu" />
+    <CudaCompile Include="algos\stages\cuda_whirlpool512_80.cu" />
+    <CudaCompile Include="algos\x15\x15.cu" />
+    <CudaCompile Include="algos\x15\whirlpool.cu" />
     <CudaCompile Include="algos\x16\x16r.cu" />
     <CudaCompile Include="algos\common\cuda_x_fused.cu" />
     <CudaCompile Include="algos\x16\x16rv2.cu" />

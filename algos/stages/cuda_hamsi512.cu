@@ -19,7 +19,7 @@ typedef unsigned char BitSequence;
 // the shared macros/tables directly.
 
 __global__
-void x13_hamsi512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t *g_hash, uint32_t *g_nonceVector)
+void hamsi512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t *g_hash, uint32_t *g_nonceVector)
 {
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
@@ -38,20 +38,20 @@ void x13_hamsi512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t *
 extern bool hamsi512_device_selftest(int thr_id);
 
 __host__
-void x13_hamsi512_cpu_init(int thr_id, uint32_t threads)
+void hamsi512_cpu_init(int thr_id, uint32_t threads)
 {
 	hamsi512_device_selftest(thr_id);
 }
 
 __host__
-void x13_hamsi512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
+void hamsi512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
 	const uint32_t threadsperblock = 128;
 
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
 	dim3 block(threadsperblock);
 
-	x13_hamsi512_gpu_hash_64<<<grid, block>>>(threads, startNounce, (uint64_t*)d_hash, d_nonceVector);
+	hamsi512_gpu_hash_64<<<grid, block>>>(threads, startNounce, (uint64_t*)d_hash, d_nonceVector);
 	//MyStreamSynchronize(NULL, order, thr_id);
 }
 
@@ -178,3 +178,9 @@ void x16_hamsi512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_
 
 	x16_hamsi512_gpu_hash_80 <<<grid, block>>> (threads, startNounce, (uint64_t*)d_hash);
 }
+
+/* Legacy-name forwarders (x13 hamsi) for the not-yet-migrated consumers
+ * (x17/skydoge/hmq17, x21s, ghostrider, evohash, bastion); each drops out as
+ * its family switches to the bare name. */
+__host__ void x13_hamsi512_cpu_init(int thr_id, uint32_t threads) { hamsi512_cpu_init(thr_id, threads); }
+__host__ void x13_hamsi512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order) { hamsi512_cpu_hash_64(thr_id, threads, startNounce, d_nonceVector, d_hash, order); }

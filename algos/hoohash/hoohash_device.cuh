@@ -27,7 +27,7 @@
 #pragma once
 #include <stdint.h>
 #include <math.h>
-#include "hoohash/blake3_hoo_device.cuh"
+#include "algos/hoohash/blake3_hoo_device.cuh"
 
 #define HOO_PI  3.14159265358979323846
 #define HOO_EPS 1e-9

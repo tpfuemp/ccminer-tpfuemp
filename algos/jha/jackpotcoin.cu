@@ -109,10 +109,10 @@ extern "C" int scanhash_jackpot(int thr_id, struct work *work, uint32_t max_nonc
 
 		jackpot_keccak512_cpu_init(thr_id, throughput);
 		jackpot_compactTest_cpu_init(thr_id, throughput);
-		quark_blake512_cpu_init(thr_id, throughput);
-		quark_groestl512_cpu_init(thr_id, throughput);
-		quark_jh512_cpu_init(thr_id, throughput);
-		quark_skein512_cpu_init(thr_id, throughput);
+		blake512_cpu_init(thr_id, throughput);
+		groestl512_cpu_init(thr_id, throughput);
+		jh512_cpu_init(thr_id, throughput);
+		skein512_cpu_init(thr_id, throughput);
 
 		cuda_check_cpu_init(thr_id, throughput);
 
@@ -147,7 +147,7 @@ extern "C" int scanhash_jackpot(int thr_id, struct work *work, uint32_t max_nonc
 				order++);
 
 		// verfolge den skein-pfad weiter
-		quark_skein512_cpu_hash_64(thr_id, nrm3, pdata[19], d_branch3Nonces[thr_id], d_hash[thr_id], order++);
+		skein512_cpu_hash_64(thr_id, nrm3, pdata[19], d_branch3Nonces[thr_id], d_hash[thr_id], order++);
 
 		// noch schnell Blake & JH
 		jackpot_compactTest_cpu_hash_64(thr_id, nrm3, pdata[19], d_hash[thr_id], d_branch3Nonces[thr_id],
@@ -156,8 +156,8 @@ extern "C" int scanhash_jackpot(int thr_id, struct work *work, uint32_t max_nonc
 			order++);
 
 		if (nrm1+nrm2 == nrm3) {
-			quark_blake512_cpu_hash_64(thr_id, nrm1, pdata[19], d_branch1Nonces[thr_id], d_hash[thr_id], order++);
-			quark_jh512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
+			blake512_cpu_hash_64(thr_id, nrm1, pdata[19], d_branch1Nonces[thr_id], d_hash[thr_id], order++);
+			jh512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
 		}
 
 		// Runde 3 (komplett)
@@ -169,8 +169,8 @@ extern "C" int scanhash_jackpot(int thr_id, struct work *work, uint32_t max_nonc
 			order++);
 
 		if (nrm1+nrm2 == nrm3) {
-			quark_groestl512_cpu_hash_64(thr_id, nrm1, pdata[19], d_branch1Nonces[thr_id], d_hash[thr_id], order++);
-			quark_skein512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
+			groestl512_cpu_hash_64(thr_id, nrm1, pdata[19], d_branch1Nonces[thr_id], d_hash[thr_id], order++);
+			skein512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
 		}
 
 		// jackpotNonces in branch1/2 aufsplitten gemäss if (hash[0] & 0x01)
@@ -180,8 +180,8 @@ extern "C" int scanhash_jackpot(int thr_id, struct work *work, uint32_t max_nonc
 			order++);
 
 		if (nrm1+nrm2 == nrm3) {
-			quark_blake512_cpu_hash_64(thr_id, nrm1, pdata[19], d_branch1Nonces[thr_id], d_hash[thr_id], order++);
-			quark_jh512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
+			blake512_cpu_hash_64(thr_id, nrm1, pdata[19], d_branch1Nonces[thr_id], d_hash[thr_id], order++);
+			jh512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
 		}
 
 		// Runde 3 (komplett)
@@ -193,8 +193,8 @@ extern "C" int scanhash_jackpot(int thr_id, struct work *work, uint32_t max_nonc
 			order++);
 
 		if (nrm1+nrm2 == nrm3) {
-			quark_groestl512_cpu_hash_64(thr_id, nrm1, pdata[19], d_branch1Nonces[thr_id], d_hash[thr_id], order++);
-			quark_skein512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
+			groestl512_cpu_hash_64(thr_id, nrm1, pdata[19], d_branch1Nonces[thr_id], d_hash[thr_id], order++);
+			skein512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
 		}
 
 		// jackpotNonces in branch1/2 aufsplitten gemäss if (hash[0] & 0x01)
@@ -204,8 +204,8 @@ extern "C" int scanhash_jackpot(int thr_id, struct work *work, uint32_t max_nonc
 			order++);
 
 		if (nrm1+nrm2 == nrm3) {
-			quark_blake512_cpu_hash_64(thr_id, nrm1, pdata[19], d_branch1Nonces[thr_id], d_hash[thr_id], order++);
-			quark_jh512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
+			blake512_cpu_hash_64(thr_id, nrm1, pdata[19], d_branch1Nonces[thr_id], d_hash[thr_id], order++);
+			jh512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
 		}
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
@@ -280,8 +280,8 @@ extern "C" void free_jackpot(int thr_id)
 	cudaFree(d_branch3Nonces[thr_id]);
 	cudaFree(d_jackpotNonces[thr_id]);
 
-	quark_blake512_cpu_free(thr_id);
-	quark_groestl512_cpu_free(thr_id);
+	blake512_cpu_free(thr_id);
+	groestl512_cpu_free(thr_id);
 	jackpot_compactTest_cpu_free(thr_id);
 
 	cudaFree(d_hash[thr_id]);

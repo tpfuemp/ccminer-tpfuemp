@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /*
  * Shared Hamsi-512 primitive library (device side) — x-family stage
- * function. Extracted bit-identically from x13/cuda_x13_hamsi512.cu
+ * function. Extracted bit-identically from algos/stages/cuda_hamsi512.cu
  * (sph hamsi lineage, big-table T512 variant). Tables are statically
  * initialized here (the donor uploaded them at init; per-TU header
  * __constant__ requires static init).

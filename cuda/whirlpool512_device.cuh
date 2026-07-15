@@ -1,6 +1,6 @@
 /*
  * Whirlpool-512 shared device library (docs/coding-guideline.md §3),
- * djm34/tpruvot/SP/Provos Alexis formulation (see x15/cuda_x15_whirlpool.cu
+ * djm34/tpruvot/SP/Provos Alexis formulation (see algos/stages/cuda_whirlpool512.cu
  * for authorship and license).
  *
  * MODE-SWITCHED tables: the round tables are UPLOADED, not static-init —
@@ -24,7 +24,7 @@
 #include <cuda_vector_uint2x4.h>
 #endif
 
-#include "x15/cuda_whirlpool_tables.cuh"
+#include "algos/stages/cuda_whirlpool_tables.cuh"
 
 #define whirl_xor3x(a,b,c) (a^b^c)
 
@@ -127,7 +127,7 @@ void whirlpool512_load_shared(uint2 sharedMemory[7][256])
 }
 
 /* Whirlpool-512 of a 64-byte input, in place (uint2 hash[8], d_hash word
- * order in and out) — body of x15_whirlpool_gpu_hash_64. */
+ * order in and out) — body of whirlpool512_gpu_hash_64. */
 __device__ __forceinline__
 void whirlpool512_hash_64(const uint2 sharedMemory[7][256], uint2 *const hash)
 {

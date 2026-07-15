@@ -19,7 +19,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "hoohash/hoohash_device.cuh"  // hoo_generateMatrix / hoo_matmul / bundled BLAKE3
+#include "algos/hoohash/hoohash_device.cuh"  // hoo_generateMatrix / hoo_matmul / bundled BLAKE3
 
 // 80-byte header (be32enc'd consensus serialization); mining kernel overwrites nonce @76..79.
 __constant__ uint8_t c_hoohash_header[80];

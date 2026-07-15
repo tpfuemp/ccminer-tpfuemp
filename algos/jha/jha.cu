@@ -154,10 +154,10 @@ extern "C" int scanhash_jha(int thr_id, struct work *work, uint32_t max_nonce, u
 		CUDA_SAFE_CALL(cudaMalloc(&d_tempBranch[thr_id], sizeof(uint32_t) * throughput));
 
 		jackpot_keccak512_cpu_init(thr_id, throughput);
-		quark_blake512_cpu_init(thr_id, throughput);
-		quark_groestl512_cpu_init(thr_id, throughput);
-		quark_jh512_cpu_init(thr_id, throughput);
-		quark_skein512_cpu_init(thr_id, throughput);
+		blake512_cpu_init(thr_id, throughput);
+		groestl512_cpu_init(thr_id, throughput);
+		jh512_cpu_init(thr_id, throughput);
+		skein512_cpu_init(thr_id, throughput);
 
 		cuda_check_cpu_init(thr_id, throughput);
 
@@ -178,13 +178,13 @@ extern "C" int scanhash_jha(int thr_id, struct work *work, uint32_t max_nonce, u
 		for (int rnd = 0; rnd < 3; rnd++)
 		{
 			jha_filter_cpu(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
-			quark_groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-			quark_skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash_br2[thr_id], order++);
+			groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+			skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash_br2[thr_id], order++);
 			jha_merge_cpu(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
 
 			jha_filter_cpu(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
-			quark_blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-			quark_jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash_br2[thr_id], order++);
+			blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+			jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash_br2[thr_id], order++);
 			jha_merge_cpu(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
 		}
 
@@ -254,8 +254,8 @@ extern "C" void free_jha(int thr_id)
 	cudaFree(d_hash_br2[thr_id]);
 	cudaFree(d_tempBranch[thr_id]);
 
-	quark_blake512_cpu_free(thr_id);
-	quark_groestl512_cpu_free(thr_id);
+	blake512_cpu_free(thr_id);
+	groestl512_cpu_free(thr_id);
 
 	cuda_check_cpu_free(thr_id);
 	CUDA_LOG_ERROR();

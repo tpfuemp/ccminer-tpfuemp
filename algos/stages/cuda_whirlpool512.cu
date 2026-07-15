@@ -93,7 +93,7 @@ static void ROUND_KSCHED(const uint64_t *in,uint64_t *out,const uint64_t c){
 extern bool whirlpool512_device_selftest(int thr_id);
 
 __host__
-void x15_whirlpool_cpu_init(int thr_id, uint32_t threads, int mode)
+void whirlpool512_cpu_init(int thr_id, uint32_t threads, int mode)
 {
 	whirlpool512_init_tables(mode);
 
@@ -219,7 +219,7 @@ void whirlpool512_setBlock_80(void *pdata, const void *ptarget)
 }
 
 __host__
-extern void x15_whirlpool_cpu_free(int thr_id)
+extern void whirlpool512_cpu_free(int thr_id)
 {
 	if (d_resNonce[thr_id])
 		cudaFree(d_resNonce[thr_id]);
@@ -520,7 +520,7 @@ void whirlpool512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce
 
 __global__
 __launch_bounds__(TPB64,2)
-void x15_whirlpool_gpu_hash_64(uint32_t threads, uint64_t *g_hash)
+void whirlpool512_gpu_hash_64(uint32_t threads, uint64_t *g_hash)
 {
 	__shared__ uint2 sharedMemory[7][256];
 
@@ -544,17 +544,35 @@ void x15_whirlpool_gpu_hash_64(uint32_t threads, uint64_t *g_hash)
 }
 
 __host__
-static void x15_whirlpool_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash)
+static void whirlpool512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash)
 {
 	dim3 grid((threads + TPB64-1) / TPB64);
 	dim3 block(TPB64);
 
-	x15_whirlpool_gpu_hash_64 <<<grid, block>>> (threads, (uint64_t*)d_hash);
+	whirlpool512_gpu_hash_64 <<<grid, block>>> (threads, (uint64_t*)d_hash);
 }
 
 __host__
-void x15_whirlpool_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
+void whirlpool512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
-	x15_whirlpool_cpu_hash_64(thr_id, threads, d_hash);
+	whirlpool512_cpu_hash_64(thr_id, threads, d_hash);
+}
+
+/* Legacy-name forwarders (x15 whirlpool) for the not-yet-migrated consumers
+ * (x17/skydoge/hmq17, x21s, ghostrider, evohash, bastion); each drops out as
+ * its family switches to the bare name. */
+__host__ void x15_whirlpool_cpu_init(int thr_id, uint32_t threads, int mode)
+{
+	whirlpool512_cpu_init(thr_id, threads, mode);
+}
+
+__host__ void x15_whirlpool_cpu_free(int thr_id)
+{
+	whirlpool512_cpu_free(thr_id);
+}
+
+__host__ void x15_whirlpool_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
+{
+	whirlpool512_cpu_hash_64(thr_id, threads, startNounce, d_nonceVector, d_hash, order);
 }
 

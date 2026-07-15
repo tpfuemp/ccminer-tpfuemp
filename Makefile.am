@@ -18,19 +18,19 @@ bin_PROGRAMS = ccminer
 ccminer_SOURCES	= elist.h miner.h compat.h \
 			  compat/inttypes.h compat/stdbool.h compat/unistd.h \
 			  compat/sys/time.h compat/getopt/getopt.h \
-			  crc32.c hefty1.c \
+			  crc32.c algos/heavy/hefty1.c \
 			  ccminer.cpp pools.cpp util.cpp bench.cpp bignum.cpp \
 			  api.cpp hashlog.cpp nvml.cpp stats.cpp sysinfos.cpp cuda.cpp \
 			  nvsettings.cpp \
 			  equi/equi-stratum.cpp equi/equi.cpp equi/blake2/blake2bx.cpp \
 			  equi/equihash.cpp equi/cuda_equi.cu \
-			  allium.cu \
+			  algos/allium/allium.cu \
 			  balloon/balloon.cpp balloon/balloon_scan.cpp \
 			  balloon/sha256-ref.c balloon/cuda_balloon.cu \
 			  balloon/balloon.h balloon/sha256.h \
 			  rinhash/rinhash_scanhash.cpp rinhash/rinhash.cu \
-			  hoohash/cuda_hoohashv110.cu hoohash/hoohash.cu \
-			  hoohash/hoohash_device.cuh \
+			  algos/hoohash/cuda_hoohashv110.cu algos/hoohash/hoohash.cu \
+			  algos/hoohash/hoohash_device.cuh \
 			  evohash/evohash.cu \
 			  odocrypt/odocrypt_host.cpp odocrypt/cuda_odocrypt.cu \
 			  heavyhash/heavyhash.cu \
@@ -63,8 +63,8 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  crypto/cryptolight.cu crypto/cryptolight-core.cu crypto/cryptolight-cpu.cpp \
 			  crypto/cryptonight.cu crypto/cryptonight-core.cu crypto/cryptonight-extra.cu \
 			  crypto/cryptonight-cpu.cpp crypto/oaes_lib.cpp crypto/aesb.cpp crypto/cpu/c_keccak.c \
-			  JHA/jha.cu JHA/jackpotcoin.cu JHA/cuda_jha_keccak512.cu \
-			  JHA/cuda_jha_compactionTest.cu cuda_checkhash.cu \
+			  algos/jha/jha.cu algos/jha/jackpotcoin.cu algos/stages/cuda_jha_keccak512.cu \
+			  algos/jha/cuda_jha_compactionTest.cu cuda_checkhash.cu \
 			  algos/stages/cuda_jh512.cu algos/stages/cuda_blake512.cu algos/stages/cuda_groestl512.cu algos/stages/cuda_skein512.cu \
 			  algos/stages/cuda_bmw512.cu algos/stages/cuda_keccak512.cu \
 			  algos/quark/animecoin.cu algos/quark/nist5.cu \
@@ -92,16 +92,17 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  sph/shabal.c sph/whirlpool.c sph/sha2big.c sph/haval.c \
 			  sph/ripemd.c sph/sph_sha2.c sph/sha3d.c sph/sha3.c \
 			  algos/polytimos/polytimos.cu \
-			  lbry/lbry.cu lbry/cuda_sha256_lbry.cu lbry/cuda_sha512_lbry.cu lbry/cuda_lbry_merged.cu \
+			  algos/lbry/lbry.cu algos/lbry/cuda_lbry_merged.cu \
 			  algos/qubit/qubit.cu algos/qubit/deep.cu algos/qubit/luffa.cu \
 			  algos/tribus/tribus.cu algos/stages/cuda_echo512_final.cu \
 			  algos/x11/x11.cu algos/x11/fresh.cu algos/stages/cuda_luffa512.cu algos/stages/cuda_luffa512_80.cu algos/stages/cuda_cubehash512.cu algos/stages/cuda_cubehash512_80.cu \
 			  algos/stages/cuda_shavite512_legacy.cu algos/stages/cuda_shavite512.cu algos/stages/cuda_simd512.cu algos/stages/cuda_echo512_compat.cu \
 			  algos/stages/cuda_luffaCubehash512.cu algos/x11/x11evo.cu algos/x11/timetravel.cu algos/x11/bitcore.cu \
-			  x13/x13.cu x13/cuda_x13_hamsi512.cu x13/cuda_x13_fugue512.cu \
-			  x13/hsr.cu x13/cuda_hsr_sm3.cu x13/sm3.c \
-			  x15/x14.cu x15/x15.cu x15/cuda_x14_shabal512.cu x15/cuda_x15_whirlpool.cu \
-			  x15/whirlpool.cu x15/cuda_x15_whirlpool_sm3.cu \
+			  algos/x13/x13.cu algos/stages/cuda_hamsi512.cu algos/stages/cuda_fugue512.cu \
+			  algos/hsr/hsr.cu algos/hsr/cuda_hsr_sm3.cu algos/hsr/sm3.c \
+			  algos/x15/x14.cu algos/x15/x15.cu algos/stages/cuda_shabal512.cu algos/stages/cuda_whirlpool512.cu \
+			  algos/stages/cuda_whirlpool512_80.cu \
+			  algos/x15/whirlpool.cu \
 			  algos/x16/x16r.cu algos/x16/x16rv2.cu algos/x16/x16s.cu algos/stages/cuda_echo512_80.cu algos/stages/cuda_fugue512_80.cu \
 			  algos/stages/cuda_shabal512_80.cu algos/stages/cuda_shavite512_80.cu algos/stages/cuda_simd512_80.cu \
 			  algos/stages/cuda_echo512_64.cu algos/common/cuda_x_fused.cu \
@@ -162,7 +163,7 @@ lyra2/cuda_lyra2.o: lyra2/cuda_lyra2.cu
 
 # HoohashV110 device TU: consensus-critical strict FP (must match the glibc oracle).
 # No fast-math; disable FMA contraction; precise div/sqrt; no flush-to-zero.
-hoohash/cuda_hoohashv110.o: hoohash/cuda_hoohashv110.cu
+algos/hoohash/cuda_hoohashv110.o: algos/hoohash/cuda_hoohashv110.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=128 --fmad=false --prec-div=true --prec-sqrt=true --ftz=false -o $@ -c $<
 
 Algo256/blake256.o: Algo256/blake256.cu
@@ -193,7 +194,7 @@ algos/stages/cuda_luffaCubehash512.o: algos/stages/cuda_luffaCubehash512.cu
 algos/stages/cuda_simd512.o: algos/stages/cuda_simd512.cu
 	$(NVCC) $(nvcc_FLAGS) -Xcompiler -Wno-unused-variable -o $@ -c $<
 
-x13/cuda_x13_hamsi512.o: x13/cuda_x13_hamsi512.cu
+algos/stages/cuda_hamsi512.o: algos/stages/cuda_hamsi512.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=72 -o $@ -c $<
 
 x17/cuda_x17_sha512.o: x17/cuda_x17_sha512.cu
@@ -211,7 +212,7 @@ algos/stages/cuda_keccak512.o: algos/stages/cuda_keccak512.cu
 algos/stages/cuda_quark_compactionTest.o: algos/stages/cuda_quark_compactionTest.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
-JHA/cuda_jha_compactionTest.o: JHA/cuda_jha_compactionTest.cu
+algos/jha/cuda_jha_compactionTest.o: algos/jha/cuda_jha_compactionTest.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
 

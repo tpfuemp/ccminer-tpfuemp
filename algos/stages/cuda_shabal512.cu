@@ -47,7 +47,7 @@
 
 /***************************************************/
 // GPU Hash Function
-__global__ void x14_shabal512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t *g_hash, uint32_t *g_nonceVector)
+__global__ void shabal512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t *g_hash, uint32_t *g_nonceVector)
 {
 	__syncthreads();
 
@@ -67,12 +67,12 @@ __global__ void x14_shabal512_gpu_hash_64(uint32_t threads, uint32_t startNounce
  * layer 1), defined in cuda/xfamily_selftest.cu. */
 extern bool shabal512_device_selftest(int thr_id);
 
-__host__ void x14_shabal512_cpu_init(int thr_id, uint32_t threads)
+__host__ void shabal512_cpu_init(int thr_id, uint32_t threads)
 {
 	shabal512_device_selftest(thr_id);
 }
 
-__host__ void x14_shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
+__host__ void shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
 	const uint32_t threadsperblock = 256;
 
@@ -82,5 +82,18 @@ __host__ void x14_shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t s
 
 	size_t shared_size = 0;
 
-	x14_shabal512_gpu_hash_64<<<grid, block, shared_size>>>(threads, startNounce, (uint64_t*)d_hash, d_nonceVector);
+	shabal512_gpu_hash_64<<<grid, block, shared_size>>>(threads, startNounce, (uint64_t*)d_hash, d_nonceVector);
+}
+
+/* Legacy-name forwarders (x14 shabal) for the not-yet-migrated consumers
+ * (x17/skydoge/hmq17, x21s, ghostrider, evohash, bastion); each drops out as
+ * its family switches to the bare name. */
+__host__ void x14_shabal512_cpu_init(int thr_id, uint32_t threads)
+{
+	shabal512_cpu_init(thr_id, threads);
+}
+
+__host__ void x14_shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
+{
+	shabal512_cpu_hash_64(thr_id, threads, startNounce, d_nonceVector, d_hash, order);
 }

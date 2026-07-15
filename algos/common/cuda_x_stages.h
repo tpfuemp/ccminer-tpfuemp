@@ -35,10 +35,12 @@ extern void tiger192_cpu_hash_64(int thr_id, int threads, int zero_pad_64, uint3
  * their bare <prim>512_cpu_* names (real symbols in algos/stages/); those bare
  * declarations come in via quark/cuda_quark.h (included through x11/cuda_x11.h
  * above), which also keeps quark_<prim>512_cpu_* aliases for the not-yet-migrated
- * legacy callers. The launchers below (luffa/cubehash/shavite/simd/echo/hamsi/
- * fugue/shabal/whirlpool/sha512) still carry their originating family's prefix
- * because their defining TUs have not moved yet; each alias forwards to the
- * current real symbol and drops out when that family migrates. */
+ * legacy callers. Most launchers below (luffa/cubehash/shavite/simd/echo/hamsi/
+ * fugue/shabal/whirlpool) are already bare real symbols too; the last one that
+ * still carries an originating-family prefix (sha512 = x17_) keeps it because
+ * the x17 family that defines it has not migrated yet. Every prefixed name is a
+ * thin forwarder to the current real symbol and drops out when that family
+ * migrates. */
 /* luffa + cubehash: bare names are the real symbols (algos/stages/, layout B);
  * x11_* forwarders (in x11/cuda_x11.h) stay for the not-yet-migrated consumers.
  * (cubehash has no cpu_init — the self-test runs from the hash launcher.) */
@@ -61,16 +63,25 @@ void simd512_cpu_free(int thr_id);
  * only on arch < 500 (below the sm_61 build floor) is demoted to *_compat */
 #define echo512_cpu_init_compat  x11_echo512_cpu_init
 #define echo512_cpu_hash_64_compat x11_echo512_cpu_hash_64
-#define hamsi512_cpu_init        x13_hamsi512_cpu_init
-#define hamsi512_cpu_hash_64     x13_hamsi512_cpu_hash_64
-#define fugue512_cpu_init        x13_fugue512_cpu_init
-#define fugue512_cpu_hash_64     x13_fugue512_cpu_hash_64
-#define fugue512_cpu_free        x13_fugue512_cpu_free
-#define shabal512_cpu_init       x14_shabal512_cpu_init
-#define shabal512_cpu_hash_64    x14_shabal512_cpu_hash_64
-#define whirlpool512_cpu_init    x15_whirlpool_cpu_init
-#define whirlpool512_cpu_hash_64 x15_whirlpool_cpu_hash_64
-#define whirlpool512_cpu_free    x15_whirlpool_cpu_free
+/* hamsi + fugue: bare names are the real symbols (algos/stages/, layout B);
+ * the x13_hamsi512_* / x13_fugue512_* forwarders (declared above) stay for the
+ * not-yet-migrated consumers (x17/skydoge/hmq17, x21s, ghostrider, evohash,
+ * bastion). (fugue512_cpu_init/free here are the 64-byte fugue; the 80-byte
+ * fugue keeps its own x16_fugue512_cpu_init/free below.) */
+void hamsi512_cpu_init(int thr_id, uint32_t threads);
+void hamsi512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+void fugue512_cpu_init(int thr_id, uint32_t threads);
+void fugue512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+void fugue512_cpu_free(int thr_id);
+/* shabal + whirlpool: bare names are the real symbols (algos/stages/, layout B);
+ * the x14_shabal512_* / x15_whirlpool_* forwarders (declared above) stay for
+ * the not-yet-migrated consumers (x17/skydoge/hmq17, x21s, ghostrider, evohash,
+ * bastion). */
+void shabal512_cpu_init(int thr_id, uint32_t threads);
+void shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+void whirlpool512_cpu_init(int thr_id, uint32_t threads, int mode);
+void whirlpool512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+void whirlpool512_cpu_free(int thr_id);
 #define sha512_cpu_init          x17_sha512_cpu_init
 #define sha512_cpu_hash_64       x17_sha512_cpu_hash_64
 

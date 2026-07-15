@@ -63,14 +63,6 @@ extern "C" void lbry_hash(void* output, const void* input)
 
 /* ############################################################################################################################### */
 
-extern void lbry_sha256_init(int thr_id);
-extern void lbry_sha256_free(int thr_id);
-extern void lbry_sha256_setBlock_112(uint32_t *pdata);
-extern void lbry_sha256d_hash_112(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_outputHash);
-extern void lbry_sha512_init(int thr_id);
-extern void lbry_sha512_hash_32(int thr_id, uint32_t threads, uint32_t *d_hash);
-extern void lbry_sha256d_hash_final(int thr_id, uint32_t threads, uint32_t *d_inputHash, uint32_t *d_resNonce, const uint64_t target64);
-
 extern void lbry_sha256_setBlock_112_merged(uint32_t *pdata);
 extern void lbry_merged(int thr_id,uint32_t startNonce, uint32_t threads, uint32_t *d_resNonce, const uint64_t target64);
 
@@ -80,7 +72,6 @@ static __inline uint32_t swab32_if(uint32_t val, bool iftrue) {
 
 static bool init[MAX_GPUS] = { 0 };
 
-static uint32_t *d_hash[MAX_GPUS];
 static uint32_t *d_resNonce[MAX_GPUS];
 // nonce position is different
 #define LBC_NONCE_OFT32 27
@@ -95,7 +86,7 @@ extern "C" int scanhash_lbry(int thr_id, struct work *work, uint32_t max_nonce, 
 	const int swap = 0; // to toggle nonce endian (need kernel change)
 
 	const int dev_id = device_map[thr_id];
-	const bool merged_kernel = (device_sm[dev_id] > 500);
+	// LBRY runs the single fused kernel; it requires SM > 5.0 (the build floor is sm_61).
 
 	int intensity = (device_sm[dev_id] > 500 && !is_windows()) ? 22 : 20;
 	if (device_sm[dev_id] >= 600) intensity = 23;
@@ -126,9 +117,6 @@ extern "C" int scanhash_lbry(int thr_id, struct work *work, uint32_t max_nonce, 
 			proper_exit(EXIT_FAILURE);
 		}
 
-		if (!merged_kernel)
-			CUDA_SAFE_CALL(cudaMalloc(&d_hash[thr_id], (size_t)64 * throughput));
-
 		CUDA_SAFE_CALL(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)));
 		CUDA_LOG_ERROR();
 
@@ -139,24 +127,15 @@ extern "C" int scanhash_lbry(int thr_id, struct work *work, uint32_t max_nonce, 
 		be32enc(&endiandata[i], pdata[i]);
 	}
 
-	if (merged_kernel)
-		lbry_sha256_setBlock_112_merged(endiandata);
-	else
-		lbry_sha256_setBlock_112(endiandata);
+	lbry_sha256_setBlock_112_merged(endiandata);
 
 	cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
 
 	do {
 		uint32_t resNonces[2] = { UINT32_MAX, UINT32_MAX };
 
-		// Hash with CUDA
-		if (merged_kernel) {
-			lbry_merged(thr_id, pdata[LBC_NONCE_OFT32], throughput, d_resNonce[thr_id], AS_U64(&ptarget[6]));
-		} else {
-			lbry_sha256d_hash_112(thr_id, throughput, pdata[LBC_NONCE_OFT32], d_hash[thr_id]);
-			lbry_sha512_hash_32(thr_id, throughput, d_hash[thr_id]);
-			lbry_sha256d_hash_final(thr_id, throughput, d_hash[thr_id], d_resNonce[thr_id], AS_U64(&ptarget[6]));
-		}
+		// Hash with CUDA (single fused kernel)
+		lbry_merged(thr_id, pdata[LBC_NONCE_OFT32], throughput, d_resNonce[thr_id], AS_U64(&ptarget[6]));
 
 		*hashes_done = pdata[LBC_NONCE_OFT32] - first_nonce + throughput;
 
@@ -230,9 +209,6 @@ void free_lbry(int thr_id)
 		return;
 
 	cudaDeviceSynchronize();
-
-	if(device_sm[device_map[thr_id]] <= 500)
-		cudaFree(d_hash[thr_id]);
 
 	cudaFree(d_resNonce[thr_id]);
 

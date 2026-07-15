@@ -242,7 +242,11 @@ void lbry_sha256_setBlock_112_merged(uint32_t *pdata)
 	x2_1 = (ROTR32(end[7], 17) ^ ROTR32(end[7], 19) ^ SPH_T32(end[7] >> 10)) + x2_0;
 	end[9] = end[9] + x2_1;
 
-	cudaMemcpyToSymbol(c_dataEnd112,  end, sizeof(end), 0, cudaMemcpyHostToDevice);
+	/* copy only the 12 words the kernel reads; c_dataEnd112 is uint32_t[12] (48B),
+	 * whereas the local end[] is 16 words — copying sizeof(end) (64B) overflows the
+	 * symbol and CUDA 11.8 rejects it with cudaErrorInvalidValue ("invalid argument"),
+	 * leaving c_dataEnd112 unset so the fused kernel hashed garbage. */
+	cudaMemcpyToSymbol(c_dataEnd112,  end, sizeof(c_dataEnd112), 0, cudaMemcpyHostToDevice);
 }
 
 //END OF HOST FUNCTIONS -------------------------------------------------------------------

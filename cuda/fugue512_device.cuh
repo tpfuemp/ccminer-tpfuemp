@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /*
  * Shared Fugue-512 primitive library (device side) — x-family stage
- * function. Extracted bit-identically from x13/cuda_x13_fugue512.cu
+ * function. Extracted bit-identically from algos/stages/cuda_fugue512.cu
  * (sph fugue lineage). The mixtab source table is a static __constant__
  * here; the donor's texture binding (mixTab0Tex) is gone — the shared-
  * memory fill reads constant memory instead (same values, fill runs once

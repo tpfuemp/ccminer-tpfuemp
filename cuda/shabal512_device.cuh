@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /*
  * Shared Shabal-512 primitive library (device side) — x-family stage
- * function. Extracted bit-identically from x15/cuda_x14_shabal512.cu
+ * function. Extracted bit-identically from algos/stages/cuda_shabal512.cu
  * (sph shabal.c lineage, the auto-generated permutation part). Constants
  * are statically initialized (per-TU header __constant__).
  *
@@ -256,7 +256,7 @@ uint32_t c_shabal_C512[] = {
 /***************************************************/
 
 /* Shabal-512 of a 64-byte input, in place, d_hash word order in and out —
- * the donor x14_shabal512_gpu_hash_64 kernel's interior, verbatim. */
+ * the donor shabal512_gpu_hash_64 kernel's interior, verbatim. */
 __device__ __forceinline__
 void shabal512_hash_64(uint32_t *Hash)
 {
