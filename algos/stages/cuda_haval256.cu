@@ -259,7 +259,7 @@
 }
 
 __global__ /* __launch_bounds__(256, 6) */
-void x17_haval256_gpu_hash_64(const uint32_t threads, uint64_t *g_hash, const int outlen)
+void haval256_gpu_hash_64(const uint32_t threads, uint64_t *g_hash, const int outlen)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
@@ -335,17 +335,17 @@ void x17_haval256_gpu_hash_64(const uint32_t threads, uint64_t *g_hash, const in
 }
 
 __host__
-void x17_haval256_cpu_init(int thr_id, uint32_t threads)
+void haval256_cpu_init(int thr_id, uint32_t threads)
 {
 }
 
 __host__
-void x17_haval256_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash, const int outlen)
+void haval256_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash, const int outlen)
 {
 	const uint32_t threadsperblock = 256;
 
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
 	dim3 block(threadsperblock);
 
-	x17_haval256_gpu_hash_64 <<<grid, block>>> (threads, (uint64_t*)d_hash, outlen);
+	haval256_gpu_hash_64 <<<grid, block>>> (threads, (uint64_t*)d_hash, outlen);
 }

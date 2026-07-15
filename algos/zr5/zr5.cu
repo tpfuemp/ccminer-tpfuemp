@@ -314,19 +314,19 @@ extern void jackpot_keccak512_cpu_setBlock(void *pdata, size_t inlen);
 extern void zr5_keccak512_cpu_hash(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash);
 extern void zr5_keccak512_cpu_hash_pok(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t* pdata, uint32_t *d_hash, uint16_t *d_poks);
 
-extern void quark_blake512_cpu_init(int thr_id, uint32_t threads);
-extern void quark_blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
-extern void quark_blake512_cpu_free(int thr_id);
+extern void blake512_cpu_init(int thr_id, uint32_t threads);
+extern void blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+extern void blake512_cpu_free(int thr_id);
 
-extern void quark_groestl512_cpu_init(int thr_id, uint32_t threads);
-extern void quark_groestl512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
-extern void quark_groestl512_cpu_free(int thr_id);
+extern void groestl512_cpu_init(int thr_id, uint32_t threads);
+extern void groestl512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+extern void groestl512_cpu_free(int thr_id);
 
-extern void quark_jh512_cpu_init(int thr_id, uint32_t threads);
-extern void quark_jh512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+extern void jh512_cpu_init(int thr_id, uint32_t threads);
+extern void jh512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 
-extern void quark_skein512_cpu_init(int thr_id, uint32_t threads);
-extern void quark_skein512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+extern void skein512_cpu_init(int thr_id, uint32_t threads);
+extern void skein512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 
 static bool init[MAX_GPUS] = { 0 };
 
@@ -378,10 +378,10 @@ extern "C" int scanhash_zr5(int thr_id, struct work *work,
 
 		jackpot_keccak512_cpu_init(thr_id, throughput);
 
-		quark_blake512_cpu_init(thr_id, throughput);
-		quark_groestl512_cpu_init(thr_id, throughput);
-		quark_jh512_cpu_init(thr_id, throughput);
-		quark_skein512_cpu_init(thr_id, throughput);
+		blake512_cpu_init(thr_id, throughput);
+		groestl512_cpu_init(thr_id, throughput);
+		jh512_cpu_init(thr_id, throughput);
+		skein512_cpu_init(thr_id, throughput);
 
 		cuda_check_cpu_init(thr_id, throughput);
 
@@ -404,10 +404,10 @@ extern "C" int scanhash_zr5(int thr_id, struct work *work,
 		for (int rnd=0; rnd<4; rnd++) {
 			if (rnd > 0)
 				zr5_move_data_to_hash(thr_id, throughput, rnd);
-			quark_blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_blake[thr_id], order++);
-			quark_groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_groes[thr_id], order++);
-			quark_jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_jh512[thr_id], order++);
-			quark_skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_skein[thr_id], order++);
+			blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_blake[thr_id], order++);
+			groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_groes[thr_id], order++);
+			jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_jh512[thr_id], order++);
+			skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_skein[thr_id], order++);
 		}
 
 		// store on device d_poks all hash[0] prefixes
@@ -420,10 +420,10 @@ extern "C" int scanhash_zr5(int thr_id, struct work *work,
 		for (int rnd=0; rnd<4; rnd++) {
 			if (rnd > 0)
 				zr5_move_data_to_hash(thr_id, throughput, rnd);
-			quark_blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_blake[thr_id], order++);
-			quark_groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_groes[thr_id], order++);
-			quark_jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_jh512[thr_id], order++);
-			quark_skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_skein[thr_id], order++);
+			blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_blake[thr_id], order++);
+			groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_groes[thr_id], order++);
+			jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_jh512[thr_id], order++);
+			skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_skein[thr_id], order++);
 		}
 		zr5_final_round(thr_id, throughput);
 
@@ -505,8 +505,8 @@ extern "C" void free_zr5(int thr_id)
 
 	cudaFree(d_txs[thr_id]);
 
-	quark_blake512_cpu_free(thr_id);
-	quark_groestl512_cpu_free(thr_id);
+	blake512_cpu_free(thr_id);
+	groestl512_cpu_free(thr_id);
 	cuda_check_cpu_free(thr_id);
 	init[thr_id] = false;
 

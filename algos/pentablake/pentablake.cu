@@ -40,11 +40,11 @@ extern "C" void pentablakehash(void *output, const void *input)
 
 static uint32_t *d_hash[MAX_GPUS];
 
-extern void quark_blake512_cpu_init(int thr_id, uint32_t threads);
-extern void quark_blake512_cpu_free(int thr_id);
-extern void quark_blake512_cpu_setBlock_80(int thr_id, uint32_t *pdata);
-extern void quark_blake512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash);
-extern void quark_blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+extern void blake512_cpu_init(int thr_id, uint32_t threads);
+extern void blake512_cpu_free(int thr_id);
+extern void blake512_cpu_setBlock_80(int thr_id, uint32_t *pdata);
+extern void blake512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash);
+extern void blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 
 static bool init[MAX_GPUS] = { 0 };
 
@@ -73,7 +73,7 @@ extern "C" int scanhash_pentablake(int thr_id, struct work *work, uint32_t max_n
 
 		CUDA_SAFE_CALL(cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput));
 
-		quark_blake512_cpu_init(thr_id, throughput);
+		blake512_cpu_init(thr_id, throughput);
 		cuda_check_cpu_init(thr_id, throughput);
 		CUDA_LOG_ERROR();
 
@@ -83,18 +83,18 @@ extern "C" int scanhash_pentablake(int thr_id, struct work *work, uint32_t max_n
 	for (int k=0; k < 20; k++)
 		be32enc(&endiandata[k], pdata[k]);
 
-	quark_blake512_cpu_setBlock_80(thr_id, endiandata);
+	blake512_cpu_setBlock_80(thr_id, endiandata);
 	cuda_check_cpu_setTarget(ptarget);
 
 	do {
 		int order = 0;
 
 		// GPU HASH
-		quark_blake512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id]); order++;
-		quark_blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		quark_blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		quark_blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		quark_blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		blake512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id]); order++;
+		blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
 
@@ -153,7 +153,7 @@ void free_pentablake(int thr_id)
 
 	cudaFree(d_hash[thr_id]);
 
-	quark_blake512_cpu_free(thr_id);
+	blake512_cpu_free(thr_id);
 	cuda_check_cpu_free(thr_id);
 
 	cudaDeviceSynchronize();

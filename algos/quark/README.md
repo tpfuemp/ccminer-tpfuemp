@@ -24,7 +24,8 @@ the ~40 legacy callers across the family (x13/x15/x17/tribus/JHA) and standalone
 algos (zr5, skein, pentablake, bastion, Algo256/bmw512) keep linking to the
 `quark_*` names unchanged. Renaming these shared symbols to bare form is the
 family-wide naming pass, deferred until the remaining families migrate.
-`quark/cuda_quark.h` stays (still directly included by JHA and `x11/cuda_x11.h`).
+`algos/stages/cuda_quark.h` stays (still directly included by JHA and the shared
+`algos/common/cuda_x_stages.h` bridge).
 
 ## Branching vs. fusion
 

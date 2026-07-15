@@ -9,7 +9,7 @@ extern "C"
 
 #include "miner.h"
 #include "cuda_helper.h"
-#include "quark/cuda_quark.h"
+#include "algos/stages/cuda_quark.h"
 
 static uint32_t *d_hash[MAX_GPUS] = { 0 };
 

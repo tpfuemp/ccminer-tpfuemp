@@ -4,7 +4,7 @@ extern "C" {
 #include "sph/sph_cubehash.h"
 #include "sph/sph_skein.h"
 #include "sph/sph_groestl.h"
-#include "lyra2/Lyra2.h"
+#include "algos/lyra2/Lyra2.h"
 }
 
 #include <miner.h>

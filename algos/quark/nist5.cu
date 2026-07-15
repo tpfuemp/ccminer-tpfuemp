@@ -10,7 +10,7 @@ extern "C"
 #include "miner.h"
 
 #include "cuda_helper.h"
-#include "quark/cuda_quark.h"
+#include "algos/stages/cuda_quark.h"
 
 static uint32_t *d_hash[MAX_GPUS];
 
@@ -75,11 +75,11 @@ extern "C" int scanhash_nist5(int thr_id, struct work *work, uint32_t max_nonce,
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
 		// Constants copy/init (no device alloc in these algos)
-		quark_blake512_cpu_init(thr_id, throughput);
-		quark_groestl512_cpu_init(thr_id, throughput);
-		quark_jh512_cpu_init(thr_id, throughput);
-		quark_keccak512_cpu_init(thr_id, throughput);
-		quark_skein512_cpu_init(thr_id, throughput);
+		blake512_cpu_init(thr_id, throughput);
+		groestl512_cpu_init(thr_id, throughput);
+		jh512_cpu_init(thr_id, throughput);
+		keccak512_cpu_init(thr_id, throughput);
+		skein512_cpu_init(thr_id, throughput);
 
 		// char[64] work space for hashes results
 		CUDA_SAFE_CALL(cudaMalloc(&d_hash[thr_id], (size_t)64 * throughput));
@@ -97,7 +97,7 @@ extern "C" int scanhash_nist5(int thr_id, struct work *work, uint32_t max_nonce,
 	for (int k=0; k < 20; k++)
 		be32enc(&endiandata[k], pdata[k]);
 
-	quark_blake512_cpu_setBlock_80(thr_id, endiandata);
+	blake512_cpu_setBlock_80(thr_id, endiandata);
 	cuda_check_cpu_setTarget(ptarget);
 
 	work->valid_nonces = 0;
@@ -106,11 +106,11 @@ extern "C" int scanhash_nist5(int thr_id, struct work *work, uint32_t max_nonce,
 		int order = 0;
 
 		// Hash with CUDA
-		quark_blake512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id]); order++;
-		quark_groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		quark_jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		quark_keccak512_cpu_hash_64(thr_id, throughput, NULL, d_hash[thr_id]); order++;
-		quark_skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		blake512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id]); order++;
+		groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		keccak512_cpu_hash_64(thr_id, throughput, NULL, d_hash[thr_id]); order++;
+		skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
 
@@ -175,8 +175,8 @@ extern "C" void free_nist5(int thr_id)
 
 	cudaFree(d_hash[thr_id]);
 
-	quark_blake512_cpu_free(thr_id);
-	quark_groestl512_cpu_free(thr_id);
+	blake512_cpu_free(thr_id);
+	groestl512_cpu_free(thr_id);
 	cuda_check_cpu_free(thr_id);
 	init[thr_id] = false;
 

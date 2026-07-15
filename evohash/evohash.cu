@@ -17,7 +17,7 @@ extern "C" {
 #include "sph/sph_fugue.h"
 #include "sph/sph_whirlpool.h"
 #include "sph/sph_shabal.h"
-#include "lyra2/Lyra2.h"
+#include "algos/lyra2/Lyra2.h"
 }
 
 #include "miner.h"

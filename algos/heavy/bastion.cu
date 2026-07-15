@@ -13,28 +13,27 @@ static uint32_t *d_hash[MAX_GPUS];
 static uint32_t* d_hash_br1[MAX_GPUS];
 static uint32_t* d_hash_br2[MAX_GPUS];
 
-extern void quark_skein512_cpu_init(int thr_id, uint32_t threads);
-extern void quark_skein512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+extern void skein512_cpu_init(int thr_id, uint32_t threads);
+extern void skein512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 
-extern void x11_luffa512_cpu_init(int thr_id, uint32_t threads);
-extern void x11_luffa512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+extern void luffa512_cpu_init(int thr_id, uint32_t threads);
+extern void luffa512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 
-extern void x13_hamsi512_cpu_init(int thr_id, uint32_t threads);
-extern void x13_hamsi512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+extern void hamsi512_cpu_init(int thr_id, uint32_t threads);
+extern void hamsi512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 
-extern void x13_fugue512_cpu_init(int thr_id, uint32_t threads);
-extern void x13_fugue512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
-extern void x13_fugue512_cpu_free(int thr_id);
+extern void fugue512_cpu_init(int thr_id, uint32_t threads);
+extern void fugue512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+extern void fugue512_cpu_free(int thr_id);
 
-extern void x14_shabal512_cpu_init(int thr_id, uint32_t threads);
-extern void x14_shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+extern void shabal512_cpu_init(int thr_id, uint32_t threads);
+extern void shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 
-extern void x15_whirlpool_cpu_init(int thr_id, uint32_t threads, int mode);
-extern void x15_whirlpool_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
-extern void x15_whirlpool_cpu_free(int thr_id);
+extern void whirlpool512_cpu_init(int thr_id, uint32_t threads, int mode);
+extern void whirlpool512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+extern void whirlpool512_cpu_free(int thr_id);
 
-extern void x11_echo512_cpu_init(int thr_id, uint32_t threads);
-extern void x11_echo512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+extern void echo512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash); // alexis 64-byte echo (no cpu_init)
 
 extern void bastion_init(const int thr_id, const uint32_t threads);
 extern void bastion_free(const int thr_id);
@@ -82,14 +81,13 @@ int scanhash_bastion(int thr_id, struct work *work, uint32_t max_nonce, unsigned
 
 		bastion_init(thr_id, throughput);
 		hefty_cpu_init(thr_id, throughput);
-		x11_luffa512_cpu_init(thr_id, throughput);
+		luffa512_cpu_init(thr_id, throughput);
 
-		quark_skein512_cpu_init(thr_id, throughput);
-		x13_hamsi512_cpu_init(thr_id, throughput);
-		x13_fugue512_cpu_init(thr_id, throughput);
-		x14_shabal512_cpu_init(thr_id, throughput);
-		x15_whirlpool_cpu_init(thr_id, throughput, 0);
-		x11_echo512_cpu_init(thr_id, throughput);
+		skein512_cpu_init(thr_id, throughput);
+		hamsi512_cpu_init(thr_id, throughput);
+		fugue512_cpu_init(thr_id, throughput);
+		shabal512_cpu_init(thr_id, throughput);
+		whirlpool512_cpu_init(thr_id, throughput, 0);
 
 		cuda_check_cpu_init(thr_id, throughput);
 
@@ -113,43 +111,43 @@ int scanhash_bastion(int thr_id, struct work *work, uint32_t max_nonce, unsigned
 		hefty_copy_hashes(thr_id, throughput, d_hash[thr_id]);
 		TRACE("hefty  :");
 
-		x11_luffa512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		luffa512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 		TRACE("luffa  :");
 
 		// fugue or skein
 		branchNonces = bastion_filter2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
-		x13_fugue512_cpu_hash_64(thr_id, branchNonces, pdata[19], NULL, d_hash_br1[thr_id], order++);
-		quark_skein512_cpu_hash_64(thr_id, throughput-branchNonces, pdata[19], NULL, d_hash_br2[thr_id], order++);
+		fugue512_cpu_hash_64(thr_id, branchNonces, pdata[19], NULL, d_hash_br1[thr_id], order++);
+		skein512_cpu_hash_64(thr_id, throughput-branchNonces, pdata[19], NULL, d_hash_br2[thr_id], order++);
 		bastion_merge2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
 		TRACE("perm1  :");
 
-		x15_whirlpool_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		whirlpool512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 		TRACE("whirl  :");
-		x13_fugue512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		fugue512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 
 		// echo or luffa
 		branchNonces = bastion_filter2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
-		x11_echo512_cpu_hash_64(thr_id, branchNonces, pdata[19], NULL, d_hash_br1[thr_id], order++);
-		x11_luffa512_cpu_hash_64(thr_id, throughput-branchNonces, pdata[19], NULL, d_hash_br2[thr_id], order++);
+		echo512_cpu_hash_64(thr_id, branchNonces, d_hash_br1[thr_id]); order++;
+		luffa512_cpu_hash_64(thr_id, throughput-branchNonces, pdata[19], NULL, d_hash_br2[thr_id], order++);
 		bastion_merge2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
 		TRACE("perm2  :");
 
-		x14_shabal512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		quark_skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		shabal512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 
 		// shabal or whirlpool
 		branchNonces = bastion_filter2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
-		x14_shabal512_cpu_hash_64(thr_id, branchNonces, pdata[19], NULL, d_hash_br1[thr_id], order++);
-		x15_whirlpool_cpu_hash_64(thr_id, throughput-branchNonces, pdata[19], NULL, d_hash_br2[thr_id], order++);
+		shabal512_cpu_hash_64(thr_id, branchNonces, pdata[19], NULL, d_hash_br1[thr_id], order++);
+		whirlpool512_cpu_hash_64(thr_id, throughput-branchNonces, pdata[19], NULL, d_hash_br2[thr_id], order++);
 		bastion_merge2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
 		TRACE("perm3  :");
 
-		x14_shabal512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		shabal512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 
 		// hamsi or luffa
 		branchNonces = bastion_filter2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
-		x13_hamsi512_cpu_hash_64(thr_id, branchNonces, pdata[19], NULL, d_hash_br1[thr_id], order++);
-		x11_luffa512_cpu_hash_64(thr_id, throughput-branchNonces, pdata[19], NULL, d_hash_br2[thr_id], order++);
+		hamsi512_cpu_hash_64(thr_id, branchNonces, pdata[19], NULL, d_hash_br1[thr_id], order++);
+		luffa512_cpu_hash_64(thr_id, throughput-branchNonces, pdata[19], NULL, d_hash_br2[thr_id], order++);
 		bastion_merge2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
 		TRACE("perm4  :");
 
@@ -219,8 +217,8 @@ extern "C" void free_bastion(int thr_id)
 	cudaFree(d_hash_br2[thr_id]);
 
 	hefty_cpu_free(thr_id);
-	x13_fugue512_cpu_free(thr_id);
-	x15_whirlpool_cpu_free(thr_id);
+	fugue512_cpu_free(thr_id);
+	whirlpool512_cpu_free(thr_id);
 
 	bastion_free(thr_id);
 	cuda_check_cpu_free(thr_id);

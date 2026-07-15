@@ -38,7 +38,7 @@
 
 __global__
 /*__launch_bounds__(256, 4)*/
-void x17_sha512_gpu_hash_64(const uint32_t threads, uint64_t *g_hash)
+void sha512_gpu_hash_64(const uint32_t threads, uint64_t *g_hash)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
@@ -55,20 +55,20 @@ void x17_sha512_gpu_hash_64(const uint32_t threads, uint64_t *g_hash)
 extern bool sha512x_device_selftest(int thr_id);
 
 __host__
-void x17_sha512_cpu_init(int thr_id, uint32_t threads)
+void sha512_cpu_init(int thr_id, uint32_t threads)
 {
 	sha512x_device_selftest(thr_id);
 }
 
 __host__
-void x17_sha512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash)
+void sha512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash)
 {
 	const uint32_t threadsperblock = 256;
 
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
 	dim3 block(threadsperblock);
 
-	x17_sha512_gpu_hash_64 <<<grid, block>>> (threads, (uint64_t*)d_hash);
+	sha512_gpu_hash_64 <<<grid, block>>> (threads, (uint64_t*)d_hash);
 }
 
 __constant__

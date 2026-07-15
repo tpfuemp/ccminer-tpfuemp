@@ -1,6 +1,6 @@
 /*
  * Tiger-192 shared device library (docs/coding-guideline.md §3), djm34/phm
- * kernel (see x21/cuda_tiger192.cu for authorship and license).
+ * kernel (see algos/stages/cuda_tiger192.cu for authorship and license).
  *
  * 24-byte digest. tiger192_hash_64 needs the 768-word uint64 shared table:
  * kernels declare __shared__ uint64_t sharedMem[768], call
@@ -10,7 +10,7 @@
  * __ldg inside TIGER_ROUND.
  *
  * The TIGER_* macros stay EXPORTED (no #undef): the 80-byte kernel in
- * x21/cuda_tiger192.cu builds its own message blocks with TIGER_ROUND_BODY.
+ * algos/stages/cuda_tiger192.cu builds its own message blocks with TIGER_ROUND_BODY.
  * TIGER_ROUND reads the identifier `sharedMem` from the expansion scope.
  */
 

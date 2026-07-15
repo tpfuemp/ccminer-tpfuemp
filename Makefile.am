@@ -45,19 +45,19 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/heavy/cuda_heavy_keccak512.cu \
 			  algos/heavy/cuda_sha256.cu \
 			  algos/heavy/bastion.cu algos/heavy/cuda_bastion.cu \
-			  fuguecoin.cpp Algo256/cuda_fugue256.cu sph/fugue.c uint256.h \
+			  fuguecoin.cpp algos/stages/cuda_fugue256.cu sph/fugue.c uint256.h \
 			  groestlcoin.cpp cuda_groestlcoin.cu cuda_groestlcoin.h \
 			  myriadgroestl.cpp cuda_myriadgroestl.cu \
-			  lyra2/Lyra2.c lyra2/Sponge.c \
-			  lyra2/lyra2RE.cu lyra2/cuda_lyra2.cu \
-			  lyra2/lyra2REv2.cu lyra2/cuda_lyra2v2.cu \
-			  lyra2/Lyra2Z.c lyra2/lyra2Z.cu lyra2/cuda_lyra2Z.cu \
-			  Algo256/cuda_bmw256.cu Algo256/cuda_cubehash256.cu \
-			  Algo256/cuda_blake256.cu Algo256/cuda_groestl256.cu \
-			  Algo256/cuda_skein256.cu \
-			  Algo256/blake256.cu Algo256/decred.cu Algo256/vanilla.cu \
-			  Algo256/blake2s.cu sph/blake2s.c \
-			  Algo256/bmw.cu Algo256/bmw512.cu Algo256/cuda_bmw.cu \
+			  algos/lyra2/Lyra2.c algos/lyra2/Sponge.c \
+			  algos/lyra2/lyra2RE.cu algos/stages/cuda_lyra2.cu \
+			  algos/lyra2/lyra2REv2.cu algos/stages/cuda_lyra2v2.cu \
+			  algos/lyra2/Lyra2Z.c algos/lyra2/lyra2Z.cu algos/stages/cuda_lyra2Z.cu \
+			  algos/stages/cuda_bmw256.cu algos/stages/cuda_cubehash256.cu \
+			  algos/stages/cuda_blake256.cu algos/stages/cuda_groestl256.cu \
+			  algos/stages/cuda_skein256.cu \
+			  algos/blake256/blake256.cu algos/blake256/decred.cu algos/blake256/vanilla.cu \
+			  algos/blake2s/blake2s.cu sph/blake2s.c \
+			  algos/bmw/bmw.cu algos/bmw/bmw512.cu algos/stages/cuda_bmw.cu \
 			  gost/cuda_gosthash.cu gost/gost.cu \
 			  crypto/xmr-rpc.cpp crypto/wildkeccak-cpu.cpp crypto/wildkeccak.cu \
 			  crypto/cryptolight.cu crypto/cryptolight-core.cu crypto/cryptolight-cpu.cpp \
@@ -70,7 +70,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/quark/animecoin.cu algos/quark/nist5.cu \
 			  algos/quark/quarkcoin.cu algos/stages/cuda_quark_compactionTest.cu \
 			  neoscrypt/neoscrypt.cpp neoscrypt/neoscrypt-cpu.c neoscrypt/cuda_neoscrypt.cu \
-			  pentablake.cu skein.cu cuda_skeincoin.cu skein2.cpp zr5.cu \
+			  algos/pentablake/pentablake.cu skein.cu cuda_skeincoin.cu skein2.cpp algos/zr5/zr5.cu \
 			  algos/skunk/skunk.cu algos/skunk/cuda_skunk.cu algos/stages/cuda_streebog.cu \
 			  algos/sha256d/sha256d.cu algos/sha256d/cuda_sha256d.cu algos/sha256d/sha256t.cu algos/sha256d/cuda_sha256t.cu \
 			  algos/sha256d/cuda_sha256_selftest.cu cuda/sha256_device.cuh \
@@ -106,10 +106,10 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/x16/x16r.cu algos/x16/x16rv2.cu algos/x16/x16s.cu algos/stages/cuda_echo512_80.cu algos/stages/cuda_fugue512_80.cu \
 			  algos/stages/cuda_shabal512_80.cu algos/stages/cuda_shavite512_80.cu algos/stages/cuda_simd512_80.cu \
 			  algos/stages/cuda_echo512_64.cu algos/common/cuda_x_fused.cu \
-			  x17/x17.cu x17/skydoge.cu x17/hmq17.cu x17/cuda_x17_haval256.cu x17/cuda_x17_sha512.cu \
+			  algos/x17/x17.cu algos/x17/skydoge.cu algos/x17/hmq17.cu algos/stages/cuda_haval256.cu algos/stages/cuda_sha512.cu \
 			  algos/x11/phi.cu \
 			  algos/x11/c11.cu algos/x11/s3.cu algos/x11/sib.cu algos/x11/veltor.cu algos/x11/0x10.cu \
-			  x21/x21s.cu x21/cuda_sha256_2.cu x21/cuda_tiger192.cu 
+			  algos/x21/x21s.cu algos/stages/cuda_sha256_2.cu algos/stages/cuda_tiger192.cu 
 			  
 # scrypt
 ccminer_SOURCES += scrypt.cpp scrypt-jane.cpp \
@@ -158,7 +158,7 @@ nvcc_FLAGS += $(JANSSON_INCLUDES) --ptxas-options="-v"
 .cu.o:
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=128 -o $@ -c $<
 
-lyra2/cuda_lyra2.o: lyra2/cuda_lyra2.cu
+algos/stages/cuda_lyra2.o: algos/stages/cuda_lyra2.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=128 -o $@ -c $<
 
 # HoohashV110 device TU: consensus-critical strict FP (must match the glibc oracle).
@@ -166,10 +166,10 @@ lyra2/cuda_lyra2.o: lyra2/cuda_lyra2.cu
 algos/hoohash/cuda_hoohashv110.o: algos/hoohash/cuda_hoohashv110.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=128 --fmad=false --prec-div=true --prec-sqrt=true --ftz=false -o $@ -c $<
 
-Algo256/blake256.o: Algo256/blake256.cu
+algos/blake256/blake256.o: algos/blake256/blake256.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=64 -o $@ -c $<
 
-Algo256/cuda_bmw.o: Algo256/cuda_bmw.cu
+algos/stages/cuda_bmw.o: algos/stages/cuda_bmw.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=76 -o $@ -c $<
 
 crypto/cryptonight-core.o: crypto/cryptonight-core.cu
@@ -197,7 +197,7 @@ algos/stages/cuda_simd512.o: algos/stages/cuda_simd512.cu
 algos/stages/cuda_hamsi512.o: algos/stages/cuda_hamsi512.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=72 -o $@ -c $<
 
-x17/cuda_x17_sha512.o: x17/cuda_x17_sha512.cu
+algos/stages/cuda_sha512.o: algos/stages/cuda_sha512.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
 algos/stages/cuda_blake512.o: algos/stages/cuda_blake512.cu

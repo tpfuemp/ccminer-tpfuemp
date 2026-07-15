@@ -295,7 +295,7 @@ void sha512_transform_80_from_pre9(uint64_t *in, const uint64_t *pre, uint64_t *
 
 /* ------------------------------------------------------------------------
  * x17-lineage unrolled SHA-512 for a 64-byte input (x-family stage
- * function), extracted bit-identically from x17/cuda_x17_sha512.cu
+ * function), extracted bit-identically from algos/stages/cuda_sha512.cu
  * (djm34 2014 / tpruvot 2017). Round constants come from c_sha512_K above
  * (the same FIPS table the donor uploaded into its c_WB symbol).
  * ------------------------------------------------------------------------ */

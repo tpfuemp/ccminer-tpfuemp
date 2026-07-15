@@ -301,9 +301,9 @@
     <ClCompile Include="crc32.c" />
     <ClCompile Include="algos\heavy\hefty1.c" />
     <ClCompile Include="myriadgroestl.cpp" />
-    <ClCompile Include="lyra2\Lyra2.c" />
-    <ClCompile Include="lyra2\Sponge.c" />
-    <ClCompile Include="lyra2\Lyra2Z.c" />
+    <ClCompile Include="algos\lyra2\Lyra2.c" />
+    <ClCompile Include="algos\lyra2\Sponge.c" />
+    <ClCompile Include="algos\lyra2\Lyra2Z.c" />
     <ClCompile Include="heavyhash/heavyhash-gate.c" />
     <ClCompile Include="heavyhash/keccak_tiny.c" />
     <ClInclude Include="equi\eqcuda.hpp" />
@@ -317,9 +317,9 @@
     <ClInclude Include="sph\yescrypt-platform.h" />
     <ClInclude Include="sph\yescrypt.h" />
     <ClInclude Include="algos\common\cuda_x_stages.h" />
-    <CudaCompile Include="Algo256\bmw.cu" />
-    <CudaCompile Include="Algo256\bmw512.cu" />
-    <CudaCompile Include="Algo256\cuda_bmw.cu">
+    <CudaCompile Include="algos\bmw\bmw.cu" />
+    <CudaCompile Include="algos\bmw\bmw512.cu" />
+    <CudaCompile Include="algos\stages\cuda_bmw.cu">
       <MaxRegCount>76</MaxRegCount>
     </CudaCompile>
     <CudaCompile Include="algos\allium\allium.cu" />
@@ -465,9 +465,9 @@
     <ClInclude Include="sph\sph_types.h" />
     <ClInclude Include="sph\sph_whirlpool.h" />
     <ClInclude Include="uint256.h" />
-    <ClInclude Include="lyra2\Lyra2.h" />
-    <ClInclude Include="lyra2\Sponge.h" />
-    <ClInclude Include="lyra2\Lyra2Z.h" />
+    <ClInclude Include="algos\lyra2\Lyra2.h" />
+    <ClInclude Include="algos\lyra2\Sponge.h" />
+    <ClInclude Include="algos\lyra2\Lyra2Z.h" />
     <ClInclude Include="heavyhash/heavyhash-gate.h" />
     <ClInclude Include="heavyhash/keccak_tiny.h" />
     <ClInclude Include="cuda\groestl512_device.cuh" />
@@ -475,8 +475,7 @@
     <ClInclude Include="cuda\shavite512_device.cuh" />
     <ClInclude Include="cuda\whirlpool512_device.cuh" />
     <ClInclude Include="cuda\tiger192_device.cuh" />
-    <ClInclude Include="quark\cuda_quark.h" />
-    <ClInclude Include="x11\cuda_x11.h" />
+    <ClInclude Include="algos\stages\cuda_quark.h" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="cuda.cpp" />
@@ -505,7 +504,7 @@
     <CudaCompile Include="algos\stages\cuda_shavite512.cu" />
     <CudaCompile Include="yescrypt\cuda_yescrypt.cu" />
     <CudaCompile Include="yescrypt\yescrypt.cu" />
-    <CudaCompile Include="zr5.cu" />
+    <CudaCompile Include="algos\zr5\zr5.cu" />
     <CudaCompile Include="gost\cuda_gosthash.cu" />
     <CudaCompile Include="gost\gost.cu" />
     <CudaCompile Include="algos\heavy\cuda_heavy_blake512.cu">
@@ -532,16 +531,16 @@
     </CudaCompile>
     <CudaCompile Include="algos\stages\cuda_jha_keccak512.cu">
     </CudaCompile>
-    <CudaCompile Include="Algo256\blake256.cu">
+    <CudaCompile Include="algos\blake256\blake256.cu">
       <MaxRegCount>64</MaxRegCount>
       <AdditionalOptions Condition="'$(Configuration)'=='Release'">--ptxas-options="-dlcm=cg" %(AdditionalOptions)</AdditionalOptions>
       <FastMath>true</FastMath>
     </CudaCompile>
-    <CudaCompile Include="Algo256\blake2s.cu" />
-    <CudaCompile Include="Algo256\decred.cu">
+    <CudaCompile Include="algos\blake2s\blake2s.cu" />
+    <CudaCompile Include="algos\blake256\decred.cu">
       <MaxRegCount>128</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="Algo256\vanilla.cu" />
+    <CudaCompile Include="algos\blake256\vanilla.cu" />
     <CudaCompile Include="algos\keccak\keccak256.cu" />
     <CudaCompile Include="algos\keccak\cuda_keccak_selftest.cu" />
     <CudaCompile Include="algos\sha3d\sha3d.cu" />
@@ -560,16 +559,16 @@
       <MaxRegCount>0</MaxRegCount>
       <CodeGeneration Condition="'$(Configuration)|$(Platform)'=='Release|x64'">compute_61,sm_61</CodeGeneration>
     </CudaCompile>
-    <CudaCompile Include="Algo256\cuda_blake256.cu" />
-    <CudaCompile Include="Algo256\cuda_bmw256.cu" />
-    <CudaCompile Include="Algo256\cuda_cubehash256.cu" />
-    <CudaCompile Include="Algo256\cuda_fugue256.cu" />
-    <CudaCompile Include="Algo256\cuda_groestl256.cu" />
+    <CudaCompile Include="algos\stages\cuda_blake256.cu" />
+    <CudaCompile Include="algos\stages\cuda_bmw256.cu" />
+    <CudaCompile Include="algos\stages\cuda_cubehash256.cu" />
+    <CudaCompile Include="algos\stages\cuda_fugue256.cu" />
+    <CudaCompile Include="algos\stages\cuda_groestl256.cu" />
     <CudaCompile Include="algos\keccak\cuda_keccak256.cu" />
-    <CudaCompile Include="Algo256\cuda_skein256.cu" />
+    <CudaCompile Include="algos\stages\cuda_skein256.cu" />
     <CudaCompile Include="algos\lbry\cuda_lbry_merged.cu" />
     <CudaCompile Include="algos\lbry\lbry.cu" />
-    <CudaCompile Include="pentablake.cu">
+    <CudaCompile Include="algos\pentablake\pentablake.cu">
       <MaxRegCount>80</MaxRegCount>
       <AdditionalOptions Condition="'$(Configuration)'=='Release'">--ptxas-options="-dlcm=cg" %(AdditionalOptions)</AdditionalOptions>
       <FastMath>true</FastMath>
@@ -604,15 +603,15 @@
     <CudaCompile Include="algos\qubit\luffa.cu" />
     <CudaCompile Include="algos\qubit\qubit.cu" />
     <CudaCompile Include="algos\stages\cuda_luffa512_80.cu" />
-    <CudaCompile Include="lyra2\lyra2RE.cu" />
-    <CudaCompile Include="lyra2\cuda_lyra2.cu" />
-    <CudaCompile Include="lyra2\lyra2REv2.cu" />
-    <CudaCompile Include="lyra2\cuda_lyra2v2.cu" />
-    <ClInclude Include="lyra2\cuda_lyra2_sm2.cuh" />
-    <ClInclude Include="lyra2\cuda_lyra2v2_sm3.cuh" />
-    <CudaCompile Include="lyra2\lyra2Z.cu" />
-    <CudaCompile Include="lyra2\cuda_lyra2Z.cu" />
-    <ClInclude Include="lyra2\cuda_lyra2Z_sm5.cuh" />
+    <CudaCompile Include="algos\lyra2\lyra2RE.cu" />
+    <CudaCompile Include="algos\stages\cuda_lyra2.cu" />
+    <CudaCompile Include="algos\lyra2\lyra2REv2.cu" />
+    <CudaCompile Include="algos\stages\cuda_lyra2v2.cu" />
+    <ClInclude Include="algos\stages\cuda_lyra2_sm2.cuh" />
+    <ClInclude Include="algos\stages\cuda_lyra2v2_sm3.cuh" />
+    <CudaCompile Include="algos\lyra2\lyra2Z.cu" />
+    <CudaCompile Include="algos\stages\cuda_lyra2Z.cu" />
+    <ClInclude Include="algos\stages\cuda_lyra2Z_sm5.cuh" />
     <CudaCompile Include="algos\polytimos\polytimos.cu" />
     <CudaCompile Include="sia\sia.cu" />
     <CudaCompile Include="skein.cu">
@@ -683,17 +682,16 @@
     <CudaCompile Include="algos\stages\cuda_echo512_64.cu">
       <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
     </CudaCompile>
-    <CudaCompile Include="x17\hmq17.cu" />
-    <CudaCompile Include="x17\x17.cu" />
-    <CudaCompile Include="x17\skydoge.cu" />
-    <CudaCompile Include="x17\cuda_x17_haval256.cu">
-    </CudaCompile>
-    <CudaCompile Include="x17\cuda_x17_sha512.cu">
+    <CudaCompile Include="algos\x17\hmq17.cu" />
+    <CudaCompile Include="algos\x17\x17.cu" />
+    <CudaCompile Include="algos\x17\skydoge.cu" />
+    <CudaCompile Include="algos\stages\cuda_haval256.cu" />
+    <CudaCompile Include="algos\stages\cuda_sha512.cu">
       <MaxRegCount>80</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="x21\x21s.cu" />
-    <CudaCompile Include="x21\cuda_sha256_2.cu" />
-    <CudaCompile Include="x21\cuda_tiger192.cu" />
+    <CudaCompile Include="algos\x21\x21s.cu" />
+    <CudaCompile Include="algos\stages\cuda_sha256_2.cu" />
+    <CudaCompile Include="algos\stages\cuda_tiger192.cu" />
   </ItemGroup>
   <ItemGroup>
     <Image Include="res\ccminer.ico" />

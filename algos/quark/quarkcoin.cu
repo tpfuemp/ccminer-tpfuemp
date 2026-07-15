@@ -11,7 +11,7 @@ extern "C"
 #include "miner.h"
 
 #include "cuda_helper.h"
-#include "quark/cuda_quark.h"
+#include "algos/stages/cuda_quark.h"
 
 #include <stdio.h>
 
@@ -150,12 +150,12 @@ extern "C" int scanhash_quark(int thr_id, struct work* work, uint32_t max_nonce,
 		cudaGetLastError();
 		CUDA_SAFE_CALL(cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput));
 
-		quark_blake512_cpu_init(thr_id, throughput);
-		quark_groestl512_cpu_init(thr_id, throughput);
-		quark_skein512_cpu_init(thr_id, throughput);
-		quark_bmw512_cpu_init(thr_id, throughput);
-		//quark_keccak512_cpu_init(thr_id, throughput);
-		quark_jh512_cpu_init(thr_id, throughput);
+		blake512_cpu_init(thr_id, throughput);
+		groestl512_cpu_init(thr_id, throughput);
+		skein512_cpu_init(thr_id, throughput);
+		bmw512_cpu_init(thr_id, throughput);
+		//keccak512_cpu_init(thr_id, throughput);
+		jh512_cpu_init(thr_id, throughput);
 		quark_compactTest_cpu_init(thr_id, throughput);
 
 		if (cuda_arch[dev_id] >= 300) {
@@ -175,16 +175,16 @@ extern "C" int scanhash_quark(int thr_id, struct work* work, uint32_t max_nonce,
 	for (int k=0; k < 20; k++)
 		be32enc(&endiandata[k], pdata[k]);
 
-	quark_blake512_cpu_setBlock_80(thr_id, endiandata);
+	blake512_cpu_setBlock_80(thr_id, endiandata);
 	cuda_check_cpu_setTarget(ptarget);
 
 	do {
 		int order = 0;
 		uint32_t nrm1=0, nrm2=0, nrm3=0;
 
-		quark_blake512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id]); order++;
+		blake512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id]); order++;
 		TRACE("blake  :");
-		quark_bmw512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		bmw512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 		TRACE("bmw    :");
 
 		if (cuda_arch[dev_id] >= 300) {
@@ -193,13 +193,13 @@ extern "C" int scanhash_quark(int thr_id, struct work* work, uint32_t max_nonce,
 				d_branch3Nonces[thr_id], &nrm3, order++);
 
 			// nur den Skein Branch weiterverfolgen
-			quark_skein512_cpu_hash_64(thr_id, nrm3, pdata[19], d_branch3Nonces[thr_id], d_hash[thr_id], order++);
+			skein512_cpu_hash_64(thr_id, nrm3, pdata[19], d_branch3Nonces[thr_id], d_hash[thr_id], order++);
 
 			// das ist der unbedingte Branch für Groestl512
-			quark_groestl512_cpu_hash_64(thr_id, nrm3, pdata[19], d_branch3Nonces[thr_id], d_hash[thr_id], order++);
+			groestl512_cpu_hash_64(thr_id, nrm3, pdata[19], d_branch3Nonces[thr_id], d_hash[thr_id], order++);
 
 			// das ist der unbedingte Branch für JH512
-			quark_jh512_cpu_hash_64(thr_id, nrm3, pdata[19], d_branch3Nonces[thr_id], d_hash[thr_id], order++);
+			jh512_cpu_hash_64(thr_id, nrm3, pdata[19], d_branch3Nonces[thr_id], d_hash[thr_id], order++);
 
 			// quarkNonces in branch1 und branch2 aufsplitten gemäss if (hash[0] & 0x8)
 			quark_compactTest_cpu_hash_64(thr_id, nrm3, pdata[19], d_hash[thr_id], d_branch3Nonces[thr_id],
@@ -208,16 +208,16 @@ extern "C" int scanhash_quark(int thr_id, struct work* work, uint32_t max_nonce,
 				order++);
 
 			// das ist der bedingte Branch für Blake512
-			quark_blake512_cpu_hash_64(thr_id, nrm1, pdata[19], d_branch1Nonces[thr_id], d_hash[thr_id], order++);
+			blake512_cpu_hash_64(thr_id, nrm1, pdata[19], d_branch1Nonces[thr_id], d_hash[thr_id], order++);
 
 			// das ist der bedingte Branch für Bmw512
-			quark_bmw512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
+			bmw512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
 
 			// das ist der unbedingte Branch für Keccak512
-			quark_keccak512_cpu_hash_64(thr_id, nrm3, NULL, d_hash[thr_id]); order++;
+			keccak512_cpu_hash_64(thr_id, nrm3, NULL, d_hash[thr_id]); order++;
 
 			// das ist der unbedingte Branch für Skein512
-			quark_skein512_cpu_hash_64(thr_id, nrm3, pdata[19], d_branch3Nonces[thr_id], d_hash[thr_id], order++);
+			skein512_cpu_hash_64(thr_id, nrm3, pdata[19], d_branch3Nonces[thr_id], d_hash[thr_id], order++);
 
 			// quarkNonces in branch1 und branch2 aufsplitten gemäss if (hash[0] & 0x8)
 			quark_compactTest_cpu_hash_64(thr_id, nrm3, pdata[19], d_hash[thr_id], d_branch3Nonces[thr_id],
@@ -225,9 +225,9 @@ extern "C" int scanhash_quark(int thr_id, struct work* work, uint32_t max_nonce,
 				d_branch2Nonces[thr_id], &nrm2,
 				order++);
 
-			quark_keccak512_cpu_hash_64(thr_id, nrm1, d_branch1Nonces[thr_id], d_hash[thr_id], pdata[19]); order++;
+			keccak512_cpu_hash_64(thr_id, nrm1, d_branch1Nonces[thr_id], d_hash[thr_id], pdata[19]); order++;
 
-			quark_jh512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
+			jh512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
 
 			work->nonces[0] = cuda_check_hash_branch(thr_id, nrm3, pdata[19], d_branch3Nonces[thr_id], d_hash[thr_id], order++);
 			work->nonces[1] = 0;
@@ -235,32 +235,32 @@ extern "C" int scanhash_quark(int thr_id, struct work* work, uint32_t max_nonce,
 			/* algo permutations are made with 2 different buffers */
 
 			quark_filter_cpu_sm2(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
-			quark_groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-			quark_skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash_br2[thr_id], order++);
+			groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+			skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash_br2[thr_id], order++);
 			quark_merge_cpu_sm2(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
 			TRACE("perm1  :");
 
-			quark_groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+			groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 			TRACE("groestl:");
-			quark_jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+			jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 			TRACE("jh512  :");
 
 			quark_filter_cpu_sm2(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
-			quark_blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-			quark_bmw512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash_br2[thr_id], order++);
+			blake512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+			bmw512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash_br2[thr_id], order++);
 			quark_merge_cpu_sm2(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
 			TRACE("perm2  :");
 
-			quark_keccak512_cpu_hash_64(thr_id, throughput, NULL, d_hash[thr_id]); order++;
+			keccak512_cpu_hash_64(thr_id, throughput, NULL, d_hash[thr_id]); order++;
 
 			TRACE("keccak :");
-			quark_skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+			skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 			TRACE("skein  :");
 
 			quark_filter_cpu_sm2(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
-			quark_keccak512_cpu_hash_64(thr_id, throughput, NULL, d_hash[thr_id]); order++;
+			keccak512_cpu_hash_64(thr_id, throughput, NULL, d_hash[thr_id]); order++;
 
-			quark_jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash_br2[thr_id], order++);
+			jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash_br2[thr_id], order++);
 			quark_merge_cpu_sm2(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
 			TRACE("perm3  :");
 
@@ -331,8 +331,8 @@ extern "C" void free_quark(int thr_id)
 		cudaFree(d_hash_br2[thr_id]);
 	}
 
-	quark_blake512_cpu_free(thr_id);
-	quark_groestl512_cpu_free(thr_id);
+	blake512_cpu_free(thr_id);
+	groestl512_cpu_free(thr_id);
 	quark_compactTest_cpu_free(thr_id);
 
 	cuda_check_cpu_free(thr_id);
