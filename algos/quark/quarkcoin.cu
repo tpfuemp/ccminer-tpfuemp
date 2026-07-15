@@ -11,7 +11,7 @@ extern "C"
 #include "miner.h"
 
 #include "cuda_helper.h"
-#include "cuda_quark.h"
+#include "quark/cuda_quark.h"
 
 #include <stdio.h>
 
@@ -225,7 +225,7 @@ extern "C" int scanhash_quark(int thr_id, struct work* work, uint32_t max_nonce,
 				d_branch2Nonces[thr_id], &nrm2,
 				order++);
 
-			quark_keccak512_cpu_hash_64(thr_id, nrm1, d_branch1Nonces[thr_id], d_hash[thr_id]); order++;
+			quark_keccak512_cpu_hash_64(thr_id, nrm1, d_branch1Nonces[thr_id], d_hash[thr_id], pdata[19]); order++;
 
 			quark_jh512_cpu_hash_64(thr_id, nrm2, pdata[19], d_branch2Nonces[thr_id], d_hash[thr_id], order++);
 

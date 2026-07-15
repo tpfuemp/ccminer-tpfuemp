@@ -74,7 +74,7 @@ const uint64_t host_u512[16] =
     v[c] += v[d];           \
     v[b] = ROTR64( v[b] ^ v[c],11);
 
-template <int BLOCKSIZE> __device__ void blake512_compress( uint64_t *h, const uint64_t *block, int nullt, const uint8_t ((*sigma)[16]), const uint64_t *u512 )
+template <int BLOCKSIZE> __device__ void heavy_blake512_compress( uint64_t *h, const uint64_t *block, int nullt, const uint8_t ((*sigma)[16]), const uint64_t *u512 )
 {
     uint64_t v[16], m[16], i;
 
@@ -118,7 +118,7 @@ template <int BLOCKSIZE> __device__ void blake512_compress( uint64_t *h, const u
     for( i = 0; i < 16; ++i )  h[i % 8] ^= v[i];
 }
 
-template <int BLOCKSIZE> __global__ void blake512_gpu_hash(uint32_t threads, uint32_t startNounce, void *outputHash, uint32_t *heftyHashes, uint32_t *nonceVector)
+template <int BLOCKSIZE> __global__ void heavy_blake512_gpu_hash(uint32_t threads, uint32_t startNounce, void *outputHash, uint32_t *heftyHashes, uint32_t *nonceVector)
 {
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
@@ -172,14 +172,14 @@ template <int BLOCKSIZE> __global__ void blake512_gpu_hash(uint32_t threads, uin
 		}
 
 		// erste Runde
-		blake512_compress<BLOCKSIZE>( h, buf, 0, c_sigma, c_u512 );
+		heavy_blake512_compress<BLOCKSIZE>( h, buf, 0, c_sigma, c_u512 );
 
 
 		// zweite Runde
 #pragma unroll 15
 		for (int i=0; i < 15; ++i) buf[i] = c_SecondRound[i];
 		buf[15] = SWAP64(8*(BLOCKSIZE+32)); // Blocksize in Bits einsetzen
-		blake512_compress<BLOCKSIZE>( h, buf, 1, c_sigma, c_u512 );
+		heavy_blake512_compress<BLOCKSIZE>( h, buf, 1, c_sigma, c_u512 );
 
 		// Hash rauslassen
 		uint64_t *outHash = (uint64_t *)outputHash + 8 * hashPosition;
@@ -193,7 +193,7 @@ template <int BLOCKSIZE> __global__ void blake512_gpu_hash(uint32_t threads, uin
 
 // Setup Function
 __host__
-void blake512_cpu_init(int thr_id, uint32_t threads)
+void heavy_blake512_cpu_init(int thr_id, uint32_t threads)
 {
 	// Kopiere die Hash-Tabellen in den GPU-Speicher
 	cudaMemcpyToSymbol( c_sigma,
@@ -216,7 +216,7 @@ void blake512_cpu_init(int thr_id, uint32_t threads)
 }
 
 __host__
-void blake512_cpu_free(int thr_id)
+void heavy_blake512_cpu_free(int thr_id)
 {
 	cudaFree(d_hash5output[thr_id]);
 }
@@ -224,7 +224,7 @@ void blake512_cpu_free(int thr_id)
 static int BLOCKSIZE = 84;
 
 __host__
-void blake512_cpu_setBlock(void *pdata, int len)
+void heavy_blake512_cpu_setBlock(void *pdata, int len)
 	// data muss 84-Byte haben!
 	// heftyHash hat 32-Byte
 {
@@ -246,7 +246,7 @@ void blake512_cpu_setBlock(void *pdata, int len)
 	BLOCKSIZE = len;
 }
 
-__host__ void blake512_cpu_hash(int thr_id, uint32_t threads, uint32_t startNounce)
+__host__ void heavy_blake512_cpu_hash(int thr_id, uint32_t threads, uint32_t startNounce)
 {
 	const uint32_t threadsperblock = 256;
 
@@ -258,7 +258,7 @@ __host__ void blake512_cpu_hash(int thr_id, uint32_t threads, uint32_t startNoun
 	size_t shared_size = 0;
 
 	if (BLOCKSIZE == 80)
-		blake512_gpu_hash<80><<<grid, block, shared_size>>>(threads, startNounce, d_hash5output[thr_id], heavy_heftyHashes[thr_id], heavy_nonceVector[thr_id]);
+		heavy_blake512_gpu_hash<80><<<grid, block, shared_size>>>(threads, startNounce, d_hash5output[thr_id], heavy_heftyHashes[thr_id], heavy_nonceVector[thr_id]);
 	else if (BLOCKSIZE == 84)
-		blake512_gpu_hash<84><<<grid, block, shared_size>>>(threads, startNounce, d_hash5output[thr_id], heavy_heftyHashes[thr_id], heavy_nonceVector[thr_id]);
+		heavy_blake512_gpu_hash<84><<<grid, block, shared_size>>>(threads, startNounce, d_hash5output[thr_id], heavy_heftyHashes[thr_id], heavy_nonceVector[thr_id]);
 }

@@ -21,13 +21,16 @@
 
 __global__
 __launch_bounds__(TPB52, 7)
-void quark_keccak512_gpu_hash_64(uint32_t threads, uint2 *g_hash, uint32_t *g_nonceVector)
+void keccak512_gpu_hash_64(uint32_t threads, const uint32_t startNounce, uint2 *g_hash, uint32_t *g_nonceVector)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 
 	if (thread < threads)
 	{
-		const uint32_t hashPosition = (g_nonceVector == NULL) ? thread : g_nonceVector[thread];
+		/* branch nonce vectors (quark compaction) store absolute nonces, so map
+		 * back to the hash-buffer slot: subtract startNounce (matches
+		 * skein/jh/groestl). NULL vector => the slot is just the thread index. */
+		const uint32_t hashPosition = (g_nonceVector == NULL) ? thread : g_nonceVector[thread] - startNounce;
 
 		uint2x4 *d_hash = (uint2x4*)&g_hash[hashPosition << 3];
 
@@ -44,7 +47,7 @@ void quark_keccak512_gpu_hash_64(uint32_t threads, uint2 *g_hash, uint32_t *g_no
 
 __global__
 __launch_bounds__(TPB52, 6)
-void quark_keccak512_gpu_hash_64_final(uint32_t threads, uint2 *g_hash, uint32_t *g_nonceVector, uint32_t *resNonce, const uint64_t target)
+void keccak512_gpu_hash_64_final(uint32_t threads, uint2 *g_hash, uint32_t *g_nonceVector, uint32_t *resNonce, const uint64_t target)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 
@@ -68,21 +71,21 @@ void quark_keccak512_gpu_hash_64_final(uint32_t threads, uint2 *g_hash, uint32_t
 }
 
 __host__
-void quark_keccak512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash)
+void keccak512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash, uint32_t startNounce)
 {
 	const dim3 grid((threads + TPB52-1)/TPB52);
 	const dim3 block(TPB52);
 
-	quark_keccak512_gpu_hash_64<<<grid, block>>>(threads, (uint2*)d_hash, d_nonceVector);
+	keccak512_gpu_hash_64<<<grid, block>>>(threads, startNounce, (uint2*)d_hash, d_nonceVector);
 }
 
 __host__
-void quark_keccak512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash, uint64_t target, uint32_t *d_resNonce)
+void keccak512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash, uint64_t target, uint32_t *d_resNonce)
 {
 	const dim3 grid((threads + TPB52-1)/TPB52);
 	const dim3 block(TPB52);
 
-	quark_keccak512_gpu_hash_64_final<<<grid, block>>>(threads, (uint2*)d_hash, d_nonceVector, d_resNonce, target);
+	keccak512_gpu_hash_64_final<<<grid, block>>>(threads, (uint2*)d_hash, d_nonceVector, d_resNonce, target);
 }
 
 void jackpot_keccak512_cpu_init(int thr_id, uint32_t threads);
@@ -94,7 +97,7 @@ void jackpot_keccak512_cpu_hash(int thr_id, uint32_t threads, uint32_t startNoun
 extern bool keccak512_device_selftest(int thr_id);
 
 __host__
-void quark_keccak512_cpu_init(int thr_id, uint32_t threads)
+void keccak512_cpu_init(int thr_id, uint32_t threads)
 {
 	keccak512_device_selftest(thr_id);
 
@@ -112,3 +115,7 @@ void keccak512_cuda_hash_80(const int thr_id, const uint32_t threads, const uint
 {
 	jackpot_keccak512_cpu_hash(thr_id, threads, startNounce, d_hash, 0);
 }
+
+/* legacy quark_ name forwarders (de-brand compat; see quark/cuda_quark.h) */
+__host__ void quark_keccak512_cpu_init(int thr_id, uint32_t threads){ keccak512_cpu_init(thr_id, threads); }
+__host__ void quark_keccak512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash, uint32_t startNounce){ keccak512_cpu_hash_64(thr_id, threads, d_nonceVector, d_hash, startNounce); }

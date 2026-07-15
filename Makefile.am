@@ -37,14 +37,14 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  heavyhash/cuda_heavyhash.cu \
 			  heavyhash/keccak_tiny.c \
 			  heavyhash/heavyhash-gate.c \
-			  heavy/heavy.cu \
-			  heavy/cuda_blake512.cu heavy/cuda_blake512.h \
-			  heavy/cuda_combine.cu heavy/cuda_combine.h \
-			  heavy/cuda_groestl512.cu heavy/cuda_groestl512.h \
-			  heavy/cuda_hefty1.cu heavy/cuda_hefty1.h \
-			  heavy/cuda_keccak512.cu heavy/cuda_keccak512.h \
-			  heavy/cuda_sha256.cu heavy/cuda_sha256.h \
-			  heavy/bastion.cu heavy/cuda_bastion.cu \
+			  algos/heavy/heavy.cu \
+			  algos/heavy/cuda_heavy_blake512.cu \
+			  algos/heavy/cuda_combine.cu \
+			  algos/heavy/cuda_heavy_groestl512.cu \
+			  algos/heavy/cuda_hefty1.cu \
+			  algos/heavy/cuda_heavy_keccak512.cu \
+			  algos/heavy/cuda_sha256.cu \
+			  algos/heavy/bastion.cu algos/heavy/cuda_bastion.cu \
 			  fuguecoin.cpp Algo256/cuda_fugue256.cu sph/fugue.c uint256.h \
 			  groestlcoin.cpp cuda_groestlcoin.cu cuda_groestlcoin.h \
 			  myriadgroestl.cpp cuda_myriadgroestl.cu \
@@ -65,13 +65,13 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  crypto/cryptonight-cpu.cpp crypto/oaes_lib.cpp crypto/aesb.cpp crypto/cpu/c_keccak.c \
 			  JHA/jha.cu JHA/jackpotcoin.cu JHA/cuda_jha_keccak512.cu \
 			  JHA/cuda_jha_compactionTest.cu cuda_checkhash.cu \
-			  quark/cuda_jh512.cu quark/cuda_quark_blake512.cu quark/cuda_quark_groestl512.cu quark/cuda_skein512.cu \
-			  quark/cuda_bmw512.cu quark/cuda_quark_keccak512.cu \
-			  quark/animecoin.cu quark/nist5.cu \
-			  quark/quarkcoin.cu quark/cuda_quark_compactionTest.cu \
+			  algos/stages/cuda_jh512.cu algos/stages/cuda_blake512.cu algos/stages/cuda_groestl512.cu algos/stages/cuda_skein512.cu \
+			  algos/stages/cuda_bmw512.cu algos/stages/cuda_keccak512.cu \
+			  algos/quark/animecoin.cu algos/quark/nist5.cu \
+			  algos/quark/quarkcoin.cu algos/stages/cuda_quark_compactionTest.cu \
 			  neoscrypt/neoscrypt.cpp neoscrypt/neoscrypt-cpu.c neoscrypt/cuda_neoscrypt.cu \
 			  pentablake.cu skein.cu cuda_skeincoin.cu skein2.cpp zr5.cu \
-			  skunk/skunk.cu skunk/cuda_skunk.cu algos/stages/cuda_streebog.cu \
+			  algos/skunk/skunk.cu algos/skunk/cuda_skunk.cu algos/stages/cuda_streebog.cu \
 			  algos/sha256d/sha256d.cu algos/sha256d/cuda_sha256d.cu algos/sha256d/sha256t.cu algos/sha256d/cuda_sha256t.cu \
 			  algos/sha256d/cuda_sha256_selftest.cu cuda/sha256_device.cuh \
 			  algos/sha512256d/sha512256d.cu algos/sha512256d/cuda_sha512256d.cu \
@@ -93,9 +93,9 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  sph/ripemd.c sph/sph_sha2.c sph/sha3d.c sph/sha3.c \
 			  algos/polytimos/polytimos.cu \
 			  lbry/lbry.cu lbry/cuda_sha256_lbry.cu lbry/cuda_sha512_lbry.cu lbry/cuda_lbry_merged.cu \
-			  qubit/qubit.cu qubit/qubit_luffa512.cu qubit/deep.cu qubit/luffa.cu \
-			  tribus/tribus.cu tribus/cuda_echo512_final.cu \
-			  algos/x11/x11.cu algos/x11/fresh.cu algos/stages/cuda_luffa512.cu algos/stages/cuda_cubehash512.cu algos/stages/cuda_cubehash512_80.cu \
+			  algos/qubit/qubit.cu algos/qubit/deep.cu algos/qubit/luffa.cu \
+			  algos/tribus/tribus.cu algos/stages/cuda_echo512_final.cu \
+			  algos/x11/x11.cu algos/x11/fresh.cu algos/stages/cuda_luffa512.cu algos/stages/cuda_luffa512_80.cu algos/stages/cuda_cubehash512.cu algos/stages/cuda_cubehash512_80.cu \
 			  algos/stages/cuda_shavite512_legacy.cu algos/stages/cuda_shavite512.cu algos/stages/cuda_simd512.cu algos/stages/cuda_echo512_compat.cu \
 			  algos/stages/cuda_luffaCubehash512.cu algos/x11/x11evo.cu algos/x11/timetravel.cu algos/x11/bitcore.cu \
 			  x13/x13.cu x13/cuda_x13_hamsi512.cu x13/cuda_x13_fugue512.cu \
@@ -177,10 +177,10 @@ crypto/cryptonight-core.o: crypto/cryptonight-core.cu
 crypto/cryptonight-extra.o: crypto/cryptonight-extra.cu
 	$(NVCC) $(nvcc_FLAGS) -o $@ -c $<
 
-heavy/cuda_hefty1.o: heavy/cuda_hefty1.cu
+algos/heavy/cuda_hefty1.o: algos/heavy/cuda_hefty1.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
-qubit/qubit_luffa512.o: qubit/qubit_luffa512.cu
+algos/stages/cuda_luffa512_80.o: algos/stages/cuda_luffa512_80.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
 # Luffa and Echo are faster with 80 registers than 128
@@ -199,16 +199,16 @@ x13/cuda_x13_hamsi512.o: x13/cuda_x13_hamsi512.cu
 x17/cuda_x17_sha512.o: x17/cuda_x17_sha512.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
-quark/cuda_quark_blake512.o: quark/cuda_quark_blake512.cu
+algos/stages/cuda_blake512.o: algos/stages/cuda_blake512.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
-quark/cuda_jh512.o: quark/cuda_jh512.cu
+algos/stages/cuda_jh512.o: algos/stages/cuda_jh512.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
-quark/cuda_quark_keccak512.o: quark/cuda_quark_keccak512.cu
+algos/stages/cuda_keccak512.o: algos/stages/cuda_keccak512.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=88 -o $@ -c $<
 
-quark/cuda_quark_compactionTest.o: quark/cuda_quark_compactionTest.cu
+algos/stages/cuda_quark_compactionTest.o: algos/stages/cuda_quark_compactionTest.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
 JHA/cuda_jha_compactionTest.o: JHA/cuda_jha_compactionTest.cu

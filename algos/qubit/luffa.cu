@@ -8,12 +8,9 @@ extern "C" {
 #include "miner.h"
 
 #include "cuda_helper.h"
+#include "algos/common/cuda_x_stages.h"
 
 static uint32_t *d_hash[MAX_GPUS];
-
-extern void qubit_luffa512_cpu_init(int thr_id, uint32_t threads);
-extern void qubit_luffa512_cpu_setBlock_80(void *pdata);
-extern void qubit_luffa512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash, int order);
 
 extern "C" void luffa_hash(void *state, const void *input)
 {
@@ -55,7 +52,6 @@ extern "C" int scanhash_luffa(int thr_id, struct work* work, uint32_t max_nonce,
 
 		CUDA_SAFE_CALL(cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput));
 
-		qubit_luffa512_cpu_init(thr_id, throughput);
 		cuda_check_cpu_init(thr_id, throughput);
 
 		init[thr_id] = true;
@@ -64,11 +60,11 @@ extern "C" int scanhash_luffa(int thr_id, struct work* work, uint32_t max_nonce,
 	for (int k=0; k < 19; k++)
 		be32enc(&endiandata[k], pdata[k]);
 
-	qubit_luffa512_cpu_setBlock_80((void*)endiandata);
+	luffa512_setBlock_80((void*)endiandata);
 	cuda_check_cpu_setTarget(ptarget);
 
 	do {
-		qubit_luffa512_cpu_hash_80(thr_id, (int) throughput, pdata[19], d_hash[thr_id], 0);
+		luffa512_cpu_hash_80(thr_id, (int) throughput, pdata[19], d_hash[thr_id], 0);
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
 

@@ -492,7 +492,7 @@
     <ClInclude Include="sph\sph_types.h">
       <Filter>Header Files\sph</Filter>
     </ClInclude>
-    <ClInclude Include="heavy\heavy.h">
+    <ClInclude Include="algos\heavy\heavy.h">
       <Filter>Header Files\CUDA</Filter>
     </ClInclude>
     <ClInclude Include="cuda_helper.h">
@@ -612,18 +612,9 @@
     <ClInclude Include="lyra2\cuda_lyra2Z_sm5.cuh">
       <Filter>Source Files\CUDA\lyra2</Filter>
     </ClInclude>
-    <ClInclude Include="quark\cuda_quark_blake512_sp.cuh">
-      <Filter>Source Files\CUDA\quark</Filter>
-    </ClInclude>
-    <CudaCompile Include="quark\animecoin.cu">
+    <CudaCompile Include="algos\quark\animecoin.cu">
       <Filter>Source Files\CUDA\quark</Filter>
     </CudaCompile>
-    <ClInclude Include="quark\cuda_bmw512_sm3.cuh">
-      <Filter>Source Files\CUDA\quark</Filter>
-    </ClInclude>
-    <ClInclude Include="quark\cuda_quark_groestl512_sm2.cuh">
-      <Filter>Source Files\CUDA\quark</Filter>
-    </ClInclude>
     <ClInclude Include="sia\sia-rpc.h">
       <Filter>Source Files\sia</Filter>
     </ClInclude>
@@ -724,71 +715,71 @@
     <CudaCompile Include="JHA\cuda_jha_compactionTest.cu">
       <Filter>Source Files\CUDA\JHA</Filter>
     </CudaCompile>
-    <CudaCompile Include="quark\cuda_jh512.cu">
-      <Filter>Source Files\CUDA\quark</Filter>
+    <CudaCompile Include="algos\stages\cuda_jh512.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="quark\cuda_quark_blake512.cu">
-      <Filter>Source Files\CUDA\quark</Filter>
+    <CudaCompile Include="algos\stages\cuda_blake512.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="quark\cuda_quark_groestl512.cu">
-      <Filter>Source Files\CUDA\quark</Filter>
+    <CudaCompile Include="algos\stages\cuda_groestl512.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="quark\cuda_skein512.cu">
-      <Filter>Source Files\CUDA\quark</Filter>
+    <CudaCompile Include="algos\stages\cuda_skein512.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="heavy\cuda_blake512.cu">
+    <CudaCompile Include="algos\heavy\cuda_heavy_blake512.cu">
       <Filter>Source Files\CUDA\heavy</Filter>
     </CudaCompile>
-    <CudaCompile Include="heavy\cuda_combine.cu">
+    <CudaCompile Include="algos\heavy\cuda_combine.cu">
       <Filter>Source Files\CUDA\heavy</Filter>
     </CudaCompile>
-    <CudaCompile Include="heavy\cuda_groestl512.cu">
+    <CudaCompile Include="algos\heavy\cuda_heavy_groestl512.cu">
       <Filter>Source Files\CUDA\heavy</Filter>
     </CudaCompile>
-    <CudaCompile Include="heavy\cuda_hefty1.cu">
+    <CudaCompile Include="algos\heavy\cuda_hefty1.cu">
       <Filter>Source Files\CUDA\heavy</Filter>
     </CudaCompile>
-    <CudaCompile Include="heavy\cuda_keccak512.cu">
+    <CudaCompile Include="algos\heavy\cuda_heavy_keccak512.cu">
       <Filter>Source Files\CUDA\heavy</Filter>
     </CudaCompile>
-    <CudaCompile Include="heavy\cuda_sha256.cu">
+    <CudaCompile Include="algos\heavy\cuda_sha256.cu">
       <Filter>Source Files\CUDA\heavy</Filter>
     </CudaCompile>
-    <CudaCompile Include="heavy\heavy.cu">
+    <CudaCompile Include="algos\heavy\heavy.cu">
       <Filter>Source Files\CUDA\heavy</Filter>
     </CudaCompile>
-    <CudaCompile Include="heavy\bastion.cu">
+    <CudaCompile Include="algos\heavy\bastion.cu">
       <Filter>Source Files\CUDA\heavy</Filter>
     </CudaCompile>
-    <CudaCompile Include="heavy\cuda_bastion.cu">
+    <CudaCompile Include="algos\heavy\cuda_bastion.cu">
       <Filter>Source Files\CUDA\heavy</Filter>
     </CudaCompile>
-    <CudaCompile Include="quark\cuda_bmw512.cu">
+    <CudaCompile Include="algos\stages\cuda_bmw512.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\stages\cuda_quark_compactionTest.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\stages\cuda_keccak512.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\quark\nist5.cu">
       <Filter>Source Files\CUDA\quark</Filter>
     </CudaCompile>
-    <CudaCompile Include="quark\cuda_quark_compactionTest.cu">
+    <CudaCompile Include="algos\quark\quarkcoin.cu">
       <Filter>Source Files\CUDA\quark</Filter>
     </CudaCompile>
-    <CudaCompile Include="quark\cuda_quark_keccak512.cu">
-      <Filter>Source Files\CUDA\quark</Filter>
-    </CudaCompile>
-    <CudaCompile Include="quark\nist5.cu">
-      <Filter>Source Files\CUDA\quark</Filter>
-    </CudaCompile>
-    <CudaCompile Include="quark\quarkcoin.cu">
-      <Filter>Source Files\CUDA\quark</Filter>
-    </CudaCompile>
-    <CudaCompile Include="qubit\deep.cu">
+    <CudaCompile Include="algos\qubit\deep.cu">
       <Filter>Source Files\CUDA\qubit</Filter>
     </CudaCompile>
-    <CudaCompile Include="qubit\luffa.cu">
+    <CudaCompile Include="algos\qubit\luffa.cu">
       <Filter>Source Files\CUDA\qubit</Filter>
     </CudaCompile>
-    <CudaCompile Include="qubit\qubit.cu">
+    <CudaCompile Include="algos\qubit\qubit.cu">
       <Filter>Source Files\CUDA\qubit</Filter>
     </CudaCompile>
-    <CudaCompile Include="qubit\qubit_luffa512.cu">
-      <Filter>Source Files\CUDA\qubit</Filter>
+    <CudaCompile Include="algos\stages\cuda_luffa512_80.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
     <ClInclude Include="cuda\aes_device.cuh">
       <Filter>Header Files\CUDA</Filter>
@@ -892,23 +883,23 @@
     <CudaCompile Include="algos\polytimos\polytimos.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
-    <CudaCompile Include="skunk\skunk.cu">
+    <CudaCompile Include="algos\skunk\skunk.cu">
       <Filter>Source Files\CUDA\skunk</Filter>
     </CudaCompile>
-    <CudaCompile Include="skunk\cuda_skunk.cu">
+    <CudaCompile Include="algos\skunk\cuda_skunk.cu">
       <Filter>Source Files\CUDA\skunk</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\stages\cuda_streebog.cu">
       <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="tribus\tribus.cu">
+    <CudaCompile Include="algos\tribus\tribus.cu">
       <Filter>Source Files\CUDA\tribus</Filter>
     </CudaCompile>
-    <CudaCompile Include="tribus\cuda_echo512_final.cu">
-      <Filter>Source Files\CUDA\tribus</Filter>
+    <CudaCompile Include="algos\stages\cuda_echo512_final.cu">
+      <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <ClInclude Include="tribus\cuda_echo512_aes.cuh">
-      <Filter>Source Files\CUDA\tribus</Filter>
+    <ClInclude Include="algos\stages\cuda_echo512_aes.cuh">
+      <Filter>Source Files\CUDA\stages</Filter>
     </ClInclude>
     <CudaCompile Include="algos\x11\phi.cu">
       <Filter>Source Files\CUDA\x11</Filter>

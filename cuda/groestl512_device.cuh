@@ -4,7 +4,7 @@
  * QUAD-THREAD bitslice formulation: ONE HASH NEEDS FOUR THREADS (lanes
  * threadIdx.x & 3 of the same warp-internal group of 4, warp shuffles with
  * width 4). Callers launch 4x threads and build the per-lane message[8]
- * exactly as quark/cuda_quark_groestl512.cu does.
+ * exactly as algos/stages/cuda_groestl512.cu does.
  *
  * Assembled verbatim from quark/groestl_functions_quad.h and
  * quark/groestl_transf_quad.h (both now deleted; also used by

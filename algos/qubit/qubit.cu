@@ -1,6 +1,11 @@
 /*
- * qubit algorithm
+ * qubit algorithm  (luffa80 - cubehash - shavite - simd - echo)
  *
+ * The fixed echo terminal is folded with the on-device target compare
+ * (echo512_cpu_hash_64_final: 2 nonces via an atomicExch chain into
+ * d_resNonce, eliding the echo d_hash store + the cuda_check_hash/suppl
+ * passes). The compat path (arch < 500, below the sm_61 build floor) keeps
+ * the tpruvot echo + cuda_check_hash.
  */
 extern "C" {
 #include "sph/sph_luffa.h"
@@ -13,13 +18,10 @@ extern "C" {
 #include "miner.h"
 
 #include "cuda_helper.h"
-#include "x11/cuda_x11.h"
+#include "algos/common/cuda_x_stages.h"
 
 static uint32_t *d_hash[MAX_GPUS];
-
-extern void qubit_luffa512_cpu_init(int thr_id, uint32_t threads);
-extern void qubit_luffa512_cpu_setBlock_80(void *pdata);
-extern void qubit_luffa512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash, int order);
+static uint32_t *d_resNonce[MAX_GPUS];
 
 extern "C" void qubithash(void *state, const void *input)
 {
@@ -57,12 +59,14 @@ extern "C" void qubithash(void *state, const void *input)
 }
 
 static bool init[MAX_GPUS] = { 0 };
+static bool use_compat_kernels[MAX_GPUS] = { 0 };
 
 extern "C" int scanhash_qubit(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done)
 {
 	uint32_t _ALIGN(64) endiandata[20];
 	uint32_t *pdata = work->data;
 	uint32_t *ptarget = work->target;
+	const int dev_id = device_map[thr_id];
 	const uint32_t first_nonce = pdata[19];
 	uint32_t throughput =  cuda_default_throughput(thr_id, 1U << 19); // 256*256*8
 	if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
@@ -72,7 +76,7 @@ extern "C" int scanhash_qubit(int thr_id, struct work* work, uint32_t max_nonce,
 
 	if (!init[thr_id])
 	{
-		cudaSetDevice(device_map[thr_id]);
+		cudaSetDevice(dev_id);
 		if (opt_cudaschedule == -1 && gpu_threads == 1) {
 			cudaDeviceReset();
 			// reduce cpu usage
@@ -81,13 +85,17 @@ extern "C" int scanhash_qubit(int thr_id, struct work* work, uint32_t max_nonce,
 		}
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
-		qubit_luffa512_cpu_init(thr_id, throughput);
-		//x11_cubehash512_cpu_init(thr_id, throughput);
-		x11_shavite512_cpu_init(thr_id, throughput);
-		x11_simd512_cpu_init(thr_id, throughput);
-		x11_echo512_cpu_init(thr_id, throughput);
+		cuda_get_arch(thr_id);
+		use_compat_kernels[thr_id] = (cuda_arch[dev_id] < 500);
+		if (use_compat_kernels[thr_id])
+			echo512_cpu_init_compat(thr_id, throughput);
+
+		shavite512_cpu_init(thr_id, throughput);
+		if (simd512_cpu_init(thr_id, throughput) != 0)
+			return 0;
 
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput), 0);
+		CUDA_SAFE_CALL(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)));
 
 		cuda_check_cpu_init(thr_id, throughput);
 
@@ -97,34 +105,46 @@ extern "C" int scanhash_qubit(int thr_id, struct work* work, uint32_t max_nonce,
 	for (int k=0; k < 20; k++)
 		be32enc(&endiandata[k], pdata[k]);
 
-	qubit_luffa512_cpu_setBlock_80((void*)endiandata);
-	cuda_check_cpu_setTarget(ptarget);
+	luffa512_setBlock_80((void*)endiandata);
+	if (use_compat_kernels[thr_id])
+		cuda_check_cpu_setTarget(ptarget);
+	else
+		cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
 
 	do {
 		int order = 0;
 
 		// Hash with CUDA
-		qubit_luffa512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
-		x11_cubehash512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
-		x11_shavite512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		x11_simd512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		x11_echo512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		luffa512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
+		cubehash512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
+		shavite512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
+		simd512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		if (use_compat_kernels[thr_id]) {
+			echo512_cpu_hash_64_compat(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+			work->nonces[0] = cuda_check_hash(thr_id, throughput, pdata[19], d_hash[thr_id]);
+			work->nonces[1] = UINT32_MAX;
+		} else {
+			/* echo + on-device target compare, 2 nonces via atomicExch chain */
+			echo512_cpu_hash_64_final(thr_id, throughput, d_hash[thr_id], d_resNonce[thr_id], AS_U64(&ptarget[6]));
+			cudaMemcpy(&work->nonces[0], d_resNonce[thr_id], 2 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+		}
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
 
-		work->nonces[0] = cuda_check_hash(thr_id, throughput, pdata[19], d_hash[thr_id]);
 		if (work->nonces[0] != UINT32_MAX)
 		{
 			const uint32_t Htarg = ptarget[7];
+			const uint32_t startNounce = pdata[19];
 			uint32_t _ALIGN(64) vhash[8];
+			if (!use_compat_kernels[thr_id]) work->nonces[0] += startNounce;
 			be32enc(&endiandata[19], work->nonces[0]);
 			qubithash(vhash, endiandata);
 
 			if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
 				work->valid_nonces = 1;
 				work_set_target_ratio(work, vhash);
-				work->nonces[1] = cuda_check_hash_suppl(thr_id, throughput, pdata[19], d_hash[thr_id], 1);
-				if (work->nonces[1] != 0) {
+				if (work->nonces[1] != UINT32_MAX) {
+					work->nonces[1] += startNounce;
 					be32enc(&endiandata[19], work->nonces[1]);
 					qubithash(vhash, endiandata);
 					bn_set_target_ratio(work, vhash, 1);
@@ -139,6 +159,7 @@ extern "C" int scanhash_qubit(int thr_id, struct work* work, uint32_t max_nonce,
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
 				gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
+				cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
 				pdata[19] = work->nonces[0] + 1;
 				continue;
 			}
@@ -165,8 +186,9 @@ extern "C" void free_qubit(int thr_id)
 	cudaDeviceSynchronize();
 
 	cudaFree(d_hash[thr_id]);
+	cudaFree(d_resNonce[thr_id]);
 
-	x11_simd512_cpu_free(thr_id);
+	simd512_cpu_free(thr_id);
 
 	cuda_check_cpu_free(thr_id);
 	init[thr_id] = false;

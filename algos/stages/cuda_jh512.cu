@@ -16,7 +16,7 @@
 
 __global__
 //__launch_bounds__(256,2)
-void quark_jh512_gpu_hash_64(const uint32_t threads, const uint32_t startNounce, uint32_t* g_hash, uint32_t * g_nonceVector)
+void jh512_gpu_hash_64(const uint32_t threads, const uint32_t startNounce, uint32_t* g_hash, uint32_t * g_nonceVector)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
@@ -40,13 +40,13 @@ void quark_jh512_gpu_hash_64(const uint32_t threads, const uint32_t startNounce,
 	}
 }
 __host__
-void quark_jh512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
+void jh512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
 	const uint32_t threadsperblock = 256;
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
 	dim3 block(threadsperblock);
 
-	quark_jh512_gpu_hash_64<<<grid, block>>>(threads, startNounce, d_hash, d_nonceVector);
+	jh512_gpu_hash_64<<<grid, block>>>(threads, startNounce, d_hash, d_nonceVector);
 }
 
 // Setup function
@@ -54,7 +54,7 @@ void quark_jh512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce,
  * layer 1), defined in cuda/xfamily_selftest.cu. */
 extern bool jh512_device_selftest(int thr_id);
 
-__host__ void  quark_jh512_cpu_init(int thr_id, uint32_t threads)
+__host__ void  jh512_cpu_init(int thr_id, uint32_t threads)
 {
 	jh512_device_selftest(thr_id);
 }
@@ -225,3 +225,7 @@ void jh512_setBlock_80(int thr_id, uint32_t *endiandata)
 }
 
 #endif
+
+/* legacy quark_ name forwarders (de-brand compat; see quark/cuda_quark.h) */
+__host__ void quark_jh512_cpu_init(int thr_id, uint32_t threads){ jh512_cpu_init(thr_id, threads); }
+__host__ void quark_jh512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order){ jh512_cpu_hash_64(thr_id, threads, startNounce, d_nonceVector, d_hash, order); }

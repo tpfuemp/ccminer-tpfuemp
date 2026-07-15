@@ -432,14 +432,11 @@
     <ClInclude Include="cuda_helper_alexis.h" />
     <ClInclude Include="cuda_vector_uint2x4.h" />
     <ClInclude Include="elist.h" />
-    <ClInclude Include="heavy\heavy.h" />
+    <ClInclude Include="algos\heavy\heavy.h" />
     <ClInclude Include="hefty1.h" />
     <ClInclude Include="algos.h" />
     <ClInclude Include="miner.h" />
     <ClInclude Include="nvml.h" />
-    <ClInclude Include="quark\cuda_bmw512_sm3.cuh" />
-    <ClInclude Include="quark\cuda_quark_groestl512_sm2.cuh" />
-    <ClInclude Include="quark\cuda_quark_blake512_sp.cuh" />
     <ClInclude Include="res\resource.h" />
     <ClInclude Include="sia\sia-rpc.h" />
     <ClInclude Include="scrypt\salsa_kernel.h" />
@@ -511,23 +508,23 @@
     <CudaCompile Include="zr5.cu" />
     <CudaCompile Include="gost\cuda_gosthash.cu" />
     <CudaCompile Include="gost\gost.cu" />
-    <CudaCompile Include="heavy\cuda_blake512.cu">
+    <CudaCompile Include="algos\heavy\cuda_heavy_blake512.cu">
     </CudaCompile>
-    <CudaCompile Include="heavy\cuda_combine.cu">
+    <CudaCompile Include="algos\heavy\cuda_combine.cu">
     </CudaCompile>
-    <CudaCompile Include="heavy\cuda_groestl512.cu">
+    <CudaCompile Include="algos\heavy\cuda_heavy_groestl512.cu">
     </CudaCompile>
-    <CudaCompile Include="heavy\cuda_hefty1.cu">
+    <CudaCompile Include="algos\heavy\cuda_hefty1.cu">
       <MaxRegCount>80</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="heavy\cuda_keccak512.cu">
+    <CudaCompile Include="algos\heavy\cuda_heavy_keccak512.cu">
     </CudaCompile>
-    <CudaCompile Include="heavy\cuda_sha256.cu">
+    <CudaCompile Include="algos\heavy\cuda_sha256.cu">
     </CudaCompile>
-    <CudaCompile Include="heavy\heavy.cu">
+    <CudaCompile Include="algos\heavy\heavy.cu">
     </CudaCompile>
-    <CudaCompile Include="heavy\bastion.cu" />
-    <CudaCompile Include="heavy\cuda_bastion.cu" />
+    <CudaCompile Include="algos\heavy\bastion.cu" />
+    <CudaCompile Include="algos\heavy\cuda_bastion.cu" />
     <CudaCompile Include="JHA\jha.cu" />
     <CudaCompile Include="JHA\jackpotcoin.cu" />
     <CudaCompile Include="JHA\cuda_jha_compactionTest.cu">
@@ -579,36 +576,36 @@
       <AdditionalOptions Condition="'$(Configuration)'=='Release'">--ptxas-options="-dlcm=cg" %(AdditionalOptions)</AdditionalOptions>
       <FastMath>true</FastMath>
     </CudaCompile>
-    <CudaCompile Include="quark\cuda_bmw512.cu">
+    <CudaCompile Include="algos\stages\cuda_bmw512.cu">
       <MaxRegCount>128</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="quark\cuda_jh512.cu">
+    <CudaCompile Include="algos\stages\cuda_jh512.cu">
       <MaxRegCount>80</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="quark\cuda_quark_blake512.cu">
+    <CudaCompile Include="algos\stages\cuda_blake512.cu">
       <MaxRegCount>80</MaxRegCount>
     </CudaCompile>
     <CudaCompile Include="cuda_checkhash.cu">
       <CInterleavedPTX>false</CInterleavedPTX>
     </CudaCompile>
-    <CudaCompile Include="quark\cuda_quark_compactionTest.cu">
+    <CudaCompile Include="algos\stages\cuda_quark_compactionTest.cu">
       <AdditionalOptions Condition="'$(Configuration)'=='Release'">-Xptxas "-abi=yes" %(AdditionalOptions)</AdditionalOptions>
       <AdditionalOptions Condition="'$(Configuration)'=='Debug'">-Xptxas "-abi=yes" %(AdditionalOptions)</AdditionalOptions>
     </CudaCompile>
-    <CudaCompile Include="quark\cuda_quark_groestl512.cu">
+    <CudaCompile Include="algos\stages\cuda_groestl512.cu">
     </CudaCompile>
-    <CudaCompile Include="quark\cuda_quark_keccak512.cu">
+    <CudaCompile Include="algos\stages\cuda_keccak512.cu">
       <MaxRegCount>88</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="quark\cuda_skein512.cu">
+    <CudaCompile Include="algos\stages\cuda_skein512.cu">
     </CudaCompile>
-    <CudaCompile Include="quark\animecoin.cu" />
-    <CudaCompile Include="quark\quarkcoin.cu" />
-    <CudaCompile Include="quark\nist5.cu" />
-    <CudaCompile Include="qubit\deep.cu" />
-    <CudaCompile Include="qubit\luffa.cu" />
-    <CudaCompile Include="qubit\qubit.cu" />
-    <CudaCompile Include="qubit\qubit_luffa512.cu" />
+    <CudaCompile Include="algos\quark\animecoin.cu" />
+    <CudaCompile Include="algos\quark\quarkcoin.cu" />
+    <CudaCompile Include="algos\quark\nist5.cu" />
+    <CudaCompile Include="algos\qubit\deep.cu" />
+    <CudaCompile Include="algos\qubit\luffa.cu" />
+    <CudaCompile Include="algos\qubit\qubit.cu" />
+    <CudaCompile Include="algos\stages\cuda_luffa512_80.cu" />
     <CudaCompile Include="lyra2\lyra2RE.cu" />
     <CudaCompile Include="lyra2\cuda_lyra2.cu" />
     <CudaCompile Include="lyra2\lyra2REv2.cu" />
@@ -626,15 +623,14 @@
     <CudaCompile Include="cuda_skeincoin.cu">
       <MaxRegCount>48</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="skunk\skunk.cu" />
-    <CudaCompile Include="skunk\cuda_skunk.cu">
-      <CodeGeneration>compute_50,sm_50;compute_52,sm_52</CodeGeneration>
+    <CudaCompile Include="algos\skunk\skunk.cu" />
+    <CudaCompile Include="algos\skunk\cuda_skunk.cu">
       <MaxRegCount>64</MaxRegCount>
     </CudaCompile>
     <CudaCompile Include="algos\stages\cuda_streebog.cu" />
-    <ClInclude Include="tribus\cuda_echo512_aes.cuh" />
-    <CudaCompile Include="tribus\cuda_echo512_final.cu" />
-    <CudaCompile Include="tribus\tribus.cu" />
+    <ClInclude Include="algos\stages\cuda_echo512_aes.cuh" />
+    <CudaCompile Include="algos\stages\cuda_echo512_final.cu" />
+    <CudaCompile Include="algos\tribus\tribus.cu" />
     <ClInclude Include="cuda\aes_device.cuh" />
     <ClInclude Include="cuda\aes_sp_device.cuh" />
     <CudaCompile Include="algos\stages\cuda_cubehash512.cu" />

@@ -586,7 +586,7 @@ uint32_t T3dn_cpu[] = {
 	C32e(0x3d46cb46), C32e(0xb71ffc1f), C32e(0x0c61d661), C32e(0x624e3a4e)
 };
 
-__device__ void groestl512_perm_P(uint32_t *a)
+__device__ void heavy_groestl512_perm_P(uint32_t *a)
 {
 	uint32_t t[32];
 
@@ -628,7 +628,7 @@ __device__ void groestl512_perm_P(uint32_t *a)
 	}
 }
 
-__device__ void groestl512_perm_Q(uint32_t *a)
+__device__ void heavy_groestl512_perm_Q(uint32_t *a)
 {
 //#pragma unroll 14
 	for(int r=0;r<14;r++)
@@ -670,7 +670,7 @@ __device__ void groestl512_perm_Q(uint32_t *a)
 	}
 }
 
-template <int BLOCKSIZE> __global__ void groestl512_gpu_hash(uint32_t threads, uint32_t startNounce, void *outputHash, uint32_t *heftyHashes, uint32_t *nonceVector)
+template <int BLOCKSIZE> __global__ void heavy_groestl512_gpu_hash(uint32_t threads, uint32_t startNounce, void *outputHash, uint32_t *heftyHashes, uint32_t *nonceVector)
 {
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
@@ -708,8 +708,8 @@ template <int BLOCKSIZE> __global__ void groestl512_gpu_hash(uint32_t threads, u
 			g[u] = message[u] ^ state[u];
 
 		// Perm
-		groestl512_perm_P(g);
-		groestl512_perm_Q(message);
+		heavy_groestl512_perm_P(g);
+		heavy_groestl512_perm_Q(message);
 
 #pragma unroll 32
 		for(int u=0;u<32;u++)
@@ -718,7 +718,7 @@ template <int BLOCKSIZE> __global__ void groestl512_gpu_hash(uint32_t threads, u
 			g[u] = state[u];
 		}
 
-		groestl512_perm_P(g);
+		heavy_groestl512_perm_P(g);
 
 #pragma unroll 32
 		for(int u=0;u<32;u++)
@@ -746,7 +746,7 @@ template <int BLOCKSIZE> __global__ void groestl512_gpu_hash(uint32_t threads, u
 
 // Setup Function
 __host__
-void groestl512_cpu_init(int thr_id, uint32_t threads)
+void heavy_groestl512_cpu_init(int thr_id, uint32_t threads)
 {
 	// Texturen mit obigem Makro initialisieren
 	texDef(0, t0up, d_T0up, T0up_cpu, sizeof(uint32_t)*256);
@@ -763,7 +763,7 @@ void groestl512_cpu_init(int thr_id, uint32_t threads)
 }
 
 __host__
-void groestl512_cpu_free(int thr_id)
+void heavy_groestl512_cpu_free(int thr_id)
 {
 	for (int i=0; i <8; i++)
 		cudaFree(d_textures[thr_id][i]);
@@ -774,7 +774,7 @@ void groestl512_cpu_free(int thr_id)
 static int BLOCKSIZE = 84;
 
 __host__
-void groestl512_cpu_setBlock(void *data, int len)
+void heavy_groestl512_cpu_setBlock(void *data, int len)
 	// data muss 80/84-Byte haben!
 	// heftyHash hat 32-Byte
 {
@@ -809,14 +809,14 @@ void groestl512_cpu_setBlock(void *data, int len)
 	BLOCKSIZE = len;
 }
 
-__host__ void groestl512_cpu_copyHeftyHash(int thr_id, uint32_t threads, void *heftyHashes, int copy)
+__host__ void heavy_groestl512_cpu_copyHeftyHash(int thr_id, uint32_t threads, void *heftyHashes, int copy)
 {
 	// Hefty1 Hashes kopieren (eigentlich nur zum debuggen)
 	if (copy)
 		CUDA_SAFE_CALL(cudaMemcpy(heavy_heftyHashes[thr_id], heftyHashes, 8 * sizeof(uint32_t) * threads, cudaMemcpyHostToDevice));
 }
 
-__host__ void groestl512_cpu_hash(int thr_id, uint32_t threads, uint32_t startNounce)
+__host__ void heavy_groestl512_cpu_hash(int thr_id, uint32_t threads, uint32_t startNounce)
 {
 	const uint32_t threadsperblock = 128;
 
@@ -828,7 +828,7 @@ __host__ void groestl512_cpu_hash(int thr_id, uint32_t threads, uint32_t startNo
 	size_t shared_size = 0;
 
 	if (BLOCKSIZE == 84)
-		groestl512_gpu_hash<84><<<grid, block, shared_size>>>(threads, startNounce, d_hash4output[thr_id], heavy_heftyHashes[thr_id], heavy_nonceVector[thr_id]);
+		heavy_groestl512_gpu_hash<84><<<grid, block, shared_size>>>(threads, startNounce, d_hash4output[thr_id], heavy_heftyHashes[thr_id], heavy_nonceVector[thr_id]);
 	else if (BLOCKSIZE == 80)
-		groestl512_gpu_hash<80><<<grid, block, shared_size>>>(threads, startNounce, d_hash4output[thr_id], heavy_heftyHashes[thr_id], heavy_nonceVector[thr_id]);
+		heavy_groestl512_gpu_hash<80><<<grid, block, shared_size>>>(threads, startNounce, d_hash4output[thr_id], heavy_heftyHashes[thr_id], heavy_nonceVector[thr_id]);
 }

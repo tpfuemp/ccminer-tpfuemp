@@ -15,7 +15,7 @@
 
 // The Skein-512 device library (Threefish macros, first-block subkey
 // schedule and the 64-byte compression) lives in cuda/skein512_device.cuh;
-// quark_skein512_gpu_hash_64 below is a thin wrapper. The *_final and
+// skein512_gpu_hash_64 below is a thin wrapper. The *_final and
 // 80-byte kernels are unchanged.
 
 __global__
@@ -24,7 +24,7 @@ __launch_bounds__(TPB52, 3)
 #else
 __launch_bounds__(TPB50, 3)
 #endif
-void quark_skein512_gpu_hash_64(const uint32_t threads, const uint32_t startNonce, uint64_t* __restrict__ g_hash, const uint32_t *const __restrict__ g_nonceVector)
+void skein512_gpu_hash_64(const uint32_t threads, const uint32_t startNonce, uint64_t* __restrict__ g_hash, const uint32_t *const __restrict__ g_nonceVector)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 
@@ -52,7 +52,7 @@ void quark_skein512_gpu_hash_64(const uint32_t threads, const uint32_t startNonc
 
 
 __global__ __launch_bounds__(512, 3)
-void quark_skein512_gpu_hash_64_final(const uint32_t threads, uint64_t* g_hash, uint32_t* resNonce, uint64_t target)
+void skein512_gpu_hash_64_final(const uint32_t threads, uint64_t* g_hash, uint32_t* resNonce, uint64_t target)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 
@@ -352,8 +352,8 @@ void quark_skein512_gpu_hash_64_final(const uint32_t threads, uint64_t* g_hash, 
 
 
 __host__
-//void quark_skein512_cpu_hash_64(int thr_id,uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash)
-void quark_skein512_cpu_hash_64(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
+//void skein512_cpu_hash_64(int thr_id,uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash)
+void skein512_cpu_hash_64(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
 	uint32_t tpb = TPB52;
 	int dev_id = device_map[thr_id];
@@ -361,12 +361,12 @@ void quark_skein512_cpu_hash_64(int thr_id, const uint32_t threads, const uint32
 	if (device_sm[dev_id] <= 500) tpb = TPB50;
 	const dim3 grid((threads + tpb-1)/tpb);
 	const dim3 block(tpb);
-	quark_skein512_gpu_hash_64 <<<grid, block >>>(threads, startNonce, (uint64_t*)d_hash, d_nonceVector);
+	skein512_gpu_hash_64 <<<grid, block >>>(threads, startNonce, (uint64_t*)d_hash, d_nonceVector);
 
 }
 
 __host__
-void quark_skein512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint64_t target, uint32_t *d_resNonce)
+void skein512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint64_t target, uint32_t *d_resNonce)
 {
 	uint32_t tpb = TPB52;
 	int dev_id = device_map[thr_id];
@@ -374,7 +374,7 @@ void quark_skein512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_
 	if (device_sm[dev_id] <= 500) tpb = TPB50;
 	const dim3 grid((threads + tpb - 1) / tpb);
 	const dim3 block(tpb);
-	quark_skein512_gpu_hash_64_final << <grid, block >> >(threads, (uint64_t*)d_hash, d_resNonce, target);
+	skein512_gpu_hash_64_final << <grid, block >> >(threads, (uint64_t*)d_hash, d_resNonce, target);
 }
 
 
@@ -711,9 +711,13 @@ void skein512_cpu_setBlock_80(void *pdata)
 extern bool skein512_device_selftest(int thr_id);
 
 __host__
-void quark_skein512_cpu_init(int thr_id, uint32_t threads)
+void skein512_cpu_init(int thr_id, uint32_t threads)
 {
 	cuda_get_arch(thr_id);
 	skein512_device_selftest(thr_id);
 }
 
+
+/* legacy quark_ name forwarders (de-brand compat; see quark/cuda_quark.h) */
+__host__ void quark_skein512_cpu_init(int thr_id, uint32_t threads){ skein512_cpu_init(thr_id, threads); }
+__host__ void quark_skein512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order){ skein512_cpu_hash_64(thr_id, threads, startNounce, d_nonceVector, d_hash, order); }

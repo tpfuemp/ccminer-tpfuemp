@@ -14,20 +14,12 @@ extern "C" {
 #include "miner.h"
 #include "cuda_helper.h"
 
-//#define WANT_COMPAT_KERNEL
-
-// compatibility kernels
-extern void skein512_cpu_setBlock_80(void *pdata);
-extern void skein512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash, int swap);
-extern void x11_cubehash512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash);
-extern void x13_fugue512_cpu_init(int thr_id, uint32_t threads);
-extern void x13_fugue512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
-extern void x13_fugue512_cpu_free(int thr_id);
-// krnlx merged kernel
+// krnlx merged skein+cubehash+fugue kernel (algos/skunk/cuda_skunk.cu)
 extern void skunk_cpu_init(int thr_id, uint32_t threads);
-extern void streebog_set_target(uint32_t* ptarget);
 extern void skunk_setBlock_80(int thr_id, void *pdata);
 extern void skunk_cuda_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash);
+// shared streebog terminal (algos/stages/cuda_streebog.cu)
+extern void streebog_set_target(uint32_t* ptarget);
 extern void streebog_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t* d_resNonce);
 
 #include <stdio.h>
@@ -67,7 +59,6 @@ extern "C" void skunk_hash(void *output, const void *input)
 }
 
 static bool init[MAX_GPUS] = { 0 };
-static bool use_compat_kernels[MAX_GPUS] = { 0 };
 
 extern "C" int scanhash_skunk(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done)
 {
@@ -97,8 +88,6 @@ extern "C" int scanhash_skunk(int thr_id, struct work* work, uint32_t max_nonce,
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
 		skunk_cpu_init(thr_id, throughput);
-		use_compat_kernels[thr_id] = (cuda_arch[dev_id] < 500);
-		if (use_compat_kernels[thr_id]) x13_fugue512_cpu_init(thr_id, throughput);
 
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput), 0);
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_resNonce[thr_id], NBN * sizeof(uint32_t)), -1);
@@ -182,9 +171,6 @@ extern "C" void free_skunk(int thr_id)
 		return;
 
 	cudaDeviceSynchronize();
-
-	if (use_compat_kernels[thr_id])
-		x13_fugue512_cpu_free(thr_id);
 
 	cudaFree(d_hash[thr_id]);
 	cudaFree(d_resNonce[thr_id]);

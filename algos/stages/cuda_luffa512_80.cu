@@ -1,5 +1,18 @@
 /*******************************************************************************
- * luffa512 for 80-bytes input (with midstate precalc by klausT)
+ * Luffa-512 for an 80-byte input (Doomcoin lineage, midstate precalc by klausT).
+ *
+ * The x-family 80-byte first stage for the qubit chains (qubit/deep/luffa) and
+ * the mid-chain luffa-80 of x16/x21s/ghostrider/timetravel. The first two
+ * message rounds are precomputed on the host (luffa80_precalc) and uploaded as
+ * a midstate; the device kernel absorbs the final 16 bytes (incl. the nonce
+ * word) and finalises. The 64-byte luffa lives in cuda/luffa512_device.cuh —
+ * this kernel keeps its own round constants because the midstate precalc needs
+ * a host-side copy anyway.
+ *
+ * Bare names (luffa512_setBlock_80 / luffa512_cpu_hash_80) are the real symbols;
+ * the round-constant upload is folded into setBlock_80 (no separate init). The
+ * qubit_luffa512_* names remain as legacy forwarders until the not-yet-migrated
+ * consumers (x16/x21s/ghostrider/timetravel) adopt the bare names.
  */
 
 #include <stdio.h>
@@ -74,20 +87,8 @@ static __constant__ uint32_t statechainvpre[40];
 	a0 ^= c0;\
 	b0 ^= c1;
 
-/* initial values of chaining variables */
-__constant__ uint32_t c_IV[40];
-static const uint32_t h_IV[40] = {
-	0x6d251e69,0x44b051e0,0x4eaa6fb4,0xdbf78465,
-	0x6e292011,0x90152df4,0xee058139,0xdef610bb,
-	0xc3b44b95,0xd9d2f256,0x70eee9a0,0xde099fa3,
-	0x5d9b0557,0x8fc944b3,0xcf1ccf0e,0x746cd581,
-	0xf7efc89d,0x5dba5781,0x04016ce5,0xad659c05,
-	0x0306194f,0x666d1836,0x24aa230a,0x8b264ae7,
-	0x858075d5,0x36d79cce,0xe571f7d7,0x204b1f67,
-	0x35870c6a,0x57e9e923,0x14bcb808,0x7cde72ce,
-	0x6c68e9be,0x5ec41e22,0xc825b7c7,0xaffb4363,
-	0xf5df3999,0x0fc688f1,0xb07224cc,0x03e86cea};
-
+/* round constants (device + host copy for the midstate precalc); the initial
+ * chaining values are folded into luffa80_precalc's statechainv seed */
 __constant__ uint32_t c_CNS[80];
 static const uint32_t h_CNS[80] = {
 	0x303994a6,0xe0337818,0xc0e65299,0x441ba90d,
@@ -114,7 +115,7 @@ static const uint32_t h_CNS[80] = {
 
 /***************************************************/
 __device__ __forceinline__
-void rnd512(uint32_t *statebuffer, uint32_t *statechainv)
+void luffa80_rnd(uint32_t *statebuffer, uint32_t *statechainv)
 {
 	int i,j;
 	uint32_t t[40];
@@ -243,7 +244,7 @@ void rnd512(uint32_t *statebuffer, uint32_t *statechainv)
 		statechainv[i+32] = chainv[i];
 }
 
-static void rnd512_cpu(uint32_t *statebuffer, uint32_t *statechainv)
+static void luffa80_rnd_cpu(uint32_t *statebuffer, uint32_t *statechainv)
 {
 	int i, j;
 	uint32_t t[40];
@@ -347,27 +348,7 @@ static void rnd512_cpu(uint32_t *statebuffer, uint32_t *statechainv)
 
 /***************************************************/
 __device__ __forceinline__
-void Update512(uint32_t* statebuffer, uint32_t *statechainv, const uint32_t *const __restrict__ data)
-{
-	#pragma unroll
-	for (int i = 0; i<8; i++)
-		statebuffer[i] = cuda_swab32((data[i]));
-	rnd512(statebuffer, statechainv);
-
-	#pragma unroll
-	for(int i=0; i<8; i++)
-		statebuffer[i] = cuda_swab32((data[i+8]));
-	rnd512(statebuffer, statechainv);
-
-	#pragma unroll
-	for(int i=0; i<4; i++)
-		statebuffer[i] = cuda_swab32((data[i+16]));
-}
-
-
-/***************************************************/
-__device__ __forceinline__
-void finalization512(uint32_t* statebuffer, uint32_t *statechainv, uint32_t *b)
+void luffa80_finalize(uint32_t* statebuffer, uint32_t *statechainv, uint32_t *b)
 {
 	int i,j;
 
@@ -376,13 +357,13 @@ void finalization512(uint32_t* statebuffer, uint32_t *statechainv, uint32_t *b)
 	#pragma unroll 3
 	for(int i=5; i<8; i++)
 		statebuffer[i] = 0;
-	rnd512(statebuffer, statechainv);
+	luffa80_rnd(statebuffer, statechainv);
 
 	/*---- blank round with m=0 ----*/
 	#pragma unroll
 	for(i=0; i<8; i++)
 		statebuffer[i] =0;
-	rnd512(statebuffer, statechainv);
+	luffa80_rnd(statebuffer, statechainv);
 
 	#pragma unroll
 	for(i=0; i<8; i++) {
@@ -396,7 +377,7 @@ void finalization512(uint32_t* statebuffer, uint32_t *statechainv, uint32_t *b)
 	#pragma unroll
 	for(i=0; i<8; i++)
 		statebuffer[i]=0;
-	rnd512(statebuffer, statechainv);
+	luffa80_rnd(statebuffer, statechainv);
 
 	#pragma unroll
 	for(i=0; i<8; i++)
@@ -412,7 +393,7 @@ void finalization512(uint32_t* statebuffer, uint32_t *statechainv, uint32_t *b)
 
 /***************************************************/
 __global__
-void qubit_luffa512_gpu_hash_80(uint32_t threads, uint32_t startNounce, uint32_t *outputHash)
+void luffa512_gpu_hash_80(uint32_t threads, uint32_t startNounce, uint32_t *outputHash)
 {
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
@@ -445,19 +426,12 @@ void qubit_luffa512_gpu_hash_80(uint32_t threads, uint32_t startNounce, uint32_t
 			statechainv[i] = statechainvpre[i];
 
 		uint32_t *outHash = &outputHash[thread * 16];
-		finalization512(statebuffer, statechainv, outHash);
+		luffa80_finalize(statebuffer, statechainv, outHash);
 	}
 }
 
 __host__
-void qubit_luffa512_cpu_init(int thr_id, uint32_t threads)
-{
-	CUDA_SAFE_CALL(cudaMemcpyToSymbol(c_IV, h_IV, sizeof(h_IV), 0, cudaMemcpyHostToDevice));
-	CUDA_SAFE_CALL(cudaMemcpyToSymbol(c_CNS, h_CNS, sizeof(h_CNS), 0, cudaMemcpyHostToDevice));
-}
-
-__host__
-void qubit_luffa512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_outputHash,int order)
+void luffa512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_outputHash,int order)
 {
 	const uint32_t threadsperblock = 256;
 
@@ -465,11 +439,11 @@ void qubit_luffa512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNoun
 	dim3 block(threadsperblock);
 	size_t shared_size = 0;
 
-	qubit_luffa512_gpu_hash_80 <<<grid, block, shared_size>>> (threads, startNounce, d_outputHash);
+	luffa512_gpu_hash_80 <<<grid, block, shared_size>>> (threads, startNounce, d_outputHash);
 }
 
 __host__
-static void qubit_cpu_precalc(uint32_t* message)
+static void luffa80_precalc(uint32_t* message)
 {
 	uint32_t statebuffer[8];
 	uint32_t statechainv[40] =
@@ -488,19 +462,19 @@ static void qubit_cpu_precalc(uint32_t* message)
 
 	for (int i = 0; i<8; i++)
 		statebuffer[i] = cuda_swab32(message[i]);
-	rnd512_cpu(statebuffer, statechainv);
+	luffa80_rnd_cpu(statebuffer, statechainv);
 
 	for (int i = 0; i<8; i++)
 		statebuffer[i] = cuda_swab32(message[i+8]);
 
-	rnd512_cpu(statebuffer, statechainv);
+	luffa80_rnd_cpu(statebuffer, statechainv);
 
 	cudaMemcpyToSymbol(statebufferpre, statebuffer, sizeof(statebuffer), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(statechainvpre, statechainv, sizeof(statechainv), 0, cudaMemcpyHostToDevice);
 }
 
 __host__
-void qubit_luffa512_cpu_setBlock_80(void *pdata)
+void luffa512_setBlock_80(void *pdata)
 {
 	unsigned char PaddedMessage[128];
 
@@ -511,6 +485,19 @@ void qubit_luffa512_cpu_setBlock_80(void *pdata)
 	PaddedMessage[126] = 0x02;
 	PaddedMessage[127] = 0x80;
 
+	/* round constants are job-invariant; the once-per-block upload here keeps the
+	 * stage self-contained (no separate cpu_init to collide with the 64-byte one) */
+	CUDA_SAFE_CALL(cudaMemcpyToSymbol(c_CNS, h_CNS, sizeof(h_CNS), 0, cudaMemcpyHostToDevice));
 	CUDA_SAFE_CALL(cudaMemcpyToSymbol(c_PaddedMessage80, PaddedMessage, sizeof(PaddedMessage), 0, cudaMemcpyHostToDevice));
-	qubit_cpu_precalc((uint32_t*) PaddedMessage);
+	luffa80_precalc((uint32_t*) PaddedMessage);
+}
+
+/* Legacy forwarders — x16/x21s/ghostrider/timetravel still call the branded
+ * qubit_luffa512_* names; removed once they migrate to the bare luffa512_*_80
+ * ones. The old cpu_init only uploaded round constants (now folded into
+ * setBlock_80), so it is a no-op. */
+__host__ void qubit_luffa512_cpu_init(int thr_id, uint32_t threads) {}
+__host__ void qubit_luffa512_cpu_setBlock_80(void *pdata){ luffa512_setBlock_80(pdata); }
+__host__ void qubit_luffa512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash, int order){
+	luffa512_cpu_hash_80(thr_id, threads, startNounce, d_hash, order);
 }

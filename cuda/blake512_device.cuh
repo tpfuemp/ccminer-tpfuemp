@@ -3,7 +3,7 @@
  * Shared BLAKE-512 primitive library (device side) — x-family stage function.
  *
  * Compression extracted bit-identically from the alexis-lineage
- * quark_blake512_gpu_hash_64 kernel (quark/cuda_quark_blake512.cu, Provos
+ * blake512_gpu_hash_64 kernel (algos/stages/cuda_blake512.cu, Provos
  * Alexis 2016 / SP 2018). Every cryptographic primitive is a separately
  * callable building block (docs/coding-guideline.md §3); fused kernels call
  * these instead of re-implementing them.

@@ -163,7 +163,7 @@ uint2 keccak_final_lane3(const uint2 s[25])
 /* ------------------------------------------------------------------------
  * Keccak-512 (rate 72) building blocks for 64-byte chained inputs — the
  * x-family stage function. Extracted bit-identically from the alexis
- * quark_keccak512 kernels (quark/cuda_quark_keccak512.cu).
+ * keccak512 kernels (algos/stages/cuda_keccak512.cu).
  * ------------------------------------------------------------------------ */
 
 /* Round 0 with the absorb structure folded into theta: lanes 0..7 hold the

@@ -165,9 +165,9 @@ int scanhash_heavy(int thr_id, struct work *work, uint32_t max_nonce, unsigned l
 
 		hefty_cpu_init(thr_id, throughput);
 		sha256_cpu_init(thr_id, throughput);
-		keccak512_cpu_init(thr_id, throughput);
-		groestl512_cpu_init(thr_id, throughput);
-		blake512_cpu_init(thr_id, throughput);
+		heavy_keccak512_cpu_init(thr_id, throughput);
+		heavy_groestl512_cpu_init(thr_id, throughput);
+		heavy_blake512_cpu_init(thr_id, throughput);
 		combine_cpu_init(thr_id, throughput);
 
 		CUDA_SAFE_CALL(cudaMalloc(&heavy_nonceVector[thr_id], sizeof(uint32_t) * throughput));
@@ -199,9 +199,9 @@ int scanhash_heavy(int thr_id, struct work *work, uint32_t max_nonce, unsigned l
 	// Setze die Blockdaten
 	hefty_cpu_setBlock(thr_id, throughput, pdata, blocklen);
 	sha256_cpu_setBlock(pdata, blocklen);
-	keccak512_cpu_setBlock(pdata, blocklen);
-	groestl512_cpu_setBlock(pdata, blocklen);
-	blake512_cpu_setBlock(pdata, blocklen);
+	heavy_keccak512_cpu_setBlock(pdata, blocklen);
+	heavy_groestl512_cpu_setBlock(pdata, blocklen);
+	heavy_blake512_cpu_setBlock(pdata, blocklen);
 
 	do {
 		uint32_t actualNumberOfValuesInNonceVectorGPU = throughput;
@@ -225,7 +225,7 @@ int scanhash_heavy(int thr_id, struct work *work, uint32_t max_nonce, unsigned l
 		if(actualNumberOfValuesInNonceVectorGPU == 0)
 			goto emptyNonceVector;
 
-		keccak512_cpu_hash(thr_id, actualNumberOfValuesInNonceVectorGPU, pdata[19]);
+		heavy_keccak512_cpu_hash(thr_id, actualNumberOfValuesInNonceVectorGPU, pdata[19]);
 
 		////// Compaction
 		t = (uint64_t*) target3;
@@ -234,7 +234,7 @@ int scanhash_heavy(int thr_id, struct work *work, uint32_t max_nonce, unsigned l
 		if(actualNumberOfValuesInNonceVectorGPU == 0)
 			goto emptyNonceVector;
 
-		blake512_cpu_hash(thr_id, actualNumberOfValuesInNonceVectorGPU, pdata[19]);
+		heavy_blake512_cpu_hash(thr_id, actualNumberOfValuesInNonceVectorGPU, pdata[19]);
 
 		////// Compaction
 		t = (uint64_t*) target5;
@@ -243,7 +243,7 @@ int scanhash_heavy(int thr_id, struct work *work, uint32_t max_nonce, unsigned l
 		if(actualNumberOfValuesInNonceVectorGPU == 0)
 			goto emptyNonceVector;
 
-		groestl512_cpu_hash(thr_id, actualNumberOfValuesInNonceVectorGPU, pdata[19]);
+		heavy_groestl512_cpu_hash(thr_id, actualNumberOfValuesInNonceVectorGPU, pdata[19]);
 
 		////// Compaction
 		t = (uint64_t*) target4;
@@ -320,10 +320,10 @@ extern "C" void free_heavy(int thr_id)
 
 	cudaFree(heavy_nonceVector[thr_id]);
 
-	blake512_cpu_free(thr_id);
-	groestl512_cpu_free(thr_id);
+	heavy_blake512_cpu_free(thr_id);
+	heavy_groestl512_cpu_free(thr_id);
 	hefty_cpu_free(thr_id);
-	keccak512_cpu_free(thr_id);
+	heavy_keccak512_cpu_free(thr_id);
 	sha256_cpu_free(thr_id);
 	combine_cpu_free(thr_id);
 
@@ -340,7 +340,7 @@ extern "C" {
 #include "sph/sph_groestl.h"
 }
 #include "hefty1.h"
-#include "heavy/heavy.h"
+#include "algos/heavy/heavy.h"
 
 /* Combines top 64-bits from each hash into a single hash */
 __host__

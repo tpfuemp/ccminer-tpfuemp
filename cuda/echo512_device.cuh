@@ -8,7 +8,7 @@
  * the shavite/echo shared-AES-table race lesson.
  *
  * Extracted verbatim from x11/cuda_x11_echo.cu. The alexis x16 variant
- * (algos/stages/cuda_echo512_64.cu, tribus/cuda_echo512_aes.cuh tables) is a
+ * (algos/stages/cuda_echo512_64.cu, algos/stages/cuda_echo512_aes.cuh tables) is a
  * separate formulation and stays in its TU until the x16 pilot.
  */
 
@@ -425,7 +425,7 @@ void cuda_echo_round_80(uint32_t *const __restrict__ sharedMemory, uint32_t *con
 
 /* ======================================================================== *
  * ECHO-512 alexis formulation (x16 chains on sm >= 500), from
- * tribus/cuda_echo512_aes.cuh + algos/stages/cuda_echo512_64.cu. Its own AES
+ * algos/stages/cuda_echo512_aes.cuh + algos/stages/cuda_echo512_64.cu. Its own AES
  * tables (c_echo_AES0/c_echo_AES3, static-init; table reads mix __ldg with
  * shared memory — INTENSIVE_GMF baked in). Kernels declare
  * __shared__ uint32_t sharedMemory[4][256], fill it with one of the

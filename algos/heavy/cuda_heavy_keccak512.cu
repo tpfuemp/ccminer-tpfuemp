@@ -137,7 +137,7 @@ keccak_block(uint64_t *s, const uint32_t *in, const uint64_t *keccak_round_const
 }
 
 // Die Hash-Funktion
-template <int BLOCKSIZE> __global__ void keccak512_gpu_hash(uint32_t threads, uint32_t startNounce, void *outputHash, uint32_t *heftyHashes, uint32_t *nonceVector)
+template <int BLOCKSIZE> __global__ void heavy_keccak512_gpu_hash(uint32_t threads, uint32_t startNounce, void *outputHash, uint32_t *heftyHashes, uint32_t *nonceVector)
 {
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
@@ -186,7 +186,7 @@ template <int BLOCKSIZE> __global__ void keccak512_gpu_hash(uint32_t threads, ui
 // ---------------------------- END CUDA keccak512 functions ------------------------------------
 
 __host__
-void keccak512_cpu_init(int thr_id, uint32_t threads)
+void heavy_keccak512_cpu_init(int thr_id, uint32_t threads)
 {
 	// Kopiere die Hash-Tabellen in den GPU-Speicher
 	cudaMemcpyToSymbol( c_keccak_round_constants,
@@ -199,7 +199,7 @@ void keccak512_cpu_init(int thr_id, uint32_t threads)
 }
 
 __host__
-void keccak512_cpu_free(int thr_id)
+void heavy_keccak512_cpu_free(int thr_id)
 {
 	cudaFree(d_hash3output[thr_id]);
 }
@@ -217,7 +217,7 @@ void keccak512_cpu_free(int thr_id)
 static int BLOCKSIZE = 84;
 
 __host__
-void keccak512_cpu_setBlock(void *data, int len)
+void heavy_keccak512_cpu_setBlock(void *data, int len)
 	// data muss 80 oder 84-Byte haben!
 	// heftyHash hat 32-Byte
 {
@@ -258,7 +258,7 @@ void keccak512_cpu_setBlock(void *data, int len)
 }
 
 __host__
-void keccak512_cpu_copyHeftyHash(int thr_id, uint32_t threads, void *heftyHashes, int copy)
+void heavy_keccak512_cpu_copyHeftyHash(int thr_id, uint32_t threads, void *heftyHashes, int copy)
 {
 	// Hefty1 Hashes kopieren
 	if (copy)
@@ -267,7 +267,7 @@ void keccak512_cpu_copyHeftyHash(int thr_id, uint32_t threads, void *heftyHashes
 }
 
 __host__
-void keccak512_cpu_hash(int thr_id, uint32_t threads, uint32_t startNounce)
+void heavy_keccak512_cpu_hash(int thr_id, uint32_t threads, uint32_t startNounce)
 {
 	const uint32_t threadsperblock = 128;
 
@@ -279,7 +279,7 @@ void keccak512_cpu_hash(int thr_id, uint32_t threads, uint32_t startNounce)
 	size_t shared_size = 0;
 
 	if (BLOCKSIZE==84)
-		keccak512_gpu_hash<84><<<grid, block, shared_size>>>(threads, startNounce, d_hash3output[thr_id], heavy_heftyHashes[thr_id], heavy_nonceVector[thr_id]);
+		heavy_keccak512_gpu_hash<84><<<grid, block, shared_size>>>(threads, startNounce, d_hash3output[thr_id], heavy_heftyHashes[thr_id], heavy_nonceVector[thr_id]);
 	else if (BLOCKSIZE==80)
-		keccak512_gpu_hash<80><<<grid, block, shared_size>>>(threads, startNounce, d_hash3output[thr_id], heavy_heftyHashes[thr_id], heavy_nonceVector[thr_id]);
+		heavy_keccak512_gpu_hash<80><<<grid, block, shared_size>>>(threads, startNounce, d_hash3output[thr_id], heavy_heftyHashes[thr_id], heavy_nonceVector[thr_id]);
 }

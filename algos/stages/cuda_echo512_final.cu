@@ -8,7 +8,7 @@
 #include <cuda_vectors.h>
 
 #define INTENSIVE_GMF
-#include "tribus/cuda_echo512_aes.cuh"
+#include "algos/stages/cuda_echo512_aes.cuh"
 
 #ifdef __INTELLISENSE__
 #define __byte_perm(x, y, b) x
@@ -84,7 +84,7 @@ static void echo_round(const uint32_t sharedMemory[4][256], uint32_t *W, uint32_
 }
 
 __global__ __launch_bounds__(256, 3) /* will force 80 registers */
-static void tribus_echo512_gpu_final(uint32_t threads, uint64_t *g_hash, uint32_t* resNonce, const uint64_t target)
+static void echo512_gpu_hash_64_final(uint32_t threads, uint64_t *g_hash, uint32_t* resNonce, const uint64_t target)
 {
 	__shared__ uint32_t sharedMemory[4][256];
 
@@ -274,12 +274,12 @@ static void tribus_echo512_gpu_final(uint32_t threads, uint64_t *g_hash, uint32_
 }
 
 __host__
-void tribus_echo512_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t *d_resNonce, const uint64_t target)
+void echo512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t *d_resNonce, const uint64_t target)
 {
 	const uint32_t threadsperblock = 256;
 
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
 	dim3 block(threadsperblock);
 
-	tribus_echo512_gpu_final <<<grid, block>>> (threads, (uint64_t*)d_hash, d_resNonce, target);
+	echo512_gpu_hash_64_final <<<grid, block>>> (threads, (uint64_t*)d_hash, d_resNonce, target);
 }

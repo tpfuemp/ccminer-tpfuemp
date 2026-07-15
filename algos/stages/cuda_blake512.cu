@@ -20,7 +20,7 @@ __constant__ uint2 _ALIGN(16) c_v[16]; //state
 
 __constant__ uint2 _ALIGN(16) c_x[128]; //precomputed xors
 
-// ---------------------------- BEGIN CUDA quark_blake512 functions ------------------------------------
+// ---------------------------- BEGIN CUDA blake512 functions ------------------------------------
 
 #define GSn4(a,b,c,d,e,f,a1,b1,c1,d1,e1,f1,a2,b2,c2,d2,e2,f2,a3,b3,c3,d3,e3,f3){\
 	v[ a] = v[ a] + e + v[ b];		v[a1] = v[a1] + e1 + v[b1];		v[a2] = v[a2] + e2 + v[b2];		v[a3] = v[a3] + e3 + v[b3];\
@@ -46,12 +46,15 @@ __constant__ uint2 _ALIGN(16) c_x[128]; //precomputed xors
 
 __global__
 __launch_bounds__(192, 2)
-void quark_blake512_gpu_hash_64(uint32_t threads, const uint32_t *const __restrict__ g_nonceVector, uint2* g_hash)
+void blake512_gpu_hash_64(uint32_t threads, const uint32_t startNounce, const uint32_t *const __restrict__ g_nonceVector, uint2* g_hash)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 
 	if (thread < threads){
-		const uint32_t hashPosition = (g_nonceVector == NULL) ? thread : g_nonceVector[thread];
+		/* branch nonce vectors (quark/anime compaction) store absolute nonces,
+		 * so map back to the hash-buffer slot: subtract startNounce (matches
+		 * skein/jh/groestl). NULL vector => the slot is just the thread index. */
+		const uint32_t hashPosition = (g_nonceVector == NULL) ? thread : g_nonceVector[thread] - startNounce;
 
 		uint2 hash[8];
 
@@ -69,7 +72,7 @@ void quark_blake512_gpu_hash_64(uint32_t threads, const uint32_t *const __restri
 
 __global__
 __launch_bounds__(192, 2)
-void quark_blake512_gpu_hash_64_final(uint32_t threads, const uint32_t *const __restrict__ g_nonceVector, uint2* g_hash, uint32_t* resNonce, const uint64_t target)
+void blake512_gpu_hash_64_final(uint32_t threads, const uint32_t *const __restrict__ g_nonceVector, uint2* g_hash, uint32_t* resNonce, const uint64_t target)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 
@@ -94,7 +97,7 @@ void quark_blake512_gpu_hash_64_final(uint32_t threads, const uint32_t *const __
 
 
 __global__ __launch_bounds__(512, 2)// __launch_bounds__(TPB80, 4)
-void quark_blake512_gpu_hash_80(const uint32_t threads, const uint32_t startNounce, uint2x4 *const __restrict__ g_hash){
+void blake512_gpu_hash_80(const uint32_t threads, const uint32_t startNounce, uint2x4 *const __restrict__ g_hash){
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 
 	uint2 v[16];
@@ -324,8 +327,8 @@ void quark_blake512_gpu_hash_80(const uint32_t threads, const uint32_t startNoun
 }
 
 
-//void quark_blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_outputHash){
-__host__ void quark_blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
+//void blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_outputHash){
+__host__ void blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
 	uint32_t tpb = TPB52_64;
 	int dev_id = device_map[thr_id];
@@ -333,10 +336,10 @@ __host__ void quark_blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t 
 	if (device_sm[dev_id] <= 500) tpb = TPB50_64;
 	const dim3 grid((threads + tpb - 1) / tpb);
 	const dim3 block(tpb);
-	quark_blake512_gpu_hash_64 << <grid, block >> >(threads, d_nonceVector, (uint2*)d_hash);
+	blake512_gpu_hash_64 << <grid, block >> >(threads, startNounce, d_nonceVector, (uint2*)d_hash);
 }
 
-extern void quark_blake512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_outputHash, uint32_t *resNonce, const uint64_t target)
+extern void blake512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_outputHash, uint32_t *resNonce, const uint64_t target)
 {
 	uint32_t tpb = TPB52_64;
 	int dev_id = device_map[thr_id];
@@ -344,24 +347,24 @@ extern void quark_blake512_cpu_hash_64_final(int thr_id, uint32_t threads, uint3
 	if (device_sm[dev_id] <= 500) tpb = TPB50_64;
 	const dim3 grid((threads + tpb - 1) / tpb);
 	const dim3 block(tpb);
-	quark_blake512_gpu_hash_64_final << <grid, block >> >(threads, d_nonceVector, (uint2*)d_outputHash, resNonce, target);
+	blake512_gpu_hash_64_final << <grid, block >> >(threads, d_nonceVector, (uint2*)d_outputHash, resNonce, target);
 }
 
 
 __host__
-void quark_blake512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_outputHash)
+void blake512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_outputHash)
 {
 	dim3 grid((threads + 512 - 1) / 512);
 	dim3 block(512);
 
-	quark_blake512_gpu_hash_80 << <grid, block >> >(threads, startNounce, (uint2x4*)d_outputHash);
+	blake512_gpu_hash_80 << <grid, block >> >(threads, startNounce, (uint2x4*)d_outputHash);
 }
 
-// ---------------------------- END CUDA quark_blake512 functions ------------------------------------
+// ---------------------------- END CUDA blake512 functions ------------------------------------
 
 // ----------------------------- Host midstate for 80-bytes input ------------------------------------
 __host__
-void quark_blake512_cpu_setBlock_80(int thr_id, uint32_t *endiandata){
+void blake512_cpu_setBlock_80(int thr_id, uint32_t *endiandata){
 	uint64_t m[16], v[16], xors[128];
 	memcpy(m, endiandata, 80);
 	m[10] = 0x8000000000000000ull;
@@ -535,7 +538,7 @@ void quark_blake512_cpu_setBlock_80(int thr_id, uint32_t *endiandata){
 	CUDA_SAFE_CALL(cudaMemcpyToSymbol(c_x, xors, i*sizeof(uint2), 0, cudaMemcpyHostToDevice));
 }
 
-__host__ void quark_blake512_cpu_free(int)
+__host__ void blake512_cpu_free(int)
 {
 
 }
@@ -544,7 +547,13 @@ __host__ void quark_blake512_cpu_free(int)
  * layer 1), defined in cuda/xfamily_selftest.cu. */
 extern bool blake512_device_selftest(int thr_id);
 
-__host__ void __cdecl quark_blake512_cpu_init(int thr_id, unsigned int)
+__host__ void __cdecl blake512_cpu_init(int thr_id, unsigned int)
 {
 	blake512_device_selftest(thr_id);
 }
+/* legacy quark_ name forwarders (de-brand compat; see quark/cuda_quark.h) */
+__host__ void quark_blake512_cpu_init(int thr_id, uint32_t threads){ blake512_cpu_init(thr_id, threads); }
+__host__ void quark_blake512_cpu_free(int thr_id){ blake512_cpu_free(thr_id); }
+__host__ void quark_blake512_cpu_setBlock_80(int thr_id, uint32_t *pdata){ blake512_cpu_setBlock_80(thr_id, pdata); }
+__host__ void quark_blake512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash){ blake512_cpu_hash_80(thr_id, threads, startNounce, d_hash); }
+__host__ void quark_blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order){ blake512_cpu_hash_64(thr_id, threads, startNounce, d_nonceVector, d_hash, order); }

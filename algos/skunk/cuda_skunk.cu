@@ -6,7 +6,7 @@
 
 #include <miner.h>
 #include <cuda_vectors.h>
-#include "skunk/skein_header.h"
+#include "algos/skunk/skein_header.h"
 #include <cuda_vector_uint2x4.h>
 
 #define TPB 512

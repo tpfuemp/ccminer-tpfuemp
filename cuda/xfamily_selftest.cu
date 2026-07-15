@@ -1254,7 +1254,7 @@ static const uint8_t kat_groestl512_pat64[64] = {
 
 /* QUAD-thread kernel: lanes 4v..4v+3 of one warp cooperate on vector v
  * (width-4 warp shuffles); the padded-message build mirrors
- * quark_groestl512_gpu_hash_64_quad. Out-of-range lane groups hash vector 0
+ * groestl512_gpu_hash_64_quad. Out-of-range lane groups hash vector 0
  * so every lane of the warp reaches the __shfl_sync calls. */
 __global__ __launch_bounds__(32, 1)
 void groestl512_selftest_gpu(uint32_t *io, int count)

@@ -20,10 +20,8 @@
 __constant__ static uint32_t c_Message80[20];
 #endif
 
-#include "cuda_quark_groestl512_sm2.cuh"
-
 __global__ __launch_bounds__(TPB, THF)
-void quark_groestl512_gpu_hash_64_quad(const uint32_t threads, const uint32_t startNounce, uint32_t * g_hash, uint32_t * __restrict g_nonceVector)
+void groestl512_gpu_hash_64_quad(const uint32_t threads, const uint32_t startNounce, uint32_t * g_hash, uint32_t * __restrict g_nonceVector)
 {
 #if __CUDA_ARCH__ >= 300
 
@@ -78,42 +76,29 @@ void quark_groestl512_gpu_hash_64_quad(const uint32_t threads, const uint32_t st
 extern bool groestl512_device_selftest(int thr_id);
 
 __host__
-void quark_groestl512_cpu_init(int thr_id, uint32_t threads)
+void groestl512_cpu_init(int thr_id, uint32_t threads)
 {
-	int dev_id = device_map[thr_id];
-	cuda_get_arch(thr_id);
-	if (device_sm[dev_id] < 300 || cuda_arch[dev_id] < 300)
-		quark_groestl512_sm20_init(thr_id, threads);
-
 	groestl512_device_selftest(thr_id);
 }
 
 __host__
-void quark_groestl512_cpu_free(int thr_id)
+void groestl512_cpu_free(int thr_id)
 {
-	int dev_id = device_map[thr_id];
-	if (device_sm[dev_id] < 300 || cuda_arch[dev_id] < 300)
-		quark_groestl512_sm20_free(thr_id);
 }
 
 __host__
-void quark_groestl512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
+void groestl512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
 	uint32_t threadsperblock = TPB;
 
-	// Compute 3.0 benutzt die registeroptimierte Quad Variante mit Warp Shuffle
-	// mit den Quad Funktionen brauchen wir jetzt 4 threads pro Hash, daher Faktor 4 bei der Blockzahl
+	// registeroptimierte Quad-Variante mit Warp Shuffle:
+	// 4 threads pro Hash, daher Faktor 4 bei der Blockzahl
 	const uint32_t factor = THF;
 
 	dim3 grid(factor*((threads + threadsperblock-1)/threadsperblock));
 	dim3 block(threadsperblock);
 
-	int dev_id = device_map[thr_id];
-
-	if (device_sm[dev_id] >= 300 && cuda_arch[dev_id] >= 300)
-		quark_groestl512_gpu_hash_64_quad<<<grid, block>>>(threads, startNounce, d_hash, d_nonceVector);
-	else
-		quark_groestl512_sm20_hash_64(thr_id, threads, startNounce, d_nonceVector, d_hash, order);
+	groestl512_gpu_hash_64_quad<<<grid, block>>>(threads, startNounce, d_hash, d_nonceVector);
 }
 
 // --------------------------------------------------------------------------------------------------------------------------------------------
@@ -178,25 +163,18 @@ void groestl512_gpu_hash_80_quad(const uint32_t threads, const uint32_t startNou
 __host__
 void groestl512_cuda_hash_80(const int thr_id, const uint32_t threads, const uint32_t startNounce, uint32_t *d_hash)
 {
-	int dev_id = device_map[thr_id];
+	const uint32_t threadsperblock = TPB;
+	const uint32_t factor = THF;
 
-	if (device_sm[dev_id] >= 300 && cuda_arch[dev_id] >= 300) {
-		const uint32_t threadsperblock = TPB;
-		const uint32_t factor = THF;
+	dim3 grid(factor*((threads + threadsperblock-1)/threadsperblock));
+	dim3 block(threadsperblock);
 
-		dim3 grid(factor*((threads + threadsperblock-1)/threadsperblock));
-		dim3 block(threadsperblock);
-
-		groestl512_gpu_hash_80_quad <<<grid, block>>> (threads, startNounce, d_hash);
-
-	} else {
-
-		const uint32_t threadsperblock = 256;
-		dim3 grid((threads + threadsperblock-1)/threadsperblock);
-		dim3 block(threadsperblock);
-
-		groestl512_gpu_hash_80_sm2 <<<grid, block>>> (threads, startNounce, d_hash);
-	}
+	groestl512_gpu_hash_80_quad <<<grid, block>>> (threads, startNounce, d_hash);
 }
 
 #endif
+
+/* legacy quark_ name forwarders (de-brand compat; see quark/cuda_quark.h) */
+__host__ void quark_groestl512_cpu_init(int thr_id, uint32_t threads){ groestl512_cpu_init(thr_id, threads); }
+__host__ void quark_groestl512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order){ groestl512_cpu_hash_64(thr_id, threads, startNounce, d_nonceVector, d_hash, order); }
+__host__ void quark_groestl512_cpu_free(int thr_id){ groestl512_cpu_free(thr_id); }

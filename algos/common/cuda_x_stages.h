@@ -28,39 +28,17 @@ extern void x17_sha512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startN
 extern void x17_haval256_cpu_init(int thr_id, uint32_t threads);
 extern void x17_haval256_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_hash, const int outlen);
 
-void quark_blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_nonceVector, uint32_t *d_outputHash, int order);
-
 extern void tiger192_cpu_hash_64(int thr_id, int threads, int zero_pad_64, uint32_t *d_hash);
 
-/* ---- stage-launcher name bridge --------------------------------------------
- * The 64-byte stage launchers still carry their originating family's prefix
- * (quark_/x11_/x13_/x14_/x15_/x17_) because the TUs that define them have not
- * moved out of their legacy folders yet. Migrated x-family sources call the
- * stages by their bare <prim>512 names; each alias below forwards to the
- * current real symbol. When a family migrates its launcher is renamed to the
- * bare form and the matching line here is deleted, at which point the prefixed
- * name has no remaining users and can be removed. The _cpu_ infix keeps these
- * host launchers distinct from the register-resident device primitives
- * (blake512_hash_64, ...) and the already-bare 80-byte launchers
- * (keccak512_cuda_hash_80, ...). */
-#define blake512_cpu_init        quark_blake512_cpu_init
-#define blake512_cpu_setBlock_80 quark_blake512_cpu_setBlock_80
-#define blake512_cpu_hash_80     quark_blake512_cpu_hash_80
-#define blake512_cpu_hash_64     quark_blake512_cpu_hash_64
-#define blake512_cpu_free        quark_blake512_cpu_free
-#define bmw512_cpu_init          quark_bmw512_cpu_init
-#define bmw512_cpu_setBlock_80   quark_bmw512_cpu_setBlock_80
-#define bmw512_cpu_hash_80       quark_bmw512_cpu_hash_80
-#define bmw512_cpu_hash_64       quark_bmw512_cpu_hash_64
-#define groestl512_cpu_init      quark_groestl512_cpu_init
-#define groestl512_cpu_hash_64   quark_groestl512_cpu_hash_64
-#define groestl512_cpu_free      quark_groestl512_cpu_free
-#define skein512_cpu_init        quark_skein512_cpu_init
-#define skein512_cpu_hash_64     quark_skein512_cpu_hash_64
-#define jh512_cpu_init           quark_jh512_cpu_init
-#define jh512_cpu_hash_64        quark_jh512_cpu_hash_64
-#define keccak512_cpu_init       quark_keccak512_cpu_init
-#define keccak512_cpu_hash_64    quark_keccak512_cpu_hash_64
+/* ---- stage-launcher naming --------------------------------------------------
+ * The blake/bmw/jh/keccak/skein/groestl core launchers are now de-branded to
+ * their bare <prim>512_cpu_* names (real symbols in algos/stages/); those bare
+ * declarations come in via quark/cuda_quark.h (included through x11/cuda_x11.h
+ * above), which also keeps quark_<prim>512_cpu_* aliases for the not-yet-migrated
+ * legacy callers. The launchers below (luffa/cubehash/shavite/simd/echo/hamsi/
+ * fugue/shabal/whirlpool/sha512) still carry their originating family's prefix
+ * because their defining TUs have not moved yet; each alias forwards to the
+ * current real symbol and drops out when that family migrates. */
 /* luffa + cubehash: bare names are the real symbols (algos/stages/, layout B);
  * x11_* forwarders (in x11/cuda_x11.h) stay for the not-yet-migrated consumers.
  * (cubehash has no cpu_init — the self-test runs from the hash launcher.) */
@@ -121,17 +99,16 @@ void x16_echo512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash);
 /* fused-compare terminal launchers: the last chain stage folded with the
  * on-device target compare (2 nonces via an atomicExch chain into resNonce[0]/[1],
  * eliding the stage's d_hash store + the cuda_check_hash/suppl passes). Bare
- * names for migrated chains; the definitions currently live under tribus/ and
- * quark/ and keep their prefixed names until those files de-brand. */
-void tribus_echo512_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t *d_resNonce, const uint64_t target);
-#define echo512_cpu_hash_64_final   tribus_echo512_final
-void quark_skein512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint64_t target, uint32_t *d_resNonce);
-#define skein512_cpu_hash_64_final  quark_skein512_cpu_hash_64_final
+ * names, real symbols in algos/stages/. */
+void echo512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t *d_resNonce, const uint64_t target);
+/* skein-final de-branded to bare (real symbol in algos/stages/cuda_skein512.cu);
+ * the quark_skein512_cpu_hash_64_final alias lives in cuda_quark.h */
+void skein512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint64_t target, uint32_t *d_resNonce);
 
 // ---- 80 bytes kernels
 
-void quark_bmw512_cpu_setBlock_80(void *pdata);
-void quark_bmw512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_hash, int order);
+void bmw512_cpu_setBlock_80(void *pdata);
+void bmw512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_hash, int order);
 
 void groestl512_setBlock_80(int thr_id, uint32_t *endiandata);
 void groestl512_cuda_hash_80(const int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_hash);
@@ -139,6 +116,12 @@ void groestl512_cuda_hash_80(const int thr_id, const uint32_t threads, const uin
 void skein512_cpu_setBlock_80(void *pdata);
 void skein512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_hash, int swap);
 
+/* 80-byte luffa (algos/stages/cuda_luffa512_80.cu, Doomcoin/klausT midstate).
+ * Bare names are the real symbols; setBlock_80 folds the round-constant upload
+ * (no separate init). qubit_luffa512_* are legacy forwarders kept until
+ * x16/x21s/ghostrider/timetravel migrate to the bare names. */
+void luffa512_setBlock_80(void *pdata);
+void luffa512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_hash, int order);
 void qubit_luffa512_cpu_init(int thr_id, uint32_t threads);
 void qubit_luffa512_cpu_setBlock_80(void *pdata);
 void qubit_luffa512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_hash, int order);
