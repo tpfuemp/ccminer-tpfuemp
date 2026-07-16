@@ -139,7 +139,7 @@
     <Filter Include="Source Files\CUDA\xmr">
       <UniqueIdentifier>{0f9aec5e-5409-488f-992a-2c108590d1ac}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Source Files\equi">
+    <Filter Include="Source Files\equihash">
       <UniqueIdentifier>{031afae7-2a78-4e32-9738-4b589b6f7ff3}</UniqueIdentifier>
     </Filter>
     <Filter Include="Source Files\CUDA\tribus">
@@ -375,20 +375,20 @@
     <ClCompile Include="crypto\wildkeccak-cpu.cpp">
       <Filter>Source Files\crypto\bbr</Filter>
     </ClCompile>
-    <ClCompile Include="equi\equi.cpp">
-      <Filter>Source Files\equi</Filter>
+    <ClCompile Include="algos\equihash\equi.cpp">
+      <Filter>Source Files\equihash</Filter>
     </ClCompile>
-    <ClCompile Include="equi\equihash.cpp">
-      <Filter>Source Files\equi</Filter>
+    <ClCompile Include="algos\equihash\equihash.cpp">
+      <Filter>Source Files\equihash</Filter>
     </ClCompile>
-    <ClCompile Include="equi\equi-stratum.cpp">
-      <Filter>Source Files\equi</Filter>
+    <ClCompile Include="algos\equihash\equi-stratum.cpp">
+      <Filter>Source Files\equihash</Filter>
     </ClCompile>
-    <ClCompile Include="equi\blake2\blake2bx.cpp">
-      <Filter>Source Files\equi</Filter>
+    <ClCompile Include="algos\equihash\blake2\blake2bx.cpp">
+      <Filter>Source Files\equihash</Filter>
     </ClCompile>
-    <ClCompile Include="heavyhash/heavyhash-gate.c" />
-    <ClCompile Include="heavyhash/keccak_tiny.c" />
+    <ClCompile Include="algos/heavyhash/heavyhash-gate.c" />
+    <ClCompile Include="algos/heavyhash/keccak_tiny.c" />
     <ClCompile Include="sph\sha3d.c" />
     <ClCompile Include="sph\sha3.c" />
     <ClCompile Include="sph\yescrypt-common.c">
@@ -400,25 +400,25 @@
     <ClCompile Include="sph\sha256_Y.c">
       <Filter>Source Files\sph</Filter>
     </ClCompile>
-    <ClCompile Include="argon2d\argon2ref\argon2.c" />
-    <ClCompile Include="argon2d\argon2ref\blake2\blake2b.c" />
-    <ClCompile Include="argon2d\argon2ref\core.c" />
-    <ClCompile Include="argon2d\argon2ref\encoding.c" />
-    <ClCompile Include="argon2d\argon2ref\opt.c" />
-    <ClCompile Include="argon2d\argon2ref\thread.c" />
-    <ClCompile Include="balloon\balloon.cpp">
+    <ClCompile Include="algos\argon2d\argon2ref\argon2.c" />
+    <ClCompile Include="algos\argon2d\argon2ref\blake2\blake2b.c" />
+    <ClCompile Include="algos\argon2d\argon2ref\core.c" />
+    <ClCompile Include="algos\argon2d\argon2ref\encoding.c" />
+    <ClCompile Include="algos\argon2d\argon2ref\opt.c" />
+    <ClCompile Include="algos\argon2d\argon2ref\thread.c" />
+    <ClCompile Include="algos\balloon\balloon.cpp">
       <Filter>Source Files\balloon</Filter>
     </ClCompile>
-    <ClCompile Include="balloon\balloon_scan.cpp">
+    <ClCompile Include="algos\balloon\balloon_scan.cpp">
       <Filter>Source Files\balloon</Filter>
     </ClCompile>
-    <ClCompile Include="rinhash\rinhash_scanhash.cpp">
+    <ClCompile Include="algos\rinhash\rinhash_scanhash.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="odocrypt\odocrypt_host.cpp">
+    <ClCompile Include="algos\odocrypt\odocrypt_host.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="balloon\sha256-ref.c">
+    <ClCompile Include="algos\balloon\sha256-ref.c">
       <Filter>Source Files\balloon</Filter>
     </ClCompile>
   </ItemGroup>
@@ -603,7 +603,7 @@
     <ClInclude Include="res\resource.h">
       <Filter>Ressources</Filter>
     </ClInclude>
-    <ClInclude Include="scrypt\salsa_kernel.h">
+    <ClInclude Include="algos\scrypt\salsa_kernel.h">
       <Filter>Source Files\CUDA\scrypt</Filter>
     </ClInclude>
     <ClInclude Include="neoscrypt\neoscrypt.h">
@@ -666,14 +666,14 @@
     <ClInclude Include="crypto\cryptonight.h">
       <Filter>Source Files\CUDA\xmr</Filter>
     </ClInclude>
-    <ClInclude Include="equi\eqcuda.hpp">
-      <Filter>Source Files\equi</Filter>
+    <ClInclude Include="algos\equihash\eqcuda.hpp">
+      <Filter>Source Files\equihash</Filter>
     </ClInclude>
-    <ClInclude Include="equi\cuda_equi_tromp.h">
-      <Filter>Source Files\equi</Filter>
+    <ClInclude Include="algos\equihash\cuda_equi_tromp.h">
+      <Filter>Source Files\equihash</Filter>
     </ClInclude>
-    <ClInclude Include="heavyhash/heavyhash-gate.h" />
-    <ClInclude Include="heavyhash/keccak_tiny.h" />
+    <ClInclude Include="algos/heavyhash/heavyhash-gate.h" />
+    <ClInclude Include="algos/heavyhash/keccak_tiny.h" />
     <ClInclude Include="algos\common\cuda_x_stages.h">
       <Filter>Header Files\CUDA</Filter>
     </ClInclude>
@@ -691,20 +691,20 @@
     <ClInclude Include="sph\sha256_Y.h">
       <Filter>Header Files\sph</Filter>
     </ClInclude>
-    <ClInclude Include="argon2d\argon2ref\argon2.h" />
-    <ClInclude Include="argon2d\argon2ref\core.h" />
-    <ClInclude Include="argon2d\argon2ref\encoding.h" />
-    <ClInclude Include="argon2d\argon2ref\thread.h" />
-    <ClInclude Include="argon2d\argon2ref\blake2\blake2.h" />
-    <ClInclude Include="argon2d\argon2ref\blake2\blake2-impl.h" />
-    <ClInclude Include="argon2d\argon2ref\blake2\blakma-round-opt.h" />
-    <ClInclude Include="argon2d\argon2ref\blake2\blakma-round-ref.h" />
-    <ClInclude Include="argon2d\argon2d_kernel.h" />
-    <ClInclude Include="argon2d\cudaexception.h" />
-    <ClInclude Include="balloon\balloon.h">
+    <ClInclude Include="algos\argon2d\argon2ref\argon2.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\core.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\encoding.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\thread.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\blake2\blake2.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\blake2\blake2-impl.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\blake2\blamka-round-opt.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\blake2\blamka-round-ref.h" />
+    <ClInclude Include="algos\argon2d\argon2d_kernel.h" />
+    <ClInclude Include="algos\argon2d\cudaexception.h" />
+    <ClInclude Include="algos\balloon\balloon.h">
       <Filter>Source Files\balloon</Filter>
     </ClInclude>
-    <ClInclude Include="balloon\sha256.h">
+    <ClInclude Include="algos\balloon\sha256.h">
       <Filter>Source Files\balloon</Filter>
     </ClInclude>
   </ItemGroup>
@@ -982,16 +982,16 @@
     <CudaCompile Include="cuda_skeincoin.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
-    <CudaCompile Include="scrypt\blake.cu">
+    <CudaCompile Include="algos\scrypt\blake.cu">
       <Filter>Source Files\CUDA\scrypt</Filter>
     </CudaCompile>
-    <CudaCompile Include="scrypt\keccak.cu">
+    <CudaCompile Include="algos\scrypt\keccak.cu">
       <Filter>Source Files\CUDA\scrypt</Filter>
     </CudaCompile>
-    <CudaCompile Include="scrypt\salsa_kernel.cu">
+    <CudaCompile Include="algos\scrypt\salsa_kernel.cu">
       <Filter>Source Files\CUDA\scrypt</Filter>
     </CudaCompile>
-    <CudaCompile Include="scrypt\sha256.cu">
+    <CudaCompile Include="algos\scrypt\sha256.cu">
       <Filter>Source Files\CUDA\scrypt</Filter>
     </CudaCompile>
     <CudaCompile Include="neoscrypt\cuda_neoscrypt.cu">
@@ -1123,8 +1123,8 @@
     <CudaCompile Include="algos\stages\cuda_tiger192.cu">
       <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="heavyhash/heavyhash.cu" />
-    <CudaCompile Include="heavyhash/cuda_heavyhash.cu" />
+    <CudaCompile Include="algos/heavyhash/heavyhash.cu" />
+    <CudaCompile Include="algos/heavyhash/cuda_heavyhash.cu" />
     <CudaCompile Include="algos\sha3d\sha3d.cu">
       <Filter>Source Files\CUDA\keccak</Filter>
     </CudaCompile>
@@ -1137,21 +1137,21 @@
     <CudaCompile Include="algos\sha3t\cuda_sha3t.cu">
       <Filter>Source Files\CUDA\keccak</Filter>
     </CudaCompile>
-    <CudaCompile Include="equi\cuda_equi.cu">
-      <Filter>Source Files\equi</Filter>
+    <CudaCompile Include="algos\equihash\cuda_equi.cu">
+      <Filter>Source Files\equihash</Filter>
     </CudaCompile>
-    <CudaCompile Include="equi\cuda_equi_tromp.cu">
-      <Filter>Source Files\equi</Filter>
+    <CudaCompile Include="algos\equihash\cuda_equi_tromp.cu">
+      <Filter>Source Files\equihash</Filter>
     </CudaCompile>
-    <CudaCompile Include="gost\cuda_gosthash.cu" />
-    <CudaCompile Include="gost\gost.cu" />
+    <CudaCompile Include="algos\gost\cuda_gosthash.cu" />
+    <CudaCompile Include="algos\gost\gost.cu" />
     <CudaCompile Include="algos\stages\cuda_shavite512_80.cu">
       <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="yescrypt\yescrypt.cu">
+    <CudaCompile Include="algos\yescrypt\yescrypt.cu">
       <Filter>Source Files\CUDA\yescrypt</Filter>
     </CudaCompile>
-    <CudaCompile Include="yescrypt\cuda_yescrypt.cu">
+    <CudaCompile Include="algos\yescrypt\cuda_yescrypt.cu">
       <Filter>Source Files\CUDA\yescrypt</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\sha256d\cuda_sha256csm.cu">
@@ -1160,16 +1160,16 @@
     <CudaCompile Include="algos\sha256d\sha256csm.cu">
       <Filter>Source Files\CUDA\sha256</Filter>
     </CudaCompile>
-    <CudaCompile Include="argon2d\argon2d.cu" />
-    <CudaCompile Include="argon2d\argon2d_fill.cu" />
-    <CudaCompile Include="argon2d\blake2b_kernels.cu" />
+    <CudaCompile Include="algos\argon2d\argon2d.cu" />
+    <CudaCompile Include="algos\argon2d\argon2d_fill.cu" />
+    <CudaCompile Include="algos\argon2d\blake2b_kernels.cu" />
     <CudaCompile Include="blake2b.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
-    <CudaCompile Include="balloon\cuda_balloon.cu">
+    <CudaCompile Include="algos\balloon\cuda_balloon.cu">
       <Filter>Source Files\CUDA\balloon</Filter>
     </CudaCompile>
-    <CudaCompile Include="rinhash\rinhash.cu">
+    <CudaCompile Include="algos\rinhash\rinhash.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\hoohash\cuda_hoohashv110.cu">
@@ -1178,10 +1178,10 @@
     <CudaCompile Include="algos\hoohash\hoohash.cu">
       <Filter>Source Files\CUDA\hoohash</Filter>
     </CudaCompile>
-    <CudaCompile Include="odocrypt\cuda_odocrypt.cu">
+    <CudaCompile Include="algos\odocrypt\cuda_odocrypt.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
-    <CudaCompile Include="evohash\evohash.cu">
+    <CudaCompile Include="algos\evohash\evohash.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
   </ItemGroup>

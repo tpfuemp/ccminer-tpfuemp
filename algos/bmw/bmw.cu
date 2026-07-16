@@ -16,7 +16,7 @@ extern void bmw256_midstate_free(int thr_id);
 extern void bmw256_setBlock_80(int thr_id, void *pdata);
 extern void bmw256_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_outputHash, int swap);
 
-extern uint32_t cuda_check_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_inputHash);
+extern uint32_t cuda_check_hash(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_inputHash);
 
 // CPU Hash
 extern "C" void bmw_hash(void *state, const void *input)
@@ -57,7 +57,9 @@ extern "C" int scanhash_bmw(int thr_id, struct work* work, uint32_t max_nonce, u
 		cuda_check_cpu_init(thr_id, throughput);
 		bmw256_midstate_init(thr_id, throughput);
 
-		CUDA_SAFE_CALL(cudaMalloc(&d_hash[thr_id], (size_t)32 * throughput));
+		// 64 bytes per hash: BMW-256 emits 32 bytes but the shared check kernels
+		// (cuda_check_hash / _suppl) index at a 64-byte stride.
+		CUDA_SAFE_CALL(cudaMalloc(&d_hash[thr_id], (size_t)64 * throughput));
 
 		init[thr_id] = true;
 	}
@@ -76,7 +78,7 @@ extern "C" int scanhash_bmw(int thr_id, struct work* work, uint32_t max_nonce, u
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
 
-		work->nonces[0] = cuda_check_hash_32(thr_id, throughput, pdata[19], d_hash[thr_id]);
+		work->nonces[0] = cuda_check_hash(thr_id, throughput, pdata[19], d_hash[thr_id]);
 		if (work->nonces[0] != UINT32_MAX)
 		{
 			const uint32_t Htarg = ptarget[7];

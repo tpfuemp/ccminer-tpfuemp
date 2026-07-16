@@ -2,14 +2,14 @@
 * balloon algorithm - CUDA scan driver
 *
 */
-#include "../miner.h"
+#include "miner.h"
 #include <string.h>
 #include <stdint.h>
 
 #include <openssl/sha.h>
 
 #include "balloon.h"
-#include "../cuda_helper.h"
+#include "cuda_helper.h"
 
 // GPU entry points implemented in balloon/cuda_balloon.cu
 extern void balloon_gpu_init(int thr_id);

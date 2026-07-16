@@ -338,7 +338,9 @@ void bmw256_gpu_hash_80(uint32_t threads, uint32_t startNonce, uint64_t *g_hash,
 		for(int i=0;i<16;i++)
 			ctx.H[i] = d_midstate->H[i];
 #endif
-		gpu_bmw256_close(&ctx, (uint2*) &g_hash[thread << 2]);
+		// 64-byte stride (thread*8 u64) to match the shared check kernels; BMW-256
+		// writes 32 bytes here, the upper half of each slot is unused.
+		gpu_bmw256_close(&ctx, (uint2*) &g_hash[thread << 3]);
 	}
 }
 

@@ -13,8 +13,8 @@
 #include <stdint.h>
 #include <string.h>
 
-#include "../miner.h"
-#include "../cuda_helper.h"
+#include "miner.h"
+#include "cuda_helper.h"
 #include "odocrypt.h"
 
 // ---- device tables (uploaded per epoch) -----------------------------------

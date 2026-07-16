@@ -224,17 +224,17 @@
     </CudaLink>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="argon2d\argon2ref\argon2.c" />
-    <ClCompile Include="argon2d\argon2ref\blake2\blake2b.c" />
-    <ClCompile Include="argon2d\argon2ref\core.c" />
-    <ClCompile Include="argon2d\argon2ref\encoding.c" />
-    <ClCompile Include="argon2d\argon2ref\opt.c" />
-    <ClCompile Include="argon2d\argon2ref\thread.c" />
-    <ClCompile Include="balloon\balloon.cpp" />
-    <ClCompile Include="balloon\balloon_scan.cpp" />
-    <ClCompile Include="rinhash\rinhash_scanhash.cpp" />
-    <ClCompile Include="odocrypt\odocrypt_host.cpp" />
-    <ClCompile Include="balloon\sha256-ref.c" />
+    <ClCompile Include="algos\argon2d\argon2ref\argon2.c" />
+    <ClCompile Include="algos\argon2d\argon2ref\blake2\blake2b.c" />
+    <ClCompile Include="algos\argon2d\argon2ref\core.c" />
+    <ClCompile Include="algos\argon2d\argon2ref\encoding.c" />
+    <ClCompile Include="algos\argon2d\argon2ref\opt.c" />
+    <ClCompile Include="algos\argon2d\argon2ref\thread.c" />
+    <ClCompile Include="algos\balloon\balloon.cpp" />
+    <ClCompile Include="algos\balloon\balloon_scan.cpp" />
+    <ClCompile Include="algos\rinhash\rinhash_scanhash.cpp" />
+    <ClCompile Include="algos\odocrypt\odocrypt_host.cpp" />
+    <ClCompile Include="algos\balloon\sha256-ref.c" />
     <ClCompile Include="compat\getopt\getopt_long.c" />
     <ClCompile Include="compat\gettimeofday.c" />
     <ClCompile Include="compat\jansson\dump.c" />
@@ -247,8 +247,8 @@
     <ClCompile Include="compat\jansson\strconv.c" />
     <ClCompile Include="compat\jansson\utf.c" />
     <ClCompile Include="compat\jansson\value.c" />
-    <ClInclude Include="balloon\balloon.h" />
-    <ClInclude Include="balloon\sha256.h" />
+    <ClInclude Include="algos\balloon\balloon.h" />
+    <ClInclude Include="algos\balloon\sha256.h" />
     <ClInclude Include="cuda\blake512_device.cuh" />
     <ClInclude Include="cuda\bmw512_device.cuh" />
     <ClInclude Include="cuda\cubehash512_device.cuh" />
@@ -275,12 +275,12 @@
     <ClCompile Include="crypto\cryptolight-cpu.cpp" />
     <ClCompile Include="crypto\cryptonight-cpu.cpp" />
     <ClCompile Include="crypto\cpu\c_keccak.c" />
-    <ClCompile Include="equi\blake2\blake2bx.cpp">
+    <ClCompile Include="algos\equihash\blake2\blake2bx.cpp">
       <EnableEnhancedInstructionSet Condition="'$(Platform)'=='Win32'">StreamingSIMDExtensions</EnableEnhancedInstructionSet>
     </ClCompile>
-    <ClCompile Include="equi\equi-stratum.cpp" />
-    <ClCompile Include="equi\equi.cpp" />
-    <ClCompile Include="equi\equihash.cpp" />
+    <ClCompile Include="algos\equihash\equi-stratum.cpp" />
+    <ClCompile Include="algos\equihash\equi.cpp" />
+    <ClCompile Include="algos\equihash\equihash.cpp" />
     <ClCompile Include="nvapi.cpp" />
     <ClCompile Include="nvsettings.cpp" />
     <ClCompile Include="pools.cpp" />
@@ -304,10 +304,10 @@
     <ClCompile Include="algos\lyra2\Lyra2.c" />
     <ClCompile Include="algos\lyra2\Sponge.c" />
     <ClCompile Include="algos\lyra2\Lyra2Z.c" />
-    <ClCompile Include="heavyhash/heavyhash-gate.c" />
-    <ClCompile Include="heavyhash/keccak_tiny.c" />
-    <ClInclude Include="equi\eqcuda.hpp" />
-    <ClInclude Include="equi\cuda_equi_tromp.h" />
+    <ClCompile Include="algos/heavyhash/heavyhash-gate.c" />
+    <ClCompile Include="algos/heavyhash/keccak_tiny.c" />
+    <ClInclude Include="algos\equihash\eqcuda.hpp" />
+    <ClInclude Include="algos\equihash\cuda_equi_tromp.h" />
     <ClInclude Include="neoscrypt\neoscrypt.h" />
     <ClCompile Include="neoscrypt\neoscrypt.cpp" />
     <ClCompile Include="neoscrypt\neoscrypt-cpu.c" />
@@ -323,8 +323,8 @@
       <MaxRegCount>76</MaxRegCount>
     </CudaCompile>
     <CudaCompile Include="algos\allium\allium.cu" />
-    <CudaCompile Include="balloon\cuda_balloon.cu" />
-    <CudaCompile Include="rinhash\rinhash.cu" />
+    <CudaCompile Include="algos\balloon\cuda_balloon.cu" />
+    <CudaCompile Include="algos\rinhash\rinhash.cu" />
     <CudaCompile Include="algos\hoohash\cuda_hoohashv110.cu">
       <FastMath>false</FastMath>
       <FmadOptimization>false</FmadOptimization>
@@ -332,12 +332,12 @@
       <AdditionalOptions>--fmad=false --prec-div=true --prec-sqrt=true --ftz=false -allow-unsupported-compiler --Wno-deprecated-gpu-targets %(AdditionalOptions)</AdditionalOptions>
     </CudaCompile>
     <CudaCompile Include="algos\hoohash\hoohash.cu" />
-    <CudaCompile Include="evohash\evohash.cu" />
-    <CudaCompile Include="ghostrider\ghostrider.cu" />
-    <CudaCompile Include="odocrypt\cuda_odocrypt.cu" />
+    <CudaCompile Include="algos\evohash\evohash.cu" />
+    <CudaCompile Include="algos\ghostrider\ghostrider.cu" />
+    <CudaCompile Include="algos\odocrypt\cuda_odocrypt.cu" />
     <CudaCompile Include="blake2b.cu" />
-    <CudaCompile Include="heavyhash/heavyhash.cu" />
-    <CudaCompile Include="heavyhash/cuda_heavyhash.cu" />
+    <CudaCompile Include="algos/heavyhash/heavyhash.cu" />
+    <CudaCompile Include="algos/heavyhash/cuda_heavyhash.cu" />
     <CudaCompile Include="crypto\cryptolight.cu" />
     <CudaCompile Include="crypto\cryptolight-core.cu">
       <MaxRegCount>64</MaxRegCount>
@@ -394,16 +394,16 @@
     <ClCompile Include="algos\hsr\sm3.c" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="argon2d\argon2ref\argon2.h" />
-    <ClInclude Include="argon2d\argon2ref\core.h" />
-    <ClInclude Include="argon2d\argon2ref\encoding.h" />
-    <ClInclude Include="argon2d\argon2ref\thread.h" />
-    <ClInclude Include="argon2d\argon2ref\blake2\blake2.h" />
-    <ClInclude Include="argon2d\argon2ref\blake2\blake2-impl.h" />
-    <ClInclude Include="argon2d\argon2ref\blake2\blakma-round-opt.h" />
-    <ClInclude Include="argon2d\argon2ref\blake2\blakma-round-ref.h" />
-    <ClInclude Include="argon2d\argon2d_kernel.h" />
-    <ClInclude Include="argon2d\cudaexception.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\argon2.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\core.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\encoding.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\thread.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\blake2\blake2.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\blake2\blake2-impl.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\blake2\blamka-round-opt.h" />
+    <ClInclude Include="algos\argon2d\argon2ref\blake2\blamka-round-ref.h" />
+    <ClInclude Include="algos\argon2d\argon2d_kernel.h" />
+    <ClInclude Include="algos\argon2d\cudaexception.h" />
     <ClInclude Include="compat.h" />
     <ClInclude Include="compat\getopt\getopt.h" />
     <ClInclude Include="compat\inttypes.h" />
@@ -439,7 +439,7 @@
     <ClInclude Include="nvml.h" />
     <ClInclude Include="res\resource.h" />
     <ClInclude Include="sia\sia-rpc.h" />
-    <ClInclude Include="scrypt\salsa_kernel.h" />
+    <ClInclude Include="algos\scrypt\salsa_kernel.h" />
     <ClInclude Include="sph\blake2b.h" />
     <ClInclude Include="sph\blake2s.h" />
     <ClInclude Include="sph\sph_blake.h" />
@@ -468,8 +468,8 @@
     <ClInclude Include="algos\lyra2\Lyra2.h" />
     <ClInclude Include="algos\lyra2\Sponge.h" />
     <ClInclude Include="algos\lyra2\Lyra2Z.h" />
-    <ClInclude Include="heavyhash/heavyhash-gate.h" />
-    <ClInclude Include="heavyhash/keccak_tiny.h" />
+    <ClInclude Include="algos/heavyhash/heavyhash-gate.h" />
+    <ClInclude Include="algos/heavyhash/keccak_tiny.h" />
     <ClInclude Include="cuda\groestl512_device.cuh" />
     <ClInclude Include="cuda\echo512_device.cuh" />
     <ClInclude Include="cuda\shavite512_device.cuh" />
@@ -479,15 +479,15 @@
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="cuda.cpp" />
-    <CudaCompile Include="argon2d\argon2d.cu" />
-    <CudaCompile Include="argon2d\argon2d_fill.cu" />
-    <CudaCompile Include="argon2d\blake2b_kernels.cu" />
+    <CudaCompile Include="algos\argon2d\argon2d.cu" />
+    <CudaCompile Include="algos\argon2d\argon2d_fill.cu" />
+    <CudaCompile Include="algos\argon2d\blake2b_kernels.cu" />
     <CudaCompile Include="cuda_groestlcoin.cu" />
     <CudaCompile Include="cuda_myriadgroestl.cu" />
-    <CudaCompile Include="scrypt\blake.cu" />
-    <CudaCompile Include="scrypt\keccak.cu" />
-    <CudaCompile Include="scrypt\sha256.cu" />
-    <CudaCompile Include="scrypt\salsa_kernel.cu">
+    <CudaCompile Include="algos\scrypt\blake.cu" />
+    <CudaCompile Include="algos\scrypt\keccak.cu" />
+    <CudaCompile Include="algos\scrypt\sha256.cu" />
+    <CudaCompile Include="algos\scrypt\salsa_kernel.cu">
     </CudaCompile>
     <CudaCompile Include="algos\sha256d\cuda_sha256csm.cu" />
     <CudaCompile Include="algos\sha256d\cuda_sha256d.cu" />
@@ -502,11 +502,11 @@
     <CudaCompile Include="algos\sha512256d\cuda_sha512256d_selftest.cu" />
     <CudaCompile Include="cuda\xfamily_selftest.cu" />
     <CudaCompile Include="algos\stages\cuda_shavite512.cu" />
-    <CudaCompile Include="yescrypt\cuda_yescrypt.cu" />
-    <CudaCompile Include="yescrypt\yescrypt.cu" />
+    <CudaCompile Include="algos\yescrypt\cuda_yescrypt.cu" />
+    <CudaCompile Include="algos\yescrypt\yescrypt.cu" />
     <CudaCompile Include="algos\zr5\zr5.cu" />
-    <CudaCompile Include="gost\cuda_gosthash.cu" />
-    <CudaCompile Include="gost\gost.cu" />
+    <CudaCompile Include="algos\gost\cuda_gosthash.cu" />
+    <CudaCompile Include="algos\gost\gost.cu" />
     <CudaCompile Include="algos\heavy\cuda_heavy_blake512.cu">
     </CudaCompile>
     <CudaCompile Include="algos\heavy\cuda_combine.cu">
@@ -547,13 +547,13 @@
     <CudaCompile Include="algos\sha3d\cuda_sha3d.cu" />
     <CudaCompile Include="algos\sha3t\cuda_sha3t.cu" />
     <CudaCompile Include="algos\sha3t\sha3t.cu" />
-    <CudaCompile Include="equi\cuda_equi.cu">
+    <CudaCompile Include="algos\equihash\cuda_equi.cu">
       <CodeGeneration>compute_52,sm_52;compute_50,sm_50</CodeGeneration>
       <AdditionalOptions> -Xptxas -dlcm=ca -Xptxas -dscm=cs %(AdditionalOptions)</AdditionalOptions>
       <MaxRegCount>0</MaxRegCount>
       <CodeGeneration Condition="'$(Configuration)|$(Platform)'=='Release|x64'">compute_61,sm_61;compute_52,sm_52;compute_50,sm_50</CodeGeneration>
     </CudaCompile>
-    <CudaCompile Include="equi\cuda_equi_tromp.cu">
+    <CudaCompile Include="algos\equihash\cuda_equi_tromp.cu">
       <CodeGeneration>compute_61,sm_61</CodeGeneration>
       <AdditionalOptions> -DWN=144 -DWK=5 -DRESTBITS=4 -Xptxas -dlcm=ca -Xptxas -dscm=cs %(AdditionalOptions)</AdditionalOptions>
       <MaxRegCount>0</MaxRegCount>

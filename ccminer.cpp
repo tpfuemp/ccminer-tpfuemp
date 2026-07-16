@@ -45,7 +45,7 @@
 #include "sia/sia-rpc.h"
 #include "crypto/xmr-rpc.h"
 #include "sph/sph_sha3d.h"
-#include "equi/equihash.h"
+#include "algos/equihash/equihash.h"
 
 #include <cuda_runtime.h>
 

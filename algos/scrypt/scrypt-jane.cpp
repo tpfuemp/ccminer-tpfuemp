@@ -8,12 +8,12 @@
 
 #include "miner.h"
 
-#include "scrypt/scrypt-jane.h"
-#include "scrypt/code/scrypt-jane-portable.h"
-#include "scrypt/code/scrypt-jane-chacha.h"
-#include "scrypt/keccak.h"
+#include "scrypt-jane.h"
+#include "code/scrypt-jane-portable.h"
+#include "code/scrypt-jane-chacha.h"
+#include "keccak.h"
 
-#include "scrypt/salsa_kernel.h"
+#include "salsa_kernel.h"
 
 #define scrypt_maxN 30  /* (1 << (30 + 1)) = ~2 billion */
 #define scrypt_r_32kb 8 /* (1 << 8) = 256 * 2 blocks in a chunk * 64 bytes = Max of 32kb in a chunk */

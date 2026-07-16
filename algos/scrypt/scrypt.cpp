@@ -35,8 +35,8 @@ using namespace Concurrency;
 #endif
 
 #include "miner.h"
-#include "scrypt/salsa_kernel.h"
-#include "scrypt/sha256.h"
+#include "salsa_kernel.h"
+#include "sha256.h"
 
 #include <stdlib.h>
 #include <stdint.h>

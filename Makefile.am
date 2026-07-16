@@ -22,21 +22,35 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  ccminer.cpp pools.cpp util.cpp bench.cpp bignum.cpp \
 			  api.cpp hashlog.cpp nvml.cpp stats.cpp sysinfos.cpp cuda.cpp \
 			  nvsettings.cpp \
-			  equi/equi-stratum.cpp equi/equi.cpp equi/blake2/blake2bx.cpp \
-			  equi/equihash.cpp equi/cuda_equi.cu \
+			  algos/equihash/equi-stratum.cpp algos/equihash/equi.cpp algos/equihash/blake2/blake2bx.cpp \
+			  algos/equihash/equihash.cpp algos/equihash/cuda_equi.cu \
 			  algos/allium/allium.cu \
-			  balloon/balloon.cpp balloon/balloon_scan.cpp \
-			  balloon/sha256-ref.c balloon/cuda_balloon.cu \
-			  balloon/balloon.h balloon/sha256.h \
-			  rinhash/rinhash_scanhash.cpp rinhash/rinhash.cu \
+			  algos/balloon/balloon.cpp algos/balloon/balloon_scan.cpp \
+			  algos/balloon/sha256-ref.c algos/balloon/cuda_balloon.cu \
+			  algos/balloon/balloon.h algos/balloon/sha256.h \
+			  algos/rinhash/rinhash_scanhash.cpp algos/rinhash/rinhash.cu \
 			  algos/hoohash/cuda_hoohashv110.cu algos/hoohash/hoohash.cu \
 			  algos/hoohash/hoohash_device.cuh \
-			  evohash/evohash.cu \
-			  odocrypt/odocrypt_host.cpp odocrypt/cuda_odocrypt.cu \
-			  heavyhash/heavyhash.cu \
-			  heavyhash/cuda_heavyhash.cu \
-			  heavyhash/keccak_tiny.c \
-			  heavyhash/heavyhash-gate.c \
+			  algos/evohash/evohash.cu \
+			  algos/ghostrider/ghostrider.cu \
+			  algos/argon2d/argon2d.cu algos/argon2d/argon2d_fill.cu \
+			  algos/argon2d/blake2b_kernels.cu \
+			  algos/argon2d/argon2ref/argon2.c algos/argon2d/argon2ref/core.c \
+			  algos/argon2d/argon2ref/encoding.c algos/argon2d/argon2ref/opt.c \
+			  algos/argon2d/argon2ref/thread.c algos/argon2d/argon2ref/blake2/blake2b.c \
+			  algos/argon2d/argon2d_kernel.h algos/argon2d/cudaexception.h \
+			  algos/argon2d/argon2ref/argon2.h algos/argon2d/argon2ref/core.h \
+			  algos/argon2d/argon2ref/encoding.h algos/argon2d/argon2ref/thread.h \
+			  algos/argon2d/argon2ref/blake2/blake2.h algos/argon2d/argon2ref/blake2/blake2-impl.h \
+			  algos/argon2d/argon2ref/blake2/blamka-round-opt.h algos/argon2d/argon2ref/blake2/blamka-round-ref.h \
+			  algos/yescrypt/yescrypt.cu algos/yescrypt/cuda_yescrypt.cu \
+			  sph/yescrypt-common.c sph/yescrypt-opt.c \
+			  sph/yescrypt.h sph/yescrypt-platform.h \
+			  algos/odocrypt/odocrypt_host.cpp algos/odocrypt/cuda_odocrypt.cu \
+			  algos/heavyhash/heavyhash.cu \
+			  algos/heavyhash/cuda_heavyhash.cu \
+			  algos/heavyhash/keccak_tiny.c \
+			  algos/heavyhash/heavyhash-gate.c \
 			  algos/heavy/heavy.cu \
 			  algos/heavy/cuda_heavy_blake512.cu \
 			  algos/heavy/cuda_combine.cu \
@@ -58,7 +72,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/blake256/blake256.cu algos/blake256/decred.cu algos/blake256/vanilla.cu \
 			  algos/blake2s/blake2s.cu sph/blake2s.c \
 			  algos/bmw/bmw.cu algos/bmw/bmw512.cu algos/stages/cuda_bmw.cu \
-			  gost/cuda_gosthash.cu gost/gost.cu \
+			  algos/gost/cuda_gosthash.cu algos/gost/gost.cu \
 			  crypto/xmr-rpc.cpp crypto/wildkeccak-cpu.cpp crypto/wildkeccak.cu \
 			  crypto/cryptolight.cu crypto/cryptolight-core.cu crypto/cryptolight-cpu.cpp \
 			  crypto/cryptonight.cu crypto/cryptonight-core.cu crypto/cryptonight-extra.cu \
@@ -112,11 +126,11 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/x21/x21s.cu algos/stages/cuda_sha256_2.cu algos/stages/cuda_tiger192.cu 
 			  
 # scrypt
-ccminer_SOURCES += scrypt.cpp scrypt-jane.cpp \
-    scrypt/blake.cu scrypt/keccak.cu scrypt/sha256.cu \
-    scrypt/salsa_kernel.cu scrypt/test_kernel.cu \
-    scrypt/fermi_kernel.cu scrypt/kepler_kernel.cu \
-    scrypt/nv_kernel.cu scrypt/nv_kernel2.cu scrypt/titan_kernel.cu
+ccminer_SOURCES += algos/scrypt/scrypt.cpp algos/scrypt/scrypt-jane.cpp \
+    algos/scrypt/blake.cu algos/scrypt/keccak.cu algos/scrypt/sha256.cu \
+    algos/scrypt/salsa_kernel.cu algos/scrypt/test_kernel.cu \
+    algos/scrypt/fermi_kernel.cu algos/scrypt/kepler_kernel.cu \
+    algos/scrypt/nv_kernel.cu algos/scrypt/nv_kernel2.cu algos/scrypt/titan_kernel.cu
 
 if HAVE_NVML
 nvml_defs = -DUSE_WRAPNVML
@@ -138,7 +152,7 @@ ccminer_LDADD += -lomp
 endif
 
 #ccminer_CPPFLAGS += -DUSE_LIBSODIUM
-#ccminer_LDFLAGS += -Lequi/lib
+#ccminer_LDFLAGS += -Lalgos/equihash/lib
 #ccminer_LDADD += -lsodium
 ccminer_LDADD += -lcuda
 
@@ -216,7 +230,7 @@ algos/jha/cuda_jha_compactionTest.o: algos/jha/cuda_jha_compactionTest.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
 
-scrypt/titan_kernel.o: scrypt/titan_kernel.cu
+algos/scrypt/titan_kernel.o: algos/scrypt/titan_kernel.cu
 	$(NVCC) $(nvcc_FLAGS) -gencode=arch=compute_35,code=\"sm_35,compute_35\" -o $@ -c $<
 
 skein.o: skein.cu
