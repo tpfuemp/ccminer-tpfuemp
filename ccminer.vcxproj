@@ -684,6 +684,7 @@
     <CudaCompile Include="algos\x17\hmq1725.cu" />
     <CudaCompile Include="algos\x17\x17.cu" />
     <CudaCompile Include="algos\x17\skydoge.cu" />
+    <CudaCompile Include="algos\soterg\soterg.cu" />
     <CudaCompile Include="algos\stages\cuda_haval256.cu" />
     <CudaCompile Include="algos\stages\cuda_sha512.cu">
       <MaxRegCount>80</MaxRegCount>

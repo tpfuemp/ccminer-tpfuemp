@@ -105,6 +105,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `skein2` | Double Skein (Woodcoin) |
 | `skunk` | Skein-Cube-Fugue-Streebog |
 | `skydoge` | SkyDoge |
+| `soterg` | Soteria (X12R core-rotation) |
 | `timetravel` | Timetravel (Machinecoin, permuted ×8) |
 | `tribus` | Tribus (Denarius) |
 | `vanilla` | Blake256-8 (VNL) |

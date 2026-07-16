@@ -310,6 +310,7 @@ Options:\n\
 			sha512256d	Double SHA512/256 (Radiant)\n\
 			sia		SIA (Blake2B)\n\
 			sib		Sibcoin (X11+Streebog)\n\
+			soterg		Soteria (X12R)\n\
 			scrypt		Scrypt\n\
 			scrypt-jane	Scrypt-jane Chacha\n\
 			skein		Skein SHA2 (Skeincoin)\n\
@@ -2806,6 +2807,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_SHA3T:
 			rc = scanhash_sha3t(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_SOTERG:
+			rc = scanhash_soterg(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_EQUIHASH:
 			rc = scanhash_equihash(thr_id, &work, max_nonce, &hashes_done);

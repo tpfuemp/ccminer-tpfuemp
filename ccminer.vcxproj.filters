@@ -892,6 +892,9 @@
     <CudaCompile Include="algos\x17\skydoge.cu">
       <Filter>Source Files\CUDA\x17</Filter>
     </CudaCompile>
+    <CudaCompile Include="algos\soterg\soterg.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
     <CudaCompile Include="algos\pentablake\pentablake.cu">
       <Filter>Source Files\CUDA\pentablake</Filter>
     </CudaCompile>
