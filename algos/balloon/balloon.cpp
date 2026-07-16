@@ -135,7 +135,7 @@ extern "C" {
 #endif
 	}
 
-	inline int bitstream_fill_buffer(struct bitstream *b, void *out, size_t outlen) {
+	int bitstream_fill_buffer(struct bitstream *b, void *out, size_t outlen) {
 		size_t total = 0;
 		while (total < outlen) {
 			const int to_encrypt = MIN(outlen - total, BITSTREAM_BUF_SIZE);
@@ -201,7 +201,7 @@ extern "C" {
 		}
 		return out;
 	}
-	inline void bytes_to_littleend8_uint64(const uint8_t *bytes, uint64_t *out) {
+	void bytes_to_littleend8_uint64(const uint8_t *bytes, uint64_t *out) {
 		*out <<= 8;
 		*out |= *(bytes + 7);
 		*out <<= 8;
@@ -234,7 +234,7 @@ extern "C" {
 		return block_index(s, s->n_blocks - 1);
 	}
 
-	inline int hash_state_init(struct hash_state *s, const struct balloon_options *opts, const uint8_t salt[SALT_LEN]) {
+	int hash_state_init(struct hash_state *s, const struct balloon_options *opts, const uint8_t salt[SALT_LEN]) {
 		s->counter = 0;
 		s->n_blocks = options_n_blocks(opts);
 		if (s->n_blocks % 2 != 0) s->n_blocks++;

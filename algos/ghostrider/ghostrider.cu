@@ -279,8 +279,8 @@ extern "C" bool ghostrider_self_test(void)
 static void gr_core_setBlock_80(int algo, int thr_id, uint32_t *endiandata, uint32_t *pdata)
 {
 	switch (algo) {
-	case BLAKE:     quark_blake512_cpu_setBlock_80(thr_id, endiandata); break;
-	case BMW:       quark_bmw512_cpu_setBlock_80(endiandata); break;
+	case BLAKE:     blake512_cpu_setBlock_80(thr_id, endiandata); break;
+	case BMW:       bmw512_cpu_setBlock_80(endiandata); break;
 	case GROESTL:   groestl512_setBlock_80(thr_id, endiandata); break;
 	case JH:        jh512_setBlock_80(thr_id, endiandata); break;
 	case KECCAK:    keccak512_setBlock_80(thr_id, endiandata); break;
@@ -300,8 +300,8 @@ static void gr_core_setBlock_80(int algo, int thr_id, uint32_t *endiandata, uint
 static void gr_core_hash_80(int algo, int thr_id, uint32_t throughput, uint32_t nonce, uint32_t *d_h)
 {
 	switch (algo) {
-	case BLAKE:     quark_blake512_cpu_hash_80(thr_id, throughput, nonce, d_h); break;
-	case BMW:       quark_bmw512_cpu_hash_80(thr_id, throughput, nonce, d_h, 0); break;
+	case BLAKE:     blake512_cpu_hash_80(thr_id, throughput, nonce, d_h); break;
+	case BMW:       bmw512_cpu_hash_80(thr_id, throughput, nonce, d_h, 0); break;
 	case GROESTL:   groestl512_cuda_hash_80(thr_id, throughput, nonce, d_h); break;
 	case JH:        jh512_cuda_hash_80(thr_id, throughput, nonce, d_h); break;
 	case KECCAK:    keccak512_cuda_hash_80(thr_id, throughput, nonce, d_h); break;
@@ -321,20 +321,20 @@ static void gr_core_hash_80(int algo, int thr_id, uint32_t throughput, uint32_t 
 static void gr_core_hash_64(int algo, int thr_id, uint32_t throughput, uint32_t nonce, uint32_t *d_h, int order)
 {
 	switch (algo) {
-	case BLAKE:     quark_blake512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
-	case BMW:       quark_bmw512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
-	case GROESTL:   quark_groestl512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
-	case JH:        quark_jh512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
-	case KECCAK:    quark_keccak512_cpu_hash_64(thr_id, throughput, NULL, d_h); break;
-	case SKEIN:     quark_skein512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
-	case LUFFA:     x11_luffa512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
-	case CUBEHASH:  x11_cubehash512_cpu_hash_64(thr_id, throughput, d_h); break;
+	case BLAKE:     blake512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
+	case BMW:       bmw512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
+	case GROESTL:   groestl512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
+	case JH:        jh512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
+	case KECCAK:    keccak512_cpu_hash_64(thr_id, throughput, NULL, d_h); break;
+	case SKEIN:     skein512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
+	case LUFFA:     luffa512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
+	case CUBEHASH:  cubehash512_cpu_hash_64(thr_id, throughput, d_h); break;
 	case SHAVITE:   x11_shavite512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
-	case SIMD:      x11_simd512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
-	case ECHO:      x16_echo512_cpu_hash_64(thr_id, throughput, d_h); break;
-	case HAMSI:     x13_hamsi512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
-	case FUGUE:     x13_fugue512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
-	case SHABAL:    x14_shabal512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
+	case SIMD:      simd512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
+	case ECHO:      echo512_cpu_hash_64(thr_id, throughput, d_h); break;
+	case HAMSI:     hamsi512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
+	case FUGUE:     fugue512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
+	case SHABAL:    shabal512_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
 	case WHIRLPOOL: x15_whirlpool_cpu_hash_64(thr_id, throughput, nonce, NULL, d_h, order); break;
 	}
 }
@@ -405,21 +405,21 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 		gpulog(LOG_INFO, thr_id, "ghostrider: %.0f MiB scratchpad, up to %u threads",
 			(double)budget / (1024*1024), max_throughput);
 
-		quark_blake512_cpu_init(thr_id, max_throughput);
-		quark_bmw512_cpu_init(thr_id, max_throughput);
-		quark_groestl512_cpu_init(thr_id, max_throughput);
-		quark_skein512_cpu_init(thr_id, max_throughput);
-		quark_jh512_cpu_init(thr_id, max_throughput);
-		quark_keccak512_cpu_init(thr_id, max_throughput);
+		blake512_cpu_init(thr_id, max_throughput);
+		bmw512_cpu_init(thr_id, max_throughput);
+		groestl512_cpu_init(thr_id, max_throughput);
+		skein512_cpu_init(thr_id, max_throughput);
+		jh512_cpu_init(thr_id, max_throughput);
+		keccak512_cpu_init(thr_id, max_throughput);
 		qubit_luffa512_cpu_init(thr_id, max_throughput);
-		x11_luffa512_cpu_init(thr_id, max_throughput);
+		luffa512_cpu_init(thr_id, max_throughput);
 		x11_shavite512_cpu_init(thr_id, max_throughput);
-		x11_simd512_cpu_init(thr_id, max_throughput);
+		simd512_cpu_init(thr_id, max_throughput);
 		x11_echo512_cpu_init(thr_id, max_throughput);
-		x13_hamsi512_cpu_init(thr_id, max_throughput);
-		x13_fugue512_cpu_init(thr_id, max_throughput);
-		x14_shabal512_cpu_init(thr_id, max_throughput);
-		x15_whirlpool_cpu_init(thr_id, max_throughput, 0);
+		hamsi512_cpu_init(thr_id, max_throughput);
+		fugue512_cpu_init(thr_id, max_throughput);
+		shabal512_cpu_init(thr_id, max_throughput);
+		whirlpool512_cpu_init(thr_id, max_throughput, 0);
 		x16_echo512_cuda_init(thr_id, max_throughput);     // needed by x16_echo512_cuda_hash_80
 		x16_fugue512_cpu_init(thr_id, max_throughput);     // needed by x16_fugue512_cuda_hash_80
 		x16_whirlpool512_init(thr_id, max_throughput);     // needed by x16_whirlpool512_hash_80
@@ -650,10 +650,10 @@ extern "C" void free_ghostrider(int thr_id)
 	cudaFree(d_ctx_key2[thr_id]);
 	cudaFree(d_ctx_tweak[thr_id]);
 
-	quark_blake512_cpu_free(thr_id);
-	quark_groestl512_cpu_free(thr_id);
-	x11_simd512_cpu_free(thr_id);
-	x13_fugue512_cpu_free(thr_id);
+	blake512_cpu_free(thr_id);
+	groestl512_cpu_free(thr_id);
+	simd512_cpu_free(thr_id);
+	fugue512_cpu_free(thr_id);
 	x16_fugue512_cpu_free(thr_id);
 	x15_whirlpool_cpu_free(thr_id);
 

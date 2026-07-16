@@ -45,6 +45,43 @@ void fugue512_gpu_hash_64(uint32_t threads, uint64_t *g_hash)
 	}
 }
 
+/***************************************************/
+// Terminal variant: compute fugue, compare the high 64 bits of the result
+// against the target on-device, and record up to two found nonces (thread
+// indices) via an atomicExch chain into resNonce -- eliding the d_hash store
+// plus the separate cuda_check_hash / cuda_check_hash_suppl passes. Used where
+// fugue is the last stage of a fixed chain (x13). Not truncated (computes the
+// full fugue like the plain kernel), so it stays bit-identical to the CPU
+// reference which re-verifies every hit.
+__global__
+__launch_bounds__(TPB)
+void fugue512_gpu_hash_64_final(uint32_t threads, uint64_t *g_hash, uint32_t *resNonce, const uint64_t target)
+{
+	__shared__ uint32_t mixtabs[1024];
+
+	fugue512_load_shared(mixtabs);
+
+	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
+
+	if (thread < threads)
+	{
+		uint64_t *pHash = &g_hash[thread<<3];
+		uint32_t Hash[16];
+
+		#pragma unroll 4
+		for(int i = 0; i < 4; i++)
+			AS_UINT4(&Hash[i*4]) = AS_UINT4(&pHash[i*2]);
+
+		fugue512_hash_64(mixtabs, Hash);
+
+		if (*(uint64_t*)&Hash[6] <= target) {
+			uint32_t tmp = atomicExch(&resNonce[0], thread);
+			if (tmp != UINT32_MAX)
+				resNonce[1] = tmp;
+		}
+	}
+}
+
 /* Unit self-test for cuda/fugue512_device.cuh (docs/coding-guideline.md §7
  * layer 1), defined in cuda/xfamily_selftest.cu. */
 extern bool fugue512_device_selftest(int thr_id);
@@ -69,9 +106,11 @@ void fugue512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, ui
 	fugue512_gpu_hash_64 <<<grid, block>>> (threads, (uint64_t*)d_hash);
 }
 
-/* Legacy-name forwarders (x13 fugue) for the not-yet-migrated consumers
- * (x17/skydoge/hmq17, x21s, ghostrider, evohash, bastion); each drops out as
- * its family switches to the bare name. */
-__host__ void x13_fugue512_cpu_init(int thr_id, uint32_t threads) { fugue512_cpu_init(thr_id, threads); }
-__host__ void x13_fugue512_cpu_free(int thr_id) { fugue512_cpu_free(thr_id); }
-__host__ void x13_fugue512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order) { fugue512_cpu_hash_64(thr_id, threads, startNounce, d_nonceVector, d_hash, order); }
+__host__
+void fugue512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t *d_resNonce, const uint64_t target)
+{
+	dim3 grid((threads + TPB-1) / TPB);
+	dim3 block(TPB);
+
+	fugue512_gpu_hash_64_final <<<grid, block>>> (threads, (uint64_t*)d_hash, d_resNonce, target);
+}

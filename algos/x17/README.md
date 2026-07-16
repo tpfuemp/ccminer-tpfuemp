@@ -11,9 +11,9 @@ Whirlpool-512  →  SHA-512  →  Haval-256 (terminal)
 ```
 
 - `x17.cu` — the fixed 17-stage chain (`scanhash_x17`, `x17hash` CPU reference).
-- `hmq17.cu` — HMQ1725, a **per-nonce branching** variant (each stage picks one
-  of two hashes by a data bit, walked through branch/merge compaction buffers).
-  Not a fixed chain, so it is **not fusible** — relocation only.
+- `hmq1725.cu` — HMQ1725, a **per-nonce branching** variant (each stage picks
+  one of two hashes by a data bit, walked through branch/merge compaction
+  buffers). Not a fixed chain, so the 5-run fusion does not apply.
 - `skydoge.cu` — a fixed-chain x17 variant (yiimp/cpuminer-opt lineage).
 
 ## Layout
@@ -41,11 +41,28 @@ removed — the de-brand is complete.
 
 ## Optimization
 
-Relocation + de-brand only — no stage fusion in this pass. The fixed x17 chain
-has the same skein→jh→keccak→luffa→cubehash fusible run as x13/x11 and could
-adopt the shared register-resident fused kernel; that is left as a follow-up.
-Haval is the terminal and the best nonce is found by the shared
-`cuda_check_hash` / `cuda_check_hash_suppl` pass.
+Both fixed chains adopt the shared register-resident fused kernel
+(`algos/common/cuda_x_fused.*`), which keeps the 64-byte state in registers
+across a run of consecutive stages instead of bouncing it through `d_hash`:
+
+- **x17** fuses its skein→jh→keccak→luffa→cubehash run (the same run x13/x11
+  use) into one launch, replacing 5 separate stage launches.
+- **skydoge** has two consecutive fusible runs, split by the non-fusible
+  groestl/simd/echo stages: skein→bmw and jh→luffa→keccak. Both are packed
+  into a single uploaded stage-id list and launched as two fused calls
+  (indexing each sub-run by `(start,len)`), replacing 5 launches with 2.
+- **hmq1725** is per-nonce branching, so most of it can't fuse — but two
+  consecutive all-nonce fusible pairs sit *between* its branch merge/filter
+  points and touch only the common `d_hash`: jh→keccak and luffa→cubehash.
+  Both are packed into one uploaded stage-id list and run as two fused calls
+  (`(0,2)` + `(2,2)`), replacing 4 launches with 2. The eight per-nonce
+  filter/merge branches and their branch-A/branch-B single stages are left on
+  the per-stage launcher path (branch-A runs on `d_hash`, branch-B on a second
+  buffer — they can't be register-fused).
+
+The CPU reference hash and consensus self-test of each algo are unchanged, so
+GPU output stays bit-identical. Haval is the terminal and the best nonce is
+found by the shared `cuda_check_hash` / `cuda_check_hash_suppl` pass.
 
 ## Validation
 
@@ -57,6 +74,28 @@ live-confirmed on zpool (skydoge.na.mine.zpool.ca:7091): 4/4 accepted, 0
 rejects**.
 
 The subsequent call-site de-brand (sp shavite / alexis echo / split
-luffa+cubehash) is byte-identical by construction but changes which kernels run,
-so a fresh clean `/t:Rebuild` + benchmark re-validation is **owed** before it is
-considered proven. x17/hmq1725 own live runs also owed.
+luffa+cubehash) is byte-identical by construction but changes which kernels run.
+
+The stage-fusion pass was rebuilt clean and validated:
+- **skydoge — live-confirmed** on zpool (skydoge.na.mine.zpool.ca:7091):
+  accepted with 0 rejects, steady ~11.0-11.2 MH/s (up from ~10.4 unfused).
+  Benchmark is non-vacuous 0-does-not-validate: at `ptarget[7]=0x00ff` the
+  `found =>` candidate path fires repeatedly and every found nonce passes the
+  `skydoge_hash` CPU re-verify (0 mismatches, 0 CUDA errors).
+- **x17 — benchmark-validated** (non-vacuous 0-does-not-validate): at
+  `ptarget[7]=0x00ff` the `found =>` candidate path fires repeatedly and every
+  found nonce passes the `x17hash` CPU re-verify (0 mismatches, 0 CUDA errors),
+  ~13.3-13.4 MH/s. Live re-validation still owed.
+- **hmq1725 — live-testing exposed a pre-existing bug, now fixed; live
+  re-validation owed.** `--benchmark` is a *weak* correctness check for this
+  chain: it re-scans one nonce window, so its `found =>` line re-finds a single
+  nonce, and because hmq1725 is per-nonce **branching** that one nonce only
+  walks one set of branch paths (for a fixed chain like x17/skydoge a single
+  nonce still exercises every stage, so there the check is meaningful). A live
+  run surfaced `does not validate on CPU!` on multiple nonces — a **pre-existing**
+  GPU/CPU mismatch, unrelated to the fusion: the shared haval stage's 512-bit
+  path passed the pre-haval high 32 bytes through, but hmq1725's CPU reference
+  `memset`s them to zero before the next stage. Fixed with a zero-high haval
+  variant (`haval256_cpu_hash_64z`); the pass-through path is retained for x21s,
+  which needs it. **Fix live-confirmed on zpool (hmq1725.na.mine.zpool.ca:3747):
+  3/3 accepted, 0 rejects, no `does not validate`, ~6.7 MH/s.**

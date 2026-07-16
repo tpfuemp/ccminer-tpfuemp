@@ -259,7 +259,7 @@
 }
 
 __global__ /* __launch_bounds__(256, 6) */
-void haval256_gpu_hash_64(const uint32_t threads, uint64_t *g_hash, const int outlen)
+void haval256_gpu_hash_64(const uint32_t threads, uint64_t *g_hash, const int outlen, const int zeroHigh)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
@@ -326,10 +326,21 @@ void haval256_gpu_hash_64(const uint32_t threads, uint64_t *g_hash, const int ou
 		pHash[3] = hash.h8[3];
 
 		if (outlen == 512) {
-			pHash[4] = hash.h8[4];
-			pHash[5] = hash.h8[5];
-			pHash[6] = hash.h8[6];
-			pHash[7] = hash.h8[7];
+			if (zeroHigh) {
+				// hmq1725: CPU memset(&hash[8],0,32) after the intermediate
+				// haval, so the high 32 bytes feed the next stage as zero.
+				pHash[4] = 0;
+				pHash[5] = 0;
+				pHash[6] = 0;
+				pHash[7] = 0;
+			} else {
+				// x21s: CPU does haval then tiger over the full 64 bytes with
+				// no memset, so the pre-haval high 32 bytes pass through.
+				pHash[4] = hash.h8[4];
+				pHash[5] = hash.h8[5];
+				pHash[6] = hash.h8[6];
+				pHash[7] = hash.h8[7];
+			}
 		}
 	}
 }
@@ -347,5 +358,22 @@ void haval256_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, ui
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
 	dim3 block(threadsperblock);
 
-	haval256_gpu_hash_64 <<<grid, block>>> (threads, (uint64_t*)d_hash, outlen);
+	// zeroHigh=0: for outlen==512 the pre-haval high 32 bytes pass through
+	// (x21s: haval -> tiger reads the full state). Terminal callers (outlen==256)
+	// don't touch the high half at all.
+	haval256_gpu_hash_64 <<<grid, block>>> (threads, (uint64_t*)d_hash, outlen, 0);
+}
+
+// Intermediate haval that zero-extends its 256-bit digest to 64 bytes (high 32
+// bytes set to zero), matching a CPU reference that memsets &hash[8]..&hash[15]
+// before the next 64-byte stage (hmq1725).
+__host__
+void haval256_cpu_hash_64z(int thr_id, uint32_t threads, uint32_t *d_hash)
+{
+	const uint32_t threadsperblock = 256;
+
+	dim3 grid((threads + threadsperblock-1)/threadsperblock);
+	dim3 block(threadsperblock);
+
+	haval256_gpu_hash_64 <<<grid, block>>> (threads, (uint64_t*)d_hash, 512, 1);
 }

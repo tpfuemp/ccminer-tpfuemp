@@ -1,0 +1,40 @@
+ccminer-tpfuemp — credits & donation
+=====================================
+
+Lineage
+-------
+Originally based on Christian Buchner's and Christian H.'s CUDA project
+(inactive on GitHub since 2014), then:
+
+    tpruvot/ccminer  ->  Kudaraidee/ccminer-kudaraidee  ->  tpfuemp/ccminer-tpfuemp (this fork)
+
+This fork tracks the ccminer-kudaraidee 1.3.0 / tpruvot 2.3.1 base and targets
+modern NVIDIA hardware on CUDA 11.8.
+
+Kernel / code contributors
+---------------------------
+Includes kernels and work from: lenis0012, tpruvot, alexis78, djm34, djEzo,
+tsiv, and krnlx, plus the many contributors to the upstream ccminer projects.
+
+Donation
+--------
+Donations are optional and support continued development of this fork.
+
+    DOGE:  DNQdyeLu9DtRfsZCFvy1GfJTwjWJoSWHLh   (tpfuemp)
+
+Upstream / original authors (from the ccminer lineage) — donations to them are
+also appreciated:
+
+    kudaraidee@github:
+      DOGE : D6oP3WPygJ4NR26XxfFydUsCiNS4oX9rqb
+
+    tpruvot@github:
+      BTC  : 1AJdfCpLWPNoAMDfHF1wD5y8VgKSSTHxPo
+      DCR  : DsUCcACGcyP8McNMRXQwbtpDxaVUYLDQDeU
+
+    DJM34:
+      BTC  : 1NENYmxwZGHsKFmyjTc5WferTn5VTFb7Ze
+
+    cbuchner v1.2:
+      LTC  : LKS1WDKGED647msBQfLBHV3Ls8sveGncnm
+      BTC  : 16hJF5mceSojnTD3ZTUDqdRhDyPJzoRakM

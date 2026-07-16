@@ -6,41 +6,64 @@
  * register-resident fused-run API (cuda_x_fused.cu). Any migrated x-family
  * algo includes this one header instead of a per-algo branded aggregate. */
 
-#include "algos/stages/cuda_quark.h"
+#include "cuda_helper.h"
+
+/* core quark/blake-family launcher prototypes (folded in from the retired
+ * algos/stages/cuda_quark.h 2026-07-16). The bare <prim>512_cpu_* names are the
+ * real symbols (algos/stages/, layout B); the legacy quark_<prim>512_cpu_*
+ * aliases were removed 2026-07-16 (every caller now uses the bare name).
+ * quark_compactTest_* / cuda_check_hash_branch stay (genuine quark mechanisms,
+ * used by quarkcoin/animecoin/jackpotcoin/jha). */
+extern void blake512_cpu_init(int thr_id, uint32_t threads);
+extern void blake512_cpu_free(int thr_id);
+extern void blake512_cpu_setBlock_80(int thr_id, uint32_t *pdata);
+extern void blake512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash);
+extern void blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+
+extern void bmw512_cpu_init(int thr_id, uint32_t threads);
+extern void bmw512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+
+extern void groestl512_cpu_init(int thr_id, uint32_t threads);
+extern void groestl512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+extern void groestl512_cpu_free(int thr_id);
+
+extern void skein512_cpu_init(int thr_id, uint32_t threads);
+extern void skein512_cpu_hash_64(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+
+extern void keccak512_cpu_init(int thr_id, uint32_t threads);
+/* startNounce is only needed when d_nonceVector != NULL (quark branch vectors
+ * store absolute nonces); it defaults to 0 for the many NULL-vector callers. */
+extern void keccak512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash, uint32_t startNounce = 0);
+extern void keccak512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash, uint64_t target, uint32_t *d_resNonce);
+
+extern void jh512_cpu_init(int thr_id, uint32_t threads);
+extern void jh512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+
+extern void quark_compactTest_cpu_init(int thr_id, uint32_t threads);
+extern void quark_compactTest_cpu_free(int thr_id);
+extern void quark_compactTest_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *inpHashes, uint32_t *d_validNonceTable,
+											uint32_t *d_nonces1, uint32_t *nrm1, uint32_t *d_nonces2, uint32_t *nrm2, int order);
+extern void quark_compactTest_single_false_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *inpHashes, uint32_t *d_validNonceTable,
+											uint32_t *d_nonces1, uint32_t *nrm1, int order);
+
+extern uint32_t cuda_check_hash_branch(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_inputHash, int order);
 
 /* x11 stage launchers (folded in from the retired x11/cuda_x11.h 2026-07-15 —
- * every x-family algo now routes through this bridge, so the standalone header
- * had no remaining direct consumers). The bare <prim>512_cpu_* names are the
- * real symbols (algos/stages/, layout B); these x11_* declarations are the
- * legacy forwarders kept for consumers that still call by the x11_ name. */
+ * every x-family algo now routes through this bridge). The bare <prim>512_cpu_*
+ * names are the real symbols (algos/stages/, layout B); the prefixed forwarders
+ * that remain here are the ones still reached by a consumer that calls the
+ * legacy name — evohash + ghostrider for shavite/echo/whirlpool, plus the merged
+ * luffa+cubehash kernel (its own symbol, no bare equivalent). The luffa /
+ * cubehash / simd / hamsi / fugue / shabal forwarders were removed 2026-07-16
+ * once every consumer moved to the bare name. */
 extern void x11_luffaCubehash512_cpu_init(int thr_id, uint32_t threads);
 extern void x11_luffaCubehash512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash, int order);
-
-extern void x11_luffa512_cpu_init(int thr_id, uint32_t threads);
-extern void x11_luffa512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
-
-extern void x11_cubehash512_cpu_init(int thr_id, uint32_t threads);
-extern void x11_cubehash512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash);
 
 extern void x11_shavite512_cpu_init(int thr_id, uint32_t threads);
 extern void x11_shavite512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 
-extern int  x11_simd512_cpu_init(int thr_id, uint32_t threads);
-extern void x11_simd512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
-extern void x11_simd512_cpu_free(int thr_id);
-
 extern void x11_echo512_cpu_init(int thr_id, uint32_t threads);
 extern void x11_echo512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
-
-extern void x13_hamsi512_cpu_init(int thr_id, uint32_t threads);
-extern void x13_hamsi512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
-
-extern void x13_fugue512_cpu_init(int thr_id, uint32_t threads);
-extern void x13_fugue512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
-extern void x13_fugue512_cpu_free(int thr_id);
-
-extern void x14_shabal512_cpu_init(int thr_id, uint32_t threads);
-extern void x14_shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 
 extern void x15_whirlpool_cpu_init(int thr_id, uint32_t threads, int flag);
 extern void x15_whirlpool_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
@@ -55,16 +78,15 @@ void haval256_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNonce, uin
 extern void tiger192_cpu_hash_64(int thr_id, int threads, int zero_pad_64, uint32_t *d_hash);
 
 /* ---- stage-launcher naming --------------------------------------------------
- * The blake/bmw/jh/keccak/skein/groestl core launchers are now de-branded to
- * their bare <prim>512_cpu_* names (real symbols in algos/stages/); those bare
- * declarations come in via algos/stages/cuda_quark.h (included above), which
- * also keeps quark_<prim>512_cpu_* aliases for the not-yet-migrated legacy
- * callers. The other launchers below (luffa/cubehash/shavite/simd/echo/
- * hamsi/fugue/shabal/whirlpool/sha512/haval256) are already bare real symbols
- * too. Every prefixed name that remains is a thin forwarder to the current real
- * symbol and drops out when its originating family migrates. */
+ * The blake/bmw/jh/keccak/skein/groestl core launchers are de-branded to their
+ * bare <prim>512_cpu_* names (real symbols in algos/stages/); those bare
+ * declarations are folded in at the top of this header. The other launchers
+ * below (luffa/cubehash/shavite/simd/echo/hamsi/fugue/shabal/whirlpool/sha512/
+ * haval256) are already bare real symbols too. Every prefixed name that remains
+ * is a thin forwarder to the current real symbol and drops out when its
+ * originating family migrates. */
 /* luffa + cubehash: bare names are the real symbols (algos/stages/, layout B);
- * x11_* forwarders (declared above) stay for the not-yet-migrated consumers.
+ * the x11_ forwarders were removed 2026-07-16 (all consumers now bare).
  * (cubehash has no cpu_init — the self-test runs from the hash launcher.) */
 void luffa512_cpu_init(int thr_id, uint32_t threads);
 void luffa512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
@@ -75,8 +97,8 @@ void cubehash512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash);
  * x11_shavite512_cpu_hash_64 (shared c512) stays for non-migrated consumers */
 void shavite512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash);
 /* 64-byte simd: bare names are the real symbols (algos/stages/cuda_simd512.cu,
- * layout B); the x11_simd512_* forwarders stay for the not-yet-migrated
- * x11-family consumers (declared above) */
+ * layout B); the x11_simd512_* forwarders were removed 2026-07-16 (all
+ * consumers now bare). */
 int  simd512_cpu_init(int thr_id, uint32_t threads);
 void simd512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 void simd512_cpu_free(int thr_id);
@@ -86,19 +108,18 @@ void simd512_cpu_free(int thr_id);
 #define echo512_cpu_init_compat  x11_echo512_cpu_init
 #define echo512_cpu_hash_64_compat x11_echo512_cpu_hash_64
 /* hamsi + fugue: bare names are the real symbols (algos/stages/, layout B);
- * the x13_hamsi512_* / x13_fugue512_* forwarders (declared above) stay for the
- * not-yet-migrated consumers (x17/skydoge/hmq17, x21s, ghostrider, evohash,
- * bastion). (fugue512_cpu_init/free here are the 64-byte fugue; the 80-byte
- * fugue keeps its own x16_fugue512_cpu_init/free below.) */
+ * the x13_hamsi512_* / x13_fugue512_* forwarders were removed 2026-07-16 (all
+ * consumers now bare). (fugue512_cpu_init/free here are the 64-byte fugue; the
+ * 80-byte fugue keeps its own x16_fugue512_cpu_init/free below.) */
 void hamsi512_cpu_init(int thr_id, uint32_t threads);
 void hamsi512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 void fugue512_cpu_init(int thr_id, uint32_t threads);
 void fugue512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 void fugue512_cpu_free(int thr_id);
 /* shabal + whirlpool: bare names are the real symbols (algos/stages/, layout B);
- * the x14_shabal512_* / x15_whirlpool_* forwarders (declared above) stay for
- * the not-yet-migrated consumers (x17/skydoge/hmq17, x21s, ghostrider, evohash,
- * bastion). */
+ * the x14_shabal512_* forwarders were removed 2026-07-16; the x15_whirlpool_*
+ * forwarders (declared above) stay for evohash + ghostrider, which still call
+ * the x15_ name. */
 void shabal512_cpu_init(int thr_id, uint32_t threads);
 void shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 void whirlpool512_cpu_init(int thr_id, uint32_t threads, int mode);
@@ -136,9 +157,14 @@ void x16_echo512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash);
  * eliding the stage's d_hash store + the cuda_check_hash/suppl passes). Bare
  * names, real symbols in algos/stages/. */
 void echo512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t *d_resNonce, const uint64_t target);
-/* skein-final de-branded to bare (real symbol in algos/stages/cuda_skein512.cu);
- * the quark_skein512_cpu_hash_64_final alias lives in cuda_quark.h */
+/* skein-final: bare real symbol in algos/stages/cuda_skein512.cu */
 void skein512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint64_t target, uint32_t *d_resNonce);
+/* fugue-final (real symbol in algos/stages/cuda_fugue512.cu); terminal fugue
+ * for the fixed x13 chain. Not truncated (full fugue + compare). */
+void fugue512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t *d_resNonce, const uint64_t target);
+/* shabal-final (real symbol in algos/stages/cuda_shabal512.cu); terminal shabal
+ * for the fixed x14 chain. Not truncated (full shabal + compare). */
+void shabal512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t *d_resNonce, const uint64_t target);
 
 // ---- 80 bytes kernels
 

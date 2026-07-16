@@ -116,6 +116,3 @@ void keccak512_cuda_hash_80(const int thr_id, const uint32_t threads, const uint
 	jackpot_keccak512_cpu_hash(thr_id, threads, startNounce, d_hash, 0);
 }
 
-/* legacy quark_ name forwarders (de-brand compat; see quark/cuda_quark.h) */
-__host__ void quark_keccak512_cpu_init(int thr_id, uint32_t threads){ keccak512_cpu_init(thr_id, threads); }
-__host__ void quark_keccak512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash, uint32_t startNounce){ keccak512_cpu_hash_64(thr_id, threads, d_nonceVector, d_hash, startNounce); }

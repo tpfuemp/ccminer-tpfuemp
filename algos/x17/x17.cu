@@ -32,6 +32,25 @@ extern "C" {
 
 static uint32_t *d_hash[MAX_GPUS];
 
+/* stage ids match the shared fused-kernel switch (cuda_x_fused.cu / x16r.cu) */
+enum Algo {
+	BLAKE = 0,
+	BMW,
+	GROESTL,
+	JH,
+	KECCAK,
+	SKEIN,
+	LUFFA,
+	CUBEHASH,
+	SHAVITE,
+	SIMD,
+	ECHO
+};
+
+/* the maximal fusible run in the fixed x17 order: skein->jh->keccak->luffa->
+ * cubehash (identical to x11/x13; the kernel walks it in this order) */
+static const uint8_t x17_fused_ids[5] = { SKEIN, JH, KECCAK, LUFFA, CUBEHASH };
+
 
 // X17 CPU Hash (Validation)
 extern "C" void x17hash(void *output, const void *input)
@@ -181,6 +200,11 @@ extern "C" int scanhash_x17(int thr_id, struct work* work, uint32_t max_nonce, u
 
 		cuda_check_cpu_init(thr_id, throughput);
 
+		/* fused-kernel selftest (clobbers the order constant) must run before the
+		 * real upload of the fixed x17 fused sequence */
+		x_fused_device_selftest(thr_id);
+		x_fused_setOrder(x17_fused_ids, 5);
+
 		init[thr_id] = true;
 	}
 
@@ -200,11 +224,8 @@ extern "C" int scanhash_x17(int thr_id, struct work* work, uint32_t max_nonce, u
 		blake512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id]); order++;
 		bmw512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 		groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		keccak512_cpu_hash_64(thr_id, throughput, NULL, d_hash[thr_id]); order++;
-		luffa512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		cubehash512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
+		/* fused: skein - jh - keccak - luffa - cubehash (register-resident) */
+		x_fused_cpu_hash_64(thr_id, throughput, 0, 5, 0, d_hash[thr_id]); order += 5;
 		shavite512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
 		simd512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 		if (use_compat_kernels[thr_id])

@@ -32,6 +32,32 @@ static uint32_t *d_hash[MAX_GPUS];
 static uint32_t *d_hash_br2[MAX_GPUS];
 static uint32_t *d_tempBranch[MAX_GPUS];
 
+/* stage ids match the shared fused-kernel switch (cuda_x_fused.cu) */
+enum Algo {
+	BLAKE = 0,
+	BMW,
+	GROESTL,
+	JH,
+	KECCAK,
+	SKEIN,
+	LUFFA,
+	CUBEHASH
+};
+
+/* HMQ1725 is a per-nonce branching chain, so most of it can't be fused. But two
+ * consecutive all-nonce fusible pairs sit between branch merge/filter points and
+ * touch only the common d_hash: jh->keccak and luffa->cubehash. Both are packed
+ * into one uploaded id array; each fused launch indexes its pair by (start,len).
+ * The branch stages and the CPU hmq1725hash reference are untouched, so GPU
+ * output stays bit-identical. */
+static const uint8_t hmq_fused_ids[4] = { JH, KECCAK, LUFFA, CUBEHASH };
+
+// Intermediate haval whose 256-bit digest is zero-extended to 64 bytes (high 32
+// bytes zeroed), matching the CPU reference's memset(&hash[8],0,32). The shared
+// haval256_cpu_hash_64(...,512) instead passes the pre-haval high bytes through
+// (correct for x21s, wrong here) -- so hmq1725 uses this zero-high variant.
+extern void haval256_cpu_hash_64z(int thr_id, uint32_t threads, uint32_t *d_hash);
+
 struct hmq_contexts
 {
 	sph_blake512_context    blake1, blake2;
@@ -96,7 +122,7 @@ static void init_contexts(hmq_contexts *ctx)
 }
 
 // CPU Check
-extern "C" void hmq17hash(void *output, const void *input)
+extern "C" void hmq1725hash(void *output, const void *input)
 {
 	uint32_t _ALIGN(64) hash[32];
 
@@ -296,7 +322,7 @@ static bool init[MAX_GPUS] = { 0 };
 #define _DEBUG_PREFIX "hmq-"
 #include "cuda_debug.cuh"
 
-extern "C" int scanhash_hmq17(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done)
+extern "C" int scanhash_hmq1725(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done)
 {
 	uint32_t *pdata = work->data;
 	uint32_t *ptarget = work->target;
@@ -342,6 +368,11 @@ extern "C" int scanhash_hmq17(int thr_id, struct work* work, uint32_t max_nonce,
 
 		cuda_check_cpu_init(thr_id, throughput);
 
+		/* fused-kernel selftest (clobbers the order constant) must run before the
+		 * real upload of the packed jh/keccak + luffa/cubehash pairs */
+		x_fused_device_selftest(thr_id);
+		x_fused_setOrder(hmq_fused_ids, 4);
+
 		init[thr_id] = true;
 	}
 
@@ -367,8 +398,8 @@ extern "C" int scanhash_hmq17(int thr_id, struct work* work, uint32_t max_nonce,
 		skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash_br2[thr_id], order++);
 		hmq_merge_cpu(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
 
-		jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		keccak512_cpu_hash_64(thr_id, throughput, NULL, d_hash[thr_id]); order++;
+		/* fused all-nonce pair: jh -> keccak (register-resident) */
+		x_fused_cpu_hash_64(thr_id, throughput, 0, 2, 0, d_hash[thr_id]); order += 2;
 		TRACE("keccak ");
 
 		hmq_filter_cpu(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
@@ -376,8 +407,8 @@ extern "C" int scanhash_hmq17(int thr_id, struct work* work, uint32_t max_nonce,
 		bmw512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash_br2[thr_id], order++);
 		hmq_merge_cpu(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
 
-		luffa512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		cubehash512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
+		/* fused all-nonce pair: luffa -> cubehash (register-resident) */
+		x_fused_cpu_hash_64(thr_id, throughput, 2, 2, 0, d_hash[thr_id]); order += 2;
 		TRACE("cube   ");
 
 		hmq_filter_cpu(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
@@ -391,7 +422,7 @@ extern "C" int scanhash_hmq17(int thr_id, struct work* work, uint32_t max_nonce,
 
 		hmq_filter_cpu(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
 		whirlpool512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		haval256_cpu_hash_64(thr_id, throughput, pdata[19], d_hash_br2[thr_id], 512); order++;
+		haval256_cpu_hash_64z(thr_id, throughput, d_hash_br2[thr_id]); order++;
 		hmq_merge_cpu(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
 
 		echo512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
@@ -426,7 +457,7 @@ extern "C" int scanhash_hmq17(int thr_id, struct work* work, uint32_t max_nonce,
 		TRACE("sha512 ");
 
 		hmq_filter_cpu(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
-		haval256_cpu_hash_64(thr_id, throughput, pdata[19], d_hash[thr_id], 512); order++;
+		haval256_cpu_hash_64z(thr_id, throughput, d_hash[thr_id]); order++;
 		whirlpool512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash_br2[thr_id], order++);
 		hmq_merge_cpu(thr_id, throughput, d_hash[thr_id], d_hash_br2[thr_id]);
 		TRACE("hav/wh ");
@@ -442,7 +473,7 @@ extern "C" int scanhash_hmq17(int thr_id, struct work* work, uint32_t max_nonce,
 			const uint32_t Htarg = ptarget[7];
 			uint32_t _ALIGN(64) vhash[8];
 			be32enc(&endiandata[19], work->nonces[0]);
-			hmq17hash(vhash, endiandata);
+			hmq1725hash(vhash, endiandata);
 
 			if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
 				work->valid_nonces = 1;
@@ -450,7 +481,7 @@ extern "C" int scanhash_hmq17(int thr_id, struct work* work, uint32_t max_nonce,
 				work_set_target_ratio(work, vhash);
 				if (work->nonces[1] != 0 && work->nonces[1] != work->nonces[0]) {
 					be32enc(&endiandata[19], work->nonces[1]);
-					hmq17hash(vhash, endiandata);
+					hmq1725hash(vhash, endiandata);
 					if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
 						bn_set_target_ratio(work, vhash, 1);
 						work->valid_nonces++;
@@ -492,7 +523,7 @@ extern "C" int scanhash_hmq17(int thr_id, struct work* work, uint32_t max_nonce,
 }
 
 // cleanup
-extern "C" void free_hmq17(int thr_id)
+extern "C" void free_hmq1725(int thr_id)
 {
 	if (!init[thr_id])
 		return;

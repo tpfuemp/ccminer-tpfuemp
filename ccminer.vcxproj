@@ -475,7 +475,6 @@
     <ClInclude Include="cuda\shavite512_device.cuh" />
     <ClInclude Include="cuda\whirlpool512_device.cuh" />
     <ClInclude Include="cuda\tiger192_device.cuh" />
-    <ClInclude Include="algos\stages\cuda_quark.h" />
   </ItemGroup>
   <ItemGroup>
     <CudaCompile Include="cuda.cpp" />
@@ -582,7 +581,7 @@
     <CudaCompile Include="algos\stages\cuda_blake512.cu">
       <MaxRegCount>80</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="cuda_checkhash.cu">
+    <CudaCompile Include="algos\common\cuda_checkhash.cu">
       <CInterleavedPTX>false</CInterleavedPTX>
     </CudaCompile>
     <CudaCompile Include="algos\stages\cuda_quark_compactionTest.cu">
@@ -682,7 +681,7 @@
     <CudaCompile Include="algos\stages\cuda_echo512_64.cu">
       <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
     </CudaCompile>
-    <CudaCompile Include="algos\x17\hmq17.cu" />
+    <CudaCompile Include="algos\x17\hmq1725.cu" />
     <CudaCompile Include="algos\x17\x17.cu" />
     <CudaCompile Include="algos\x17\skydoge.cu" />
     <CudaCompile Include="algos\stages\cuda_haval256.cu" />

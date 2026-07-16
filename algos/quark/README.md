@@ -24,8 +24,10 @@ the ~40 legacy callers across the family (x13/x15/x17/tribus/JHA) and standalone
 algos (zr5, skein, pentablake, bastion, Algo256/bmw512) keep linking to the
 `quark_*` names unchanged. Renaming these shared symbols to bare form is the
 family-wide naming pass, deferred until the remaining families migrate.
-`algos/stages/cuda_quark.h` stays (still directly included by JHA and the shared
-`algos/common/cuda_x_stages.h` bridge).
+`algos/stages/cuda_quark.h` was folded into `algos/common/cuda_x_stages.h`
+2026-07-16 (the bare launcher prototypes + `quark_compactTest_*` +
+`cuda_check_hash_branch` now live there); quark/anime/jackpot/JHA include the
+bridge header directly.
 
 ## Branching vs. fusion
 

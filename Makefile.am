@@ -23,7 +23,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  api.cpp hashlog.cpp nvml.cpp stats.cpp sysinfos.cpp cuda.cpp \
 			  nvsettings.cpp \
 			  algos/equihash/equi-stratum.cpp algos/equihash/equi.cpp algos/equihash/blake2/blake2bx.cpp \
-			  algos/equihash/equihash.cpp algos/equihash/cuda_equi.cu \
+			  algos/equihash/equihash.cpp algos/equihash/cuda_equi.cu algos/equihash/cuda_equi_tromp.cu \
 			  algos/allium/allium.cu \
 			  algos/balloon/balloon.cpp algos/balloon/balloon_scan.cpp \
 			  algos/balloon/sha256-ref.c algos/balloon/cuda_balloon.cu \
@@ -44,7 +44,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/argon2d/argon2ref/blake2/blake2.h algos/argon2d/argon2ref/blake2/blake2-impl.h \
 			  algos/argon2d/argon2ref/blake2/blamka-round-opt.h algos/argon2d/argon2ref/blake2/blamka-round-ref.h \
 			  algos/yescrypt/yescrypt.cu algos/yescrypt/cuda_yescrypt.cu \
-			  sph/yescrypt-common.c sph/yescrypt-opt.c \
+			  sph/yescrypt-common.c sph/yescrypt-opt.c sph/sha256_Y.c \
 			  sph/yescrypt.h sph/yescrypt-platform.h \
 			  algos/odocrypt/odocrypt_host.cpp algos/odocrypt/cuda_odocrypt.cu \
 			  algos/heavyhash/heavyhash.cu \
@@ -78,7 +78,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/cryptonight/cryptonight.cu algos/cryptonight/cryptonight-core.cu algos/cryptonight/cryptonight-extra.cu \
 			  algos/cryptonight/cryptonight-cpu.cpp algos/cryptonight/oaes_lib.cpp algos/cryptonight/aesb.cpp algos/cryptonight/cpu/c_keccak.c \
 			  algos/jha/jha.cu algos/jha/jackpotcoin.cu algos/stages/cuda_jha_keccak512.cu \
-			  algos/jha/cuda_jha_compactionTest.cu cuda_checkhash.cu \
+			  algos/jha/cuda_jha_compactionTest.cu algos/common/cuda_checkhash.cu \
 			  algos/stages/cuda_jh512.cu algos/stages/cuda_blake512.cu algos/stages/cuda_groestl512.cu algos/stages/cuda_skein512.cu \
 			  algos/stages/cuda_bmw512.cu algos/stages/cuda_keccak512.cu \
 			  algos/quark/animecoin.cu algos/quark/nist5.cu \
@@ -88,9 +88,11 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/skunk/skunk.cu algos/skunk/cuda_skunk.cu algos/stages/cuda_streebog.cu \
 			  algos/sha256d/sha256d.cu algos/sha256d/cuda_sha256d.cu algos/sha256d/sha256t.cu algos/sha256d/cuda_sha256t.cu \
 			  algos/sha256d/cuda_sha256_selftest.cu cuda/sha256_device.cuh \
+			  algos/sha256d/sha256csm.cu algos/sha256d/cuda_sha256csm.cu \
 			  algos/sha512256d/sha512256d.cu algos/sha512256d/cuda_sha512256d.cu \
 			  algos/sha512256d/cuda_sha512256d_selftest.cu cuda/sha512_device.cuh \
 			  algos/sha256dv/sha256dv.cu \
+			  algos/blake2b/blake2b.cu \
 			  algos/keccak/keccak256.cu algos/keccak/cuda_keccak256.cu \
 			  algos/keccak/cuda_keccak_selftest.cu cuda/keccak_device.cuh \
 			  cuda/xfamily_selftest.cu cuda/blake512_device.cuh \
@@ -120,7 +122,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/x16/x16r.cu algos/x16/x16rv2.cu algos/x16/x16s.cu algos/stages/cuda_echo512_80.cu algos/stages/cuda_fugue512_80.cu \
 			  algos/stages/cuda_shabal512_80.cu algos/stages/cuda_shavite512_80.cu algos/stages/cuda_simd512_80.cu \
 			  algos/stages/cuda_echo512_64.cu algos/common/cuda_x_fused.cu \
-			  algos/x17/x17.cu algos/x17/skydoge.cu algos/x17/hmq17.cu algos/stages/cuda_haval256.cu algos/stages/cuda_sha512.cu \
+			  algos/x17/x17.cu algos/x17/skydoge.cu algos/x17/hmq1725.cu algos/stages/cuda_haval256.cu algos/stages/cuda_sha512.cu \
 			  algos/x11/phi.cu \
 			  algos/x11/c11.cu algos/x11/s3.cu algos/x11/sib.cu algos/x11/veltor.cu algos/x11/0x10.cu \
 			  algos/x21/x21s.cu algos/stages/cuda_sha256_2.cu algos/stages/cuda_tiger192.cu 
@@ -165,12 +167,17 @@ nvcc_ARCH += -gencode=arch=compute_61,code=\"sm_61,compute_61\"
 #nvcc_ARCH += -gencode=arch=compute_35,code=\"sm_35,compute_35\"
 #nvcc_ARCH += -gencode=arch=compute_30,code=\"sm_30,compute_30\"
 
-nvcc_FLAGS = $(nvcc_ARCH) @CUDA_INCLUDES@ -I. @CUDA_CFLAGS@
+nvcc_FLAGS = $(nvcc_ARCH) @CUDA_INCLUDES@ -I. -I$(srcdir) @CUDA_CFLAGS@
 nvcc_FLAGS += $(JANSSON_INCLUDES) --ptxas-options="-v"
 
 # we're now targeting all major compute architectures within one binary.
 .cu.o:
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=128 -o $@ -c $<
+
+# Tromp equihash solver: parameterised for 144/5 (WN=144 selects the
+# BUCKBITS=20/RESTBITS=4 code paths); no register cap, ptxas cache hints.
+algos/equihash/cuda_equi_tromp.o: algos/equihash/cuda_equi_tromp.cu
+	$(NVCC) $(nvcc_FLAGS) -DWN=144 -DWK=5 -DRESTBITS=4 -Xptxas -dlcm=ca -Xptxas -dscm=cs -o $@ -c $<
 
 algos/stages/cuda_lyra2.o: algos/stages/cuda_lyra2.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=128 -o $@ -c $<

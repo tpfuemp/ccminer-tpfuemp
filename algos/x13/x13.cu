@@ -38,6 +38,7 @@ extern "C" {
 #include <memory.h>
 
 static uint32_t *d_hash[MAX_GPUS];
+static uint32_t *d_resNonce[MAX_GPUS];
 
 /* stage ids match enum Algo in x16r.cu / the fused kernel switch */
 enum Algo {
@@ -186,6 +187,7 @@ extern "C" int scanhash_x13(int thr_id, struct work* work, uint32_t max_nonce, u
 		fugue512_cpu_init(thr_id, throughput);
 
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_hash[thr_id], 16 * sizeof(uint32_t) * throughput), 0);
+		CUDA_SAFE_CALL(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)));
 
 		cuda_check_cpu_init(thr_id, throughput);
 
@@ -203,6 +205,8 @@ extern "C" int scanhash_x13(int thr_id, struct work* work, uint32_t max_nonce, u
 
 	blake512_cpu_setBlock_80(thr_id, endiandata);
 	cuda_check_cpu_setTarget(ptarget);
+	if (!use_compat_kernels[thr_id])
+		cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
 
 	do {
 		int order = 0;
@@ -229,26 +233,36 @@ extern "C" int scanhash_x13(int thr_id, struct work* work, uint32_t max_nonce, u
 		TRACE("echo   :");
 		hamsi512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 		TRACE("hamsi  :");
-		fugue512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		if (use_compat_kernels[thr_id]) {
+			fugue512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+			work->nonces[0] = cuda_check_hash(thr_id, throughput, pdata[19], d_hash[thr_id]);
+			work->nonces[1] = UINT32_MAX;
+		} else {
+			/* fugue terminal + on-device target compare (2 nonces via an atomicExch
+			 * chain), eliding the fugue store + the cuda_check_hash/suppl passes */
+			fugue512_cpu_hash_64_final(thr_id, throughput, d_hash[thr_id], d_resNonce[thr_id], AS_U64(&ptarget[6]));
+			cudaMemcpy(&work->nonces[0], d_resNonce[thr_id], 2 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+		}
 		TRACE("fugue  :");
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
 
 		CUDA_LOG_ERROR();
 
-		work->nonces[0] = cuda_check_hash(thr_id, throughput, pdata[19], d_hash[thr_id]);
 		if (work->nonces[0] != UINT32_MAX)
 		{
 			const uint32_t Htarg = ptarget[7];
+			const uint32_t startNounce = pdata[19];
 			uint32_t _ALIGN(64) vhash[8];
+			if (!use_compat_kernels[thr_id]) work->nonces[0] += startNounce;
 			be32enc(&endiandata[19], work->nonces[0]);
 			x13hash(vhash, endiandata);
 
-			if (vhash[7] <= ptarget[7] && fulltest(vhash, ptarget)) {
+			if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
 				work->valid_nonces = 1;
-				work->nonces[1] = cuda_check_hash_suppl(thr_id, throughput, pdata[19], d_hash[thr_id], 1);
 				work_set_target_ratio(work, vhash);
-				if (work->nonces[1] != 0) {
+				if (work->nonces[1] != UINT32_MAX) {
+					if (!use_compat_kernels[thr_id]) work->nonces[1] += startNounce;
 					be32enc(&endiandata[19], work->nonces[1]);
 					x13hash(vhash, endiandata);
 					bn_set_target_ratio(work, vhash, 1);
@@ -263,6 +277,8 @@ extern "C" int scanhash_x13(int thr_id, struct work* work, uint32_t max_nonce, u
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
 				gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
+				if (!use_compat_kernels[thr_id])
+					cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
 				pdata[19] = work->nonces[0] + 1;
 				continue;
 			}
@@ -292,6 +308,7 @@ extern "C" void free_x13(int thr_id)
 	cudaDeviceSynchronize();
 
 	cudaFree(d_hash[thr_id]);
+	cudaFree(d_resNonce[thr_id]);
 
 	blake512_cpu_free(thr_id);
 	groestl512_cpu_free(thr_id);

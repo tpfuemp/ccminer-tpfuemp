@@ -2607,7 +2607,7 @@ static void *miner_thread(void *userdata)
 			break;
 
 		case ALGO_HMQ1725:
-			rc = scanhash_hmq17(thr_id, &work, max_nonce, &hashes_done);
+			rc = scanhash_hmq1725(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_HSR:
 			rc = scanhash_hsr(thr_id, &work, max_nonce, &hashes_done);

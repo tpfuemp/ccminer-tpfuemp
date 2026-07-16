@@ -2,6 +2,10 @@
 ccminer
 *.o
 
+# out-of-tree Linux build dir (keeps the shared source tree clean; avoids the
+# ccminer/ dir name collision with the Windows MSBuild IntDir)
+build-linux/
+
 autom4te.cache
 .deps
 

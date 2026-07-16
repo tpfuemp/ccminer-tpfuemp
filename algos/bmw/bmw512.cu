@@ -12,9 +12,9 @@ extern "C" {
 
 static uint32_t *d_resNonce[MAX_GPUS];
 static uint32_t *h_resNonce[MAX_GPUS];
-extern void quark_bmw512_cpu_init(int thr_id, uint32_t threads);
-extern void quark_bmw512_cpu_setBlock_80(void *pdata);
-void quark_bmw512_cpu_hash_80_final(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_resNonce, const uint64_t target);
+extern void bmw512_cpu_init(int thr_id, uint32_t threads);
+extern void bmw512_cpu_setBlock_80(void *pdata);
+void bmw512_cpu_hash_80_final(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_resNonce, const uint64_t target);
 
 
 extern "C" void bmw512_hash(void *state, const void *input) {
@@ -58,18 +58,18 @@ extern "C" int scanhash_bmw512(int thr_id, struct work* work, uint32_t max_nonce
 			gpulog(LOG_ERR,thr_id,"Host memory allocation failed");
 			exit(EXIT_FAILURE);
 		}
-		quark_bmw512_cpu_init(thr_id, throughput);
+		bmw512_cpu_init(thr_id, throughput);
 		cuda_check_cpu_init(thr_id, throughput);
 
 		init[thr_id] = true;
 	}
 
-	quark_bmw512_cpu_setBlock_80((void*)endiandata);
+	bmw512_cpu_setBlock_80((void*)endiandata);
 	cudaMemset(d_resNonce[thr_id], 0xff, NBN*sizeof(uint32_t));
 	*hashes_done = 0;
 
 	do {
-		quark_bmw512_cpu_hash_80_final(thr_id, throughput, pdata[19], d_resNonce[thr_id], *(uint64_t*)&ptarget[6]);
+		bmw512_cpu_hash_80_final(thr_id, throughput, pdata[19], d_resNonce[thr_id], *(uint64_t*)&ptarget[6]);
 		cudaMemcpy(h_resNonce[thr_id], d_resNonce[thr_id], NBN*sizeof(uint32_t), cudaMemcpyDeviceToHost);
 		*hashes_done += throughput;
 

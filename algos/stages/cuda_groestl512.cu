@@ -174,7 +174,3 @@ void groestl512_cuda_hash_80(const int thr_id, const uint32_t threads, const uin
 
 #endif
 
-/* legacy quark_ name forwarders (de-brand compat; see quark/cuda_quark.h) */
-__host__ void quark_groestl512_cpu_init(int thr_id, uint32_t threads){ groestl512_cpu_init(thr_id, threads); }
-__host__ void quark_groestl512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order){ groestl512_cpu_hash_64(thr_id, threads, startNounce, d_nonceVector, d_hash, order); }
-__host__ void quark_groestl512_cpu_free(int thr_id){ groestl512_cpu_free(thr_id); }

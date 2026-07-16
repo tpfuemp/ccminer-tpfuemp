@@ -551,9 +551,3 @@ __host__ void __cdecl blake512_cpu_init(int thr_id, unsigned int)
 {
 	blake512_device_selftest(thr_id);
 }
-/* legacy quark_ name forwarders (de-brand compat; see quark/cuda_quark.h) */
-__host__ void quark_blake512_cpu_init(int thr_id, uint32_t threads){ blake512_cpu_init(thr_id, threads); }
-__host__ void quark_blake512_cpu_free(int thr_id){ blake512_cpu_free(thr_id); }
-__host__ void quark_blake512_cpu_setBlock_80(int thr_id, uint32_t *pdata){ blake512_cpu_setBlock_80(thr_id, pdata); }
-__host__ void quark_blake512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash){ blake512_cpu_hash_80(thr_id, threads, startNounce, d_hash); }
-__host__ void quark_blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order){ blake512_cpu_hash_64(thr_id, threads, startNounce, d_nonceVector, d_hash, order); }

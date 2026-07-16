@@ -52,9 +52,3 @@ void cubehash512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash){
 
 	cubehash512_gpu_hash_64<<<grid, block>>>(threads, (uint64_t*)d_hash);
 }
-
-/* Legacy forwarder — not-yet-migrated x11-family consumers call the x11_ name;
- * removed once they call the bare cubehash512_cpu_hash_64. */
-__host__ void x11_cubehash512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash){
-	cubehash512_cpu_hash_64(thr_id, threads, d_hash);
-}

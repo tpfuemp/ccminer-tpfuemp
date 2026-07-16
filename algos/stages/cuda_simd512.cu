@@ -121,12 +121,3 @@ void simd512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uin
 	simd512_gpu_expand_64 <<<grid1, block1>>> (threads, d_hash, d_temp4[thr_id]);
 	simd512_gpu_compress_64 <<< grid1, block1 >>> (threads, d_hash, d_temp4[thr_id]);
 }
-
-/* Legacy forwarders — the not-yet-migrated x11-family consumers (c11/sib/fresh/
- * s3/veltor/0x10/phi/timetravel/bitcore/x11evo + x13/x15/x17/qubit/... ) still
- * call the x11_simd512_* names; removed once they call the bare simd512_* ones. */
-__host__ int  x11_simd512_cpu_init(int thr_id, uint32_t threads) { return simd512_cpu_init(thr_id, threads); }
-__host__ void x11_simd512_cpu_free(int thr_id) { simd512_cpu_free(thr_id); }
-__host__ void x11_simd512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order) {
-	simd512_cpu_hash_64(thr_id, threads, startNounce, d_nonceVector, d_hash, order);
-}

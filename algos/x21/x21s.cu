@@ -91,6 +91,7 @@ static const char* algo_strings[] = {
 
 static __thread uint32_t s_ntime = UINT32_MAX;
 static __thread char hashOrder[HASH_FUNC_COUNT + 1] = { 0 };
+static __thread uint8_t fused_run[16] = { 0 }; /* run length starting at 64-byte stage i, 0/1 = none */
 
 static void getAlgoString(const uint32_t* prevblock, char *output)
 {
@@ -349,6 +350,23 @@ extern "C" int scanhash_x21s(int thr_id, struct work* work, uint32_t max_nonce, 
 		getAlgoString(&endiandata[1], hashOrder);
 		s_ntime = ntime;
 		if (opt_debug && !thr_id) applog(LOG_DEBUG, "hash order %s (%08x)", hashOrder, ntime);
+
+		/* fuse maximal runs of >= 2 consecutive fusible 64-byte stages (x16-style);
+		 * upload the 15 64-byte stage ids once, kernels index them by (start,len) */
+		uint8_t ids[16];
+		memset(fused_run, 0, sizeof(fused_run));
+		for (int i = 1; i < 16; i++) {
+			const char e = hashOrder[i];
+			ids[i] = e >= 'A' ? e - 'A' + 10 : e - '0';
+		}
+		for (int i = 1; i < 16; ) {
+			int len = 0;
+			while (i + len < 16 && x_fusible[ids[i + len]]) len++;
+			if (len >= 2) fused_run[i] = (uint8_t) len;
+			i += (len > 0) ? len : 1;
+		}
+		x_fused_device_selftest(thr_id);
+		x_fused_setOrder(&ids[1], 15);
 	}
 
 	cuda_check_cpu_setTarget(ptarget);
@@ -484,10 +502,19 @@ extern "C" int scanhash_x21s(int thr_id, struct work* work, uint32_t max_nonce, 
 				break;
 		}
 
-		for (int i = 1; i < 16; i++)
+		for (int i = 1; i < 16; )
 		{
+			if (fused_run[i] >= 2) {
+				const int len = fused_run[i];
+				x_fused_cpu_hash_64(thr_id, throughput, i - 1, len, 0, d_hash[thr_id]);
+				order += len;
+				i += len;
+				continue;
+			}
+
 			const char elem = hashOrder[i];
 			const uint8_t algo64 = elem >= 'A' ? elem - 'A' + 10 : elem - '0';
+			i++;
 
 			switch (algo64) {
 			case BLAKE:

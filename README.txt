@@ -1,66 +1,17 @@
 
-ccminer-kudaraidee 1.0.0 (March. 2022)     "0x10 ,x21s and sha3d improvements"
+ccminer-tpfuemp 2026.07     "CUDA 11.8 modernisation, algos/ refactor, added + optimised algorithms"
 ---------------------------------------------------------------
 
-***************************************************************
-If you find this tool useful and like to support its continuous
-          development, then consider a donation.
-
-kudaraidee@github:
-  DOGE  : D6oP3WPygJ4NR26XxfFydUsCiNS4oX9rqb
-
-tpruvot@github:
-  BTC  : 1AJdfCpLWPNoAMDfHF1wD5y8VgKSSTHxPo
-  DCR  : DsUCcACGcyP8McNMRXQwbtpDxaVUYLDQDeU
-
-DJM34:
-  BTC donation address: 1NENYmxwZGHsKFmyjTc5WferTn5VTFb7Ze
-
-cbuchner v1.2:
-  LTC donation address: LKS1WDKGED647msBQfLBHV3Ls8sveGncnm
-  BTC donation address: 16hJF5mceSojnTD3ZTUDqdRhDyPJzoRakM
-
-***************************************************************
+Donation addresses and contributor credits are in CREDITS.txt.
 
 >>> Introduction <<<
 
-This is a CUDA accelerated mining application which handle :
+This is a CUDA accelerated mining application for NVIDIA GPUs. It supports a
+large set of proof-of-work algorithms -- see the complete, current list under
+the -a option below (or run "ccminer --help", or see README.md).
 
-Decred (Blake256 14-rounds - 180 bytes)
-HeavyCoin & MjollnirCoin
-FugueCoin
-GroestlCoin & Myriad-Groestl
-Lbry Credits
-JackpotCoin (JHA)
-QuarkCoin family & AnimeCoin
-TalkCoin
-DarkCoin and other X11 coins
-Chaincoin and Flaxscript (C11)
-Saffroncoin blake (256 14-rounds)
-BlakeCoin (256 8-rounds)
-Qubit (Digibyte, ...)
-Luffa (Joincoin)
-Keccak (Maxcoin)
-Pentablake (Blake 512 x5)
-1Coin Triple S
-Neoscrypt (FeatherCoin)
-Revolver (X11evo)
-Scrypt and Scrypt:N
-Scrypt-Jane (Chacha)
-Sibcoin (sib)
-Skein (Skein + SHA)
-Signatum (Skein cubehash fugue Streebog)
-Tribus (JH, keccak, simd)
-Woodcoin (Double Skein)
-Vanilla (Blake256 8-rounds - double sha256)
-Vertcoin Lyra2RE
-Ziftrcoin (ZR5)
-Boolberry (Wild Keccak)
-Monero (Cryptonight)
-Aeon (Cryptonight-lite)
-
-where some of these coins have a VERY NOTABLE nVidia advantage
-over competing AMD (OpenCL Only) implementations.
+Some of these coins have a VERY NOTABLE nVidia advantage over competing AMD
+(OpenCL only) implementations.
 
 We did not take a big effort on improving usability, so please set
 your parameters carefuly.
@@ -76,65 +27,102 @@ This code is based on the pooler cpuminer and inherits
 its command line interface and options.
 
   -a, --algo=ALGO       specify the algorithm to use
-                          0x10 		  use to mine ChainOX
-                          bastion     use to mine Joincoin
-                          bitcore     use to mine Bitcore's Timetravel10
-                          blake       use to mine Saffroncoin (Blake256)
-                          blakecoin   use to mine Old Blake 256
-                          blake2s     use to mine Nevacoin (Blake2-S 256)
-                          bmw         use to mine Midnight
-                          cryptolight use to mine AEON cryptonight (MEM/2)
-                          cryptonight use to mine XMR cryptonight, Bytecoin, Dash, DigitalNote, etc
-                          c11/flax    use to mine Chaincoin and Flax
-                          decred      use to mine Decred 180 bytes Blake256-14
-                          deep        use to mine Deepcoin
-                          dmd-gr      use to mine Diamond-Groestl
-                          equihash    use to mine ZEC, HUSH and KMD
-                          fresh       use to mine Freshcoin
-                          fugue256    use to mine Fuguecoin
-                          groestl     use to mine Groestlcoin
-                          hsr         use to mine Hshare
-                          jackpot     use to mine Sweepcoin
-                          keccak      use to mine Maxcoin
-                          keccakc     use to mine CreativeCoin
-                          lbry        use to mine LBRY Credits
-                          luffa       use to mine Joincoin
-                          lyra2       use to mine CryptoCoin
-                          lyra2v2     use to mine Vertcoin
-                          lyra2z      use to mine Zerocoin (XZC)
-                          myr-gr      use to mine Myriad-Groest
-                          neoscrypt   use to mine FeatherCoin, Trezarcoin, Orbitcoin, etc
-						  neoscrypt-xaya use to mine XAYA
-                          nist5       use to mine TalkCoin
-                          penta       use to mine Joincoin / Pentablake
-                          phi         use to mine LUXCoin
-                          polytimos   use to mine Polytimos
-                          quark       use to mine Quarkcoin
-                          qubit       use to mine Qubit
-                          scrypt      use to mine Scrypt coins (Litecoin, Dogecoin, etc)
-                          scrypt:N    use to mine Scrypt-N (:10 for 2048 iterations)
-                          scrypt-jane use to mine Chacha coins like Cache and Ultracoin
-                          s3          use to mine 1coin (ONE)
-                          sha256t     use to mine OneCoin (OC)
-                          sha3d       use to mine BSHA3, Yilacoin and Kylacoin
-                          sia         use to mine SIA
-                          sib         use to mine Sibcoin
-                          skein       use to mine Skeincoin
-                          skein2      use to mine Woodcoin
-                          skunk       use to mine Signatum
-                          timetravel  use to mine MachineCoin
-                          tribus      use to mine Denarius
-                          x11evo      use to mine Revolver
-                          x11         use to mine DarkCoin
-                          x14         use to mine X14Coin
-                          x15         use to mine Halcyon
-                          x17         use to mine X17
-                          x21s        use to mine X21S
-                          vanilla     use to mine Vanilla (Blake256)
-                          veltor      use to mine VeltorCoin
-                          whirlpool   use to mine Joincoin
-                          wildkeccak  use to mine Boolberry (Stratum only)
-                          zr5         use to mine ZiftrCoin
+                          0x10                ChainOX
+                          allium              Lyra2 + Blake2s (Garlicoin)
+                          anime               Animecoin
+                          argon2d1000         Zero Dynamics Cash (DYN)
+                          argon2d16000        Alterdot (ADOT)
+                          balloon             Balloon hash
+                          bastion             Hefty bastion
+                          bitcore             Timetravel-10
+                          blake               Blake-256 (SFR)
+                          blake2b             Blake2-B 512 (BCX)
+                          blake2s             Blake2-S 256 (NEVA)
+                          blakecoin           Fast Blake-256 (8 rounds)
+                          bmw                 BMW-256
+                          bmw512              BMW-512
+                          c11 / flax          X11 variant
+                          cryptolight         AEON CryptoNight (MEM/2)
+                          cryptonight         Monero-style CryptoNight
+                          decred              Decred Blake-256
+                          deep                Deepcoin
+                          dmd-gr              Diamond-Groestl
+                          equihash            Zcash Equihash 200/9 (+ 144/5 Tromp)
+                          evohash             EvoAI
+                          fresh               Freshcoin (Shavite-80)
+                          fugue256            Fuguecoin
+                          ghostrider / gr     GhostRider (Raptoreum)
+                          gostcoin            Double GOST R 34.11
+                          groestl             Groestlcoin
+                          heavy               Heavycoin (build-gated WITH_HEAVY_ALGO)
+                          heavyhash           HeavyHash (oBTC)
+                          hmq1725 / hmq17     HMQ1725 (Doubloons / Espers)
+                          hoohash / pepepow   HoohashV110 (PEPEPOW)
+                          hsr / hshare        HShare / HSR (X13 + SM3)
+                          jackpot             JHA v8
+                          jha                 JHA
+                          keccak              Keccak-256 (deprecated)
+                          keccakc             Keccak-256 (CreativeCoin)
+                          lbry                LBRY Credits (SHA/RIPEMD)
+                          luffa / doom        Joincoin
+                          lyra2 / lyra2re     Lyra2RE (CryptoCoin)
+                          lyra2v2             Lyra2REv2 (VertCoin)
+                          lyra2z              Lyra2Z (ZeroCoin)
+                          lyra2z330           Lyra2Z330
+                          mjollnir            Mjollnir (Hefty hash)
+                          myr-gr              Myriad-Groestl
+                          neoscrypt           NeoScrypt (FeatherCoin, Phoenix, UFO...)
+                          xaya                NeoScrypt (XAYA variant)
+                          nist5               NIST5 (TalkCoin)
+                          odo / odocrypt      Odocrypt (DigiByte)
+                          penta               Pentablake (5x Blake-512)
+                          phi / phi1612       PHI1612 (BHCoin)
+                          polytimos           Polytimos
+                          quark               Quark
+                          qubit               Qubit
+                          rinhash             RinHash (Blake3 + Argon2d + SHA3-256)
+                          s3                  S3 (1Coin)
+                          scrypt              Scrypt (Litecoin, Dogecoin, ...)
+                          scrypt-jane         Scrypt-Jane (ChaCha)
+                          sha256csm           SHA256csm (Galleoncoin)
+                          sha256d             SHA256d (Bitcoin)
+                          sha256dv            SHA256d (Veil)
+                          sha256t             SHA256 x3
+                          sha3d               BSHA3 (Yilacoin, Kylacoin)
+                          sha3t               SHA3-256T (Fjarcode, Bitcoin III)
+                          sha512256d          Double SHA-512/256 (Radiant)
+                          sia                 SIA (Blake2B)
+                          sib                 Sibcoin (X11 + Streebog)
+                          skein               Skein-SHA2 (Skeincoin)
+                          skein2              Double Skein (Woodcoin)
+                          skunk               Skein-Cube-Fugue-Streebog
+                          skydoge             SkyDoge
+                          timetravel          Timetravel (Machinecoin, permuted x8)
+                          tribus              Tribus (Denarius)
+                          vanilla             Blake256-8 (VNL)
+                          veltor              Veltor (Thorsriddle + Streebog)
+                          whirlcoin           Old Whirlcoin (Whirlpool)
+                          whirlpool           Whirlpool
+                          whirlpoolx          WhirlpoolX
+                          wildkeccak          Boolberry (Stratum only)
+                          x11                 X11 (DarkCoin)
+                          x11evo              Permuted X11 (Revolver)
+                          x13                 X13 (MaruCoin)
+                          x14                 X14
+                          x15                 X15
+                          x16r                X16R (Ravencoin)
+                          x16rt               X16RT (Veil)
+                          x16rv2              X16Rv2
+                          x16s                X16S (Pigeoncoin)
+                          x17                 X17
+                          x21s                X21S
+                          yescrypt            Globalboost-Y (BSTY) or custom --yescrypt-param
+                          yescryptr8          BitZeny (ZNY)
+                          yescryptr16         Yenten (YTN)
+                          yescryptr16v2       PPTP
+                          yescryptr24         JagariCoinR
+                          yescryptr32         WAVI
+                          zr5 / ziftr         ZR5 (ZiftrCoin)
 
   -d, --devices         gives a comma separated list of CUDA device IDs
                         to operate on. Device IDs start counting from 0!
@@ -294,7 +282,7 @@ Toolkit, use the upstream project instead -- it retains that wider hardware and
 toolkit range: https://github.com/tpruvot/ccminer
 
 >>> RELEASE HISTORY <<<
-  Jul. 12th 2026  ccminer-tpfuemp 1.0.0
+  Jul. 12th 2026  ccminer-tpfuemp 2026.07
                   Require the CUDA 11.8 Toolkit (Visual Studio 2022); drop 10.x/11.0-11.7
                   Build floor is now sm_61 (Pascal): default gencode sm_61/75/86 + compute_86 PTX
                   Drop Maxwell (sm_50/52), Kepler and Fermi, and all arch-specific code below sm_61

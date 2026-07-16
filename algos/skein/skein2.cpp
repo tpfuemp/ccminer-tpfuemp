@@ -14,8 +14,8 @@ static uint32_t *d_hash[MAX_GPUS];
 extern void skein512_cpu_setBlock_80(void *pdata);
 extern void skein512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash, int swap);
 
-extern void quark_skein512_cpu_init(int thr_id, uint32_t threads);
-extern void quark_skein512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
+extern void skein512_cpu_init(int thr_id, uint32_t threads);
+extern void skein512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 
 void skein2hash(void *output, const void *input)
 {
@@ -61,7 +61,7 @@ int scanhash_skein2(int thr_id, struct work* work, uint32_t max_nonce, unsigned 
 
 		cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput);
 
-		quark_skein512_cpu_init(thr_id, throughput);
+		skein512_cpu_init(thr_id, throughput);
 		cuda_check_cpu_init(thr_id, throughput);
 
 		CUDA_SAFE_CALL(cudaDeviceSynchronize());
@@ -81,7 +81,7 @@ int scanhash_skein2(int thr_id, struct work* work, uint32_t max_nonce, unsigned 
 
 		// Hash with CUDA
 		skein512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], 1);
-		quark_skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
+		skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
 

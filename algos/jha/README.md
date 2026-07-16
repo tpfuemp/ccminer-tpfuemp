@@ -29,9 +29,10 @@ chain kernel.
   `--maxrregcount=80`.
 
 Both dispatchers moved from `JHA/` and were de-branded to call the core stages
-by their bare `<prim>512_cpu_*` names (blake/groestl/jh/skein). They still
-include `quark/cuda_quark.h` — it declares those bare launchers plus
-`cuda_check_hash_branch` — but no longer use the `quark_`-prefixed forwarders.
+by their bare `<prim>512_cpu_*` names (blake/groestl/jh/skein). They include
+`algos/common/cuda_x_stages.h` — which declares those bare launchers plus
+`cuda_check_hash_branch` (the old `quark/cuda_quark.h` was folded into the bridge
+header 2026-07-16) — and no longer use any `quark_`-prefixed forwarders.
 Neither algo adopts the fused-chain machinery the fixed x11/x13 chains use: the
 branching structure isn't fusible.
 

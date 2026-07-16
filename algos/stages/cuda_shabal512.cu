@@ -63,6 +63,37 @@ __global__ void shabal512_gpu_hash_64(uint32_t threads, uint32_t startNounce, ui
 	}
 }
 
+/***************************************************/
+// Terminal variant: compute shabal, compare the high 64 bits of the result
+// against the target on-device, and record up to two found nonces (thread
+// indices) via an atomicExch chain into resNonce -- eliding the d_hash store
+// plus the separate cuda_check_hash / cuda_check_hash_suppl passes. Used where
+// shabal is the last stage of a fixed chain (x14). Not truncated (computes the
+// full shabal like the plain kernel), so it stays bit-identical to the CPU
+// reference which re-verifies every hit.
+__global__ void shabal512_gpu_hash_64_final(uint32_t threads, uint64_t *g_hash, uint32_t *resNonce, const uint64_t target)
+{
+	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
+
+	if (thread < threads)
+	{
+		uint32_t *pHash = (uint32_t*)&g_hash[thread << 3];
+		uint32_t Hash[16];
+
+		#pragma unroll 16
+		for (int i = 0; i < 16; i++)
+			Hash[i] = pHash[i];
+
+		shabal512_hash_64(Hash);
+
+		if (*(uint64_t*)&Hash[6] <= target) {
+			uint32_t tmp = atomicExch(&resNonce[0], thread);
+			if (tmp != UINT32_MAX)
+				resNonce[1] = tmp;
+		}
+	}
+}
+
 /* Unit self-test for cuda/shabal512_device.cuh (docs/coding-guideline.md §7
  * layer 1), defined in cuda/xfamily_selftest.cu. */
 extern bool shabal512_device_selftest(int thr_id);
@@ -85,15 +116,12 @@ __host__ void shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t start
 	shabal512_gpu_hash_64<<<grid, block, shared_size>>>(threads, startNounce, (uint64_t*)d_hash, d_nonceVector);
 }
 
-/* Legacy-name forwarders (x14 shabal) for the not-yet-migrated consumers
- * (x17/skydoge/hmq17, x21s, ghostrider, evohash, bastion); each drops out as
- * its family switches to the bare name. */
-__host__ void x14_shabal512_cpu_init(int thr_id, uint32_t threads)
+__host__ void shabal512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t *d_resNonce, const uint64_t target)
 {
-	shabal512_cpu_init(thr_id, threads);
-}
+	const uint32_t threadsperblock = 256;
 
-__host__ void x14_shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
-{
-	shabal512_cpu_hash_64(thr_id, threads, startNounce, d_nonceVector, d_hash, order);
+	dim3 grid((threads + threadsperblock-1)/threadsperblock);
+	dim3 block(threadsperblock);
+
+	shabal512_gpu_hash_64_final<<<grid, block>>>(threads, (uint64_t*)d_hash, d_resNonce, target);
 }

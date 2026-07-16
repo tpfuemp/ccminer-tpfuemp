@@ -48,6 +48,29 @@ extern "C" {
 
 static uint32_t *d_hash[MAX_GPUS];
 
+/* stage ids match the shared fused-kernel switch (cuda_x_fused.cu) */
+enum Algo {
+	BLAKE = 0,
+	BMW,
+	GROESTL,
+	JH,
+	KECCAK,
+	SKEIN,
+	LUFFA,
+	CUBEHASH,
+	SHAVITE,
+	SIMD,
+	ECHO
+};
+
+/* SkyDoge has two consecutive fusible runs (the rest of the chain is broken up
+ * by the non-fusible groestl/simd/echo/shavite/fugue/whirlpool stages):
+ *   steps 2-3  : skein -> bmw
+ *   steps 5-7  : jh -> luffa -> keccak
+ * Both runs are packed into one uploaded order array; each fused launch indexes
+ * its sub-run by (start,len). */
+static const uint8_t skydoge_fused_ids[5] = { SKEIN, BMW, JH, LUFFA, KECCAK };
+
 // sha256 over a 64-byte chained value, writing the 32-byte digest and zeroing
 // the high 32 bytes of the slot in the same kernel (algos/stages/cuda_sha256_2.cu), so
 // the final haval consumes the same (32 bytes digest || 32 bytes zero) buffer
@@ -247,6 +270,11 @@ extern "C" int scanhash_skydoge(int thr_id, struct work* work, uint32_t max_nonc
 
 		cuda_check_cpu_init(thr_id, throughput);
 
+		/* fused-kernel selftest (clobbers the order constant) must run before the
+		 * real upload of SkyDoge's packed fused sequence */
+		x_fused_device_selftest(thr_id);
+		x_fused_setOrder(skydoge_fused_ids, 5);
+
 		init[thr_id] = true;
 	}
 
@@ -264,12 +292,11 @@ extern "C" int scanhash_skydoge(int thr_id, struct work* work, uint32_t max_nonc
 
 		// Hash with CUDA
 		blake512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id]); order++;                        // 1
-		skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);                  // 2
-		bmw512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);                    // 3
+		/* fused run: skein -> bmw (steps 2-3, register-resident) */
+		x_fused_cpu_hash_64(thr_id, throughput, 0, 2, 0, d_hash[thr_id]); order += 2;                        // 2-3
 		groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);                // 4
-		jh512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);                     // 5
-		luffa512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);                  // 6
-		keccak512_cpu_hash_64(thr_id, throughput, NULL, d_hash[thr_id]); order++;                            // 7
+		/* fused run: jh -> luffa -> keccak (steps 5-7, register-resident) */
+		x_fused_cpu_hash_64(thr_id, throughput, 2, 3, 0, d_hash[thr_id]); order += 3;                        // 5-7
 		simd512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);                   // 8
 		if (use_compat_kernels[thr_id])                                                                      // 9
 			echo512_cpu_hash_64_compat(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);

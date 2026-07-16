@@ -11,7 +11,7 @@ extern "C"
 #include "miner.h"
 
 #include "cuda_helper.h"
-#include "algos/stages/cuda_quark.h"
+#include "algos/common/cuda_x_stages.h"
 
 #include <stdio.h>
 
