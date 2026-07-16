@@ -59,9 +59,9 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/heavy/cuda_heavy_keccak512.cu \
 			  algos/heavy/cuda_sha256.cu \
 			  algos/heavy/bastion.cu algos/heavy/cuda_bastion.cu \
-			  fuguecoin.cpp algos/stages/cuda_fugue256.cu sph/fugue.c uint256.h \
-			  groestlcoin.cpp cuda_groestlcoin.cu cuda_groestlcoin.h \
-			  myriadgroestl.cpp cuda_myriadgroestl.cu \
+			  algos/fugue/fuguecoin.cpp algos/stages/cuda_fugue256.cu sph/fugue.c uint256.h \
+			  algos/groestlcoin/groestlcoin.cpp algos/groestlcoin/cuda_groestlcoin.cu algos/groestlcoin/cuda_groestlcoin.h \
+			  algos/myriadgroestl/myriadgroestl.cpp algos/myriadgroestl/cuda_myriadgroestl.cu \
 			  algos/lyra2/Lyra2.c algos/lyra2/Sponge.c \
 			  algos/lyra2/lyra2RE.cu algos/stages/cuda_lyra2.cu \
 			  algos/lyra2/lyra2REv2.cu algos/stages/cuda_lyra2v2.cu \
@@ -73,18 +73,18 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/blake2s/blake2s.cu sph/blake2s.c \
 			  algos/bmw/bmw.cu algos/bmw/bmw512.cu algos/stages/cuda_bmw.cu \
 			  algos/gost/cuda_gosthash.cu algos/gost/gost.cu \
-			  crypto/xmr-rpc.cpp crypto/wildkeccak-cpu.cpp crypto/wildkeccak.cu \
-			  crypto/cryptolight.cu crypto/cryptolight-core.cu crypto/cryptolight-cpu.cpp \
-			  crypto/cryptonight.cu crypto/cryptonight-core.cu crypto/cryptonight-extra.cu \
-			  crypto/cryptonight-cpu.cpp crypto/oaes_lib.cpp crypto/aesb.cpp crypto/cpu/c_keccak.c \
+			  algos/cryptonight/xmr-rpc.cpp algos/cryptonight/wildkeccak-cpu.cpp algos/cryptonight/wildkeccak.cu \
+			  algos/cryptonight/cryptolight.cu algos/cryptonight/cryptolight-core.cu algos/cryptonight/cryptolight-cpu.cpp \
+			  algos/cryptonight/cryptonight.cu algos/cryptonight/cryptonight-core.cu algos/cryptonight/cryptonight-extra.cu \
+			  algos/cryptonight/cryptonight-cpu.cpp algos/cryptonight/oaes_lib.cpp algos/cryptonight/aesb.cpp algos/cryptonight/cpu/c_keccak.c \
 			  algos/jha/jha.cu algos/jha/jackpotcoin.cu algos/stages/cuda_jha_keccak512.cu \
 			  algos/jha/cuda_jha_compactionTest.cu cuda_checkhash.cu \
 			  algos/stages/cuda_jh512.cu algos/stages/cuda_blake512.cu algos/stages/cuda_groestl512.cu algos/stages/cuda_skein512.cu \
 			  algos/stages/cuda_bmw512.cu algos/stages/cuda_keccak512.cu \
 			  algos/quark/animecoin.cu algos/quark/nist5.cu \
 			  algos/quark/quarkcoin.cu algos/stages/cuda_quark_compactionTest.cu \
-			  neoscrypt/neoscrypt.cpp neoscrypt/neoscrypt-cpu.c neoscrypt/cuda_neoscrypt.cu \
-			  algos/pentablake/pentablake.cu skein.cu cuda_skeincoin.cu skein2.cpp algos/zr5/zr5.cu \
+			  algos/neoscrypt/neoscrypt.cpp algos/neoscrypt/neoscrypt-cpu.c algos/neoscrypt/cuda_neoscrypt.cu \
+			  algos/pentablake/pentablake.cu algos/skein/skein.cu algos/skein/cuda_skeincoin.cu algos/skein/skein2.cpp algos/zr5/zr5.cu \
 			  algos/skunk/skunk.cu algos/skunk/cuda_skunk.cu algos/stages/cuda_streebog.cu \
 			  algos/sha256d/sha256d.cu algos/sha256d/cuda_sha256d.cu algos/sha256d/sha256t.cu algos/sha256d/cuda_sha256t.cu \
 			  algos/sha256d/cuda_sha256_selftest.cu cuda/sha256_device.cuh \
@@ -99,7 +99,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  cuda/hamsi512_device.cuh cuda/fugue512_device.cuh cuda/groestl512_device.cuh cuda/echo512_device.cuh cuda/shavite512_device.cuh cuda/whirlpool512_device.cuh cuda/tiger192_device.cuh \
 			  algos/sha3d/sha3d.cu algos/sha3d/cuda_sha3d.cu \
 			  algos/sha3t/sha3t.cu algos/sha3t/cuda_sha3t.cu \
-			  sia/sia.cu sia/sia-rpc.cpp sph/blake2b.c \
+			  algos/sia/sia.cu algos/sia/sia-rpc.cpp sph/blake2b.c \
 			  sph/bmw.c sph/blake.c sph/groestl.c sph/jh.c sph/keccak.c sph/skein.c \
 			  sph/cubehash.c sph/echo.c sph/luffa.c sph/sha2.c sph/shavite.c sph/simd.c \
 			  sph/hamsi.c sph/hamsi_helper.c sph/streebog.c sph/tiger.c \
@@ -186,10 +186,10 @@ algos/blake256/blake256.o: algos/blake256/blake256.cu
 algos/stages/cuda_bmw.o: algos/stages/cuda_bmw.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=76 -o $@ -c $<
 
-crypto/cryptonight-core.o: crypto/cryptonight-core.cu
+algos/cryptonight/cryptonight-core.o: algos/cryptonight/cryptonight-core.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=64 -o $@ -c $<
 
-crypto/cryptonight-extra.o: crypto/cryptonight-extra.cu
+algos/cryptonight/cryptonight-extra.o: algos/cryptonight/cryptonight-extra.cu
 	$(NVCC) $(nvcc_FLAGS) -o $@ -c $<
 
 algos/heavy/cuda_hefty1.o: algos/heavy/cuda_hefty1.cu
@@ -233,6 +233,6 @@ algos/jha/cuda_jha_compactionTest.o: algos/jha/cuda_jha_compactionTest.cu
 algos/scrypt/titan_kernel.o: algos/scrypt/titan_kernel.cu
 	$(NVCC) $(nvcc_FLAGS) -gencode=arch=compute_35,code=\"sm_35,compute_35\" -o $@ -c $<
 
-skein.o: skein.cu
+algos/skein/skein.o: algos/skein/skein.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=64 -o $@ -c $<
 

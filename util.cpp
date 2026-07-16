@@ -37,7 +37,7 @@
 #include "algos.h"
 #include "elist.h"
 
-#include "crypto/xmr-rpc.h"
+#include "algos/cryptonight/xmr-rpc.h"
 
 extern pthread_mutex_t stratum_sock_lock;
 extern pthread_mutex_t stratum_work_lock;

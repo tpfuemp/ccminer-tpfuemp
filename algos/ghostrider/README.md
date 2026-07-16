@@ -22,8 +22,9 @@ is source-transparent:
 - the shared x-family stage library via `#include "algos/common/cuda_x_stages.h"`
   and the `sph/*` headers;
 - the CryptoNight-v1 GPU/CPU paths via `extern "C"` to the `*_gr` functions in
-  `crypto/cryptonight-core.cu`, `crypto/cryptonight-extra.cu` and
-  `crypto/cryptonight-cpu.cpp` (unmoved; linked as before).
+  `algos/cryptonight/cryptonight-core.cu`, `.../cryptonight-extra.cu` and
+  `.../cryptonight-cpu.cpp` (resolved by the linker — a path-independent
+  dependency).
 
 There are no parent-relative (`../`) includes and no external references to the
 old `ghostrider/` path.
@@ -31,8 +32,8 @@ old `ghostrider/` path.
 ## Build
 
 Registered in both `ccminer.vcxproj` and (newly, for completeness)
-`Makefile.am`; the CryptoNight `crypto/*` dependencies were already in both
-build systems.
+`Makefile.am`; the CryptoNight dependencies (now `algos/cryptonight/*`) were
+already in both build systems.
 
 ## Validation
 

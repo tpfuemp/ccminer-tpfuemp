@@ -127,13 +127,13 @@
     <Filter Include="Source Files\sia">
       <UniqueIdentifier>{86a896c0-1688-4854-98e0-285d166069a3}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Source Files\crypto">
+    <Filter Include="Source Files\cryptonight">
       <UniqueIdentifier>{fea0fce3-c0fe-42f7-aa37-0cbba10b008a}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Source Files\crypto\xmr">
+    <Filter Include="Source Files\cryptonight\xmr">
       <UniqueIdentifier>{af52b078-ed91-4c6e-b07a-e9243acc85d2}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Source Files\crypto\bbr">
+    <Filter Include="Source Files\cryptonight\bbr">
       <UniqueIdentifier>{af387eac-e9e6-4e91-a5e8-637b1e7a8d93}</UniqueIdentifier>
     </Filter>
     <Filter Include="Source Files\CUDA\xmr">
@@ -315,22 +315,22 @@
     <ClCompile Include="algos\lyra2\Lyra2Z.c">
       <Filter>Source Files\CUDA\lyra2</Filter>
     </ClCompile>
-    <ClCompile Include="neoscrypt\neoscrypt.cpp">
+    <ClCompile Include="algos\neoscrypt\neoscrypt.cpp">
       <Filter>Source Files\neoscrypt</Filter>
     </ClCompile>
-    <ClCompile Include="neoscrypt\neoscrypt-cpu.c">
+    <ClCompile Include="algos\neoscrypt\neoscrypt-cpu.c">
       <Filter>Source Files\neoscrypt</Filter>
     </ClCompile>
-    <ClCompile Include="skein2.cpp">
+    <ClCompile Include="algos\skein\skein2.cpp">
       <Filter>Source Files\CUDA</Filter>
     </ClCompile>
-    <ClCompile Include="fuguecoin.cpp">
+    <ClCompile Include="algos\fugue\fuguecoin.cpp">
       <Filter>Source Files\CUDA</Filter>
     </ClCompile>
-    <ClCompile Include="groestlcoin.cpp">
+    <ClCompile Include="algos\groestlcoin\groestlcoin.cpp">
       <Filter>Source Files\CUDA</Filter>
     </ClCompile>
-    <ClCompile Include="myriadgroestl.cpp">
+    <ClCompile Include="algos\myriadgroestl\myriadgroestl.cpp">
       <Filter>Source Files\CUDA</Filter>
     </ClCompile>
     <ClCompile Include="algos\heavy\hefty1.c">
@@ -348,32 +348,32 @@
     <ClCompile Include="nvsettings.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="sia\sia-rpc.cpp">
+    <ClCompile Include="algos\sia\sia-rpc.cpp">
       <Filter>Source Files\sia</Filter>
     </ClCompile>
-    <ClCompile Include="crypto\xmr-rpc.cpp">
-      <Filter>Source Files\crypto</Filter>
+    <ClCompile Include="algos\cryptonight\xmr-rpc.cpp">
+      <Filter>Source Files\cryptonight</Filter>
     </ClCompile>
-    <ClCompile Include="crypto\aesb.cpp">
-      <Filter>Source Files\crypto\xmr</Filter>
+    <ClCompile Include="algos\cryptonight\aesb.cpp">
+      <Filter>Source Files\cryptonight\xmr</Filter>
     </ClCompile>
-    <ClCompile Include="crypto\cpu\c_keccak.c">
-      <Filter>Source Files\crypto\xmr</Filter>
+    <ClCompile Include="algos\cryptonight\cpu\c_keccak.c">
+      <Filter>Source Files\cryptonight\xmr</Filter>
     </ClCompile>
-    <ClCompile Include="crypto\oaes_lib.cpp">
-      <Filter>Source Files\crypto\xmr</Filter>
+    <ClCompile Include="algos\cryptonight\oaes_lib.cpp">
+      <Filter>Source Files\cryptonight\xmr</Filter>
     </ClCompile>
-    <ClCompile Include="crypto\cryptolight-cpu.cpp">
-      <Filter>Source Files\crypto\xmr</Filter>
+    <ClCompile Include="algos\cryptonight\cryptolight-cpu.cpp">
+      <Filter>Source Files\cryptonight\xmr</Filter>
     </ClCompile>
-    <ClCompile Include="crypto\cryptonight-cpu.cpp">
-      <Filter>Source Files\crypto\xmr</Filter>
+    <ClCompile Include="algos\cryptonight\cryptonight-cpu.cpp">
+      <Filter>Source Files\cryptonight\xmr</Filter>
     </ClCompile>
-    <ClCompile Include="crypto\mman.c">
-      <Filter>Source Files\crypto\bbr</Filter>
+    <ClCompile Include="algos\cryptonight\mman.c">
+      <Filter>Source Files\cryptonight\bbr</Filter>
     </ClCompile>
-    <ClCompile Include="crypto\wildkeccak-cpu.cpp">
-      <Filter>Source Files\crypto\bbr</Filter>
+    <ClCompile Include="algos\cryptonight\wildkeccak-cpu.cpp">
+      <Filter>Source Files\cryptonight\bbr</Filter>
     </ClCompile>
     <ClCompile Include="algos\equihash\equi.cpp">
       <Filter>Source Files\equihash</Filter>
@@ -456,7 +456,7 @@
     <ClInclude Include="uint256.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="cuda_groestlcoin.h">
+    <ClInclude Include="algos\groestlcoin\cuda_groestlcoin.h">
       <Filter>Header Files\CUDA</Filter>
     </ClInclude>
     <ClInclude Include="algos\stages\cuda_quark.h">
@@ -606,10 +606,10 @@
     <ClInclude Include="algos\scrypt\salsa_kernel.h">
       <Filter>Source Files\CUDA\scrypt</Filter>
     </ClInclude>
-    <ClInclude Include="neoscrypt\neoscrypt.h">
+    <ClInclude Include="algos\neoscrypt\neoscrypt.h">
       <Filter>Source Files\neoscrypt</Filter>
     </ClInclude>
-    <ClInclude Include="neoscrypt\cuda_vectors.h">
+    <ClInclude Include="algos\neoscrypt\cuda_vectors.h">
       <Filter>Source Files\neoscrypt</Filter>
     </ClInclude>
     <ClInclude Include="algos\heavy\hefty1.h">
@@ -630,40 +630,40 @@
     <CudaCompile Include="algos\quark\animecoin.cu">
       <Filter>Source Files\CUDA\quark</Filter>
     </CudaCompile>
-    <ClInclude Include="sia\sia-rpc.h">
+    <ClInclude Include="algos\sia\sia-rpc.h">
       <Filter>Source Files\sia</Filter>
     </ClInclude>
-    <ClInclude Include="crypto\xmr-rpc.h">
-      <Filter>Source Files\crypto</Filter>
+    <ClInclude Include="algos\cryptonight\xmr-rpc.h">
+      <Filter>Source Files\cryptonight</Filter>
     </ClInclude>
-    <ClInclude Include="crypto\mman.h">
-      <Filter>Source Files\crypto\bbr</Filter>
+    <ClInclude Include="algos\cryptonight\mman.h">
+      <Filter>Source Files\cryptonight\bbr</Filter>
     </ClInclude>
-    <ClInclude Include="crypto\wildkeccak.h">
-      <Filter>Source Files\crypto\bbr</Filter>
+    <ClInclude Include="algos\cryptonight\wildkeccak.h">
+      <Filter>Source Files\cryptonight\bbr</Filter>
     </ClInclude>
-    <ClInclude Include="crypto\cn_aes.cuh">
+    <ClInclude Include="algos\cryptonight\cn_aes.cuh">
       <Filter>Source Files\CUDA\xmr</Filter>
     </ClInclude>
-    <ClInclude Include="crypto\cn_blake.cuh">
+    <ClInclude Include="algos\cryptonight\cn_blake.cuh">
       <Filter>Source Files\CUDA\xmr</Filter>
     </ClInclude>
-    <ClInclude Include="crypto\cn_groestl.cuh">
+    <ClInclude Include="algos\cryptonight\cn_groestl.cuh">
       <Filter>Source Files\CUDA\xmr</Filter>
     </ClInclude>
-    <ClInclude Include="crypto\cn_jh.cuh">
+    <ClInclude Include="algos\cryptonight\cn_jh.cuh">
       <Filter>Source Files\CUDA\xmr</Filter>
     </ClInclude>
-    <ClInclude Include="crypto\cn_keccak.cuh">
+    <ClInclude Include="algos\cryptonight\cn_keccak.cuh">
       <Filter>Source Files\CUDA\xmr</Filter>
     </ClInclude>
-    <ClInclude Include="crypto\cn_skein.cuh">
+    <ClInclude Include="algos\cryptonight\cn_skein.cuh">
       <Filter>Source Files\CUDA\xmr</Filter>
     </ClInclude>
-    <ClInclude Include="crypto\cryptolight.h">
+    <ClInclude Include="algos\cryptonight\cryptolight.h">
       <Filter>Source Files\CUDA\xmr</Filter>
     </ClInclude>
-    <ClInclude Include="crypto\cryptonight.h">
+    <ClInclude Include="algos\cryptonight\cryptonight.h">
       <Filter>Source Files\CUDA\xmr</Filter>
     </ClInclude>
     <ClInclude Include="algos\equihash\eqcuda.hpp">
@@ -712,7 +712,7 @@
     <CudaCompile Include="cuda.cpp">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
-    <CudaCompile Include="cuda_groestlcoin.cu">
+    <CudaCompile Include="algos\groestlcoin\cuda_groestlcoin.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\stages\cuda_jha_keccak512.cu">
@@ -724,7 +724,7 @@
     <CudaCompile Include="algos\jha\jackpotcoin.cu">
       <Filter>Source Files\CUDA\JHA</Filter>
     </CudaCompile>
-    <CudaCompile Include="cuda_myriadgroestl.cu">
+    <CudaCompile Include="algos\myriadgroestl\cuda_myriadgroestl.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\jha\cuda_jha_compactionTest.cu">
@@ -976,10 +976,10 @@
     <CudaCompile Include="algos\zr5\zr5.cu">
       <Filter>Source Files\CUDA\zr5</Filter>
     </CudaCompile>
-    <CudaCompile Include="skein.cu">
+    <CudaCompile Include="algos\skein\skein.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
-    <CudaCompile Include="cuda_skeincoin.cu">
+    <CudaCompile Include="algos\skein\cuda_skeincoin.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\scrypt\blake.cu">
@@ -994,7 +994,7 @@
     <CudaCompile Include="algos\scrypt\sha256.cu">
       <Filter>Source Files\CUDA\scrypt</Filter>
     </CudaCompile>
-    <CudaCompile Include="neoscrypt\cuda_neoscrypt.cu">
+    <CudaCompile Include="algos\neoscrypt\cuda_neoscrypt.cu">
       <Filter>Source Files\neoscrypt</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\bmw\bmw.cu">
@@ -1063,25 +1063,25 @@
     <CudaCompile Include="cuda\xfamily_selftest.cu">
       <Filter>Source Files\CUDA\quark</Filter>
     </CudaCompile>
-    <CudaCompile Include="sia\sia.cu">
+    <CudaCompile Include="algos\sia\sia.cu">
       <Filter>Source Files\sia</Filter>
     </CudaCompile>
-    <CudaCompile Include="crypto\cryptolight.cu">
+    <CudaCompile Include="algos\cryptonight\cryptolight.cu">
       <Filter>Source Files\CUDA\xmr</Filter>
     </CudaCompile>
-    <CudaCompile Include="crypto\cryptolight-core.cu">
+    <CudaCompile Include="algos\cryptonight\cryptolight-core.cu">
       <Filter>Source Files\CUDA\xmr</Filter>
     </CudaCompile>
-    <CudaCompile Include="crypto\cryptonight.cu">
+    <CudaCompile Include="algos\cryptonight\cryptonight.cu">
       <Filter>Source Files\CUDA\xmr</Filter>
     </CudaCompile>
-    <CudaCompile Include="crypto\cryptonight-core.cu">
+    <CudaCompile Include="algos\cryptonight\cryptonight-core.cu">
       <Filter>Source Files\CUDA\xmr</Filter>
     </CudaCompile>
-    <CudaCompile Include="crypto\cryptonight-extra.cu">
+    <CudaCompile Include="algos\cryptonight\cryptonight-extra.cu">
       <Filter>Source Files\CUDA\xmr</Filter>
     </CudaCompile>
-    <CudaCompile Include="crypto\wildkeccak.cu">
+    <CudaCompile Include="algos\cryptonight\wildkeccak.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\allium\allium.cu">
@@ -1163,7 +1163,7 @@
     <CudaCompile Include="algos\argon2d\argon2d.cu" />
     <CudaCompile Include="algos\argon2d\argon2d_fill.cu" />
     <CudaCompile Include="algos\argon2d\blake2b_kernels.cu" />
-    <CudaCompile Include="blake2b.cu">
+    <CudaCompile Include="algos\blake2b\blake2b.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\balloon\cuda_balloon.cu">

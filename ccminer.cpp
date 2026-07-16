@@ -42,8 +42,8 @@
 
 #include "miner.h"
 #include "algos.h"
-#include "sia/sia-rpc.h"
-#include "crypto/xmr-rpc.h"
+#include "algos/sia/sia-rpc.h"
+#include "algos/cryptonight/xmr-rpc.h"
 #include "sph/sph_sha3d.h"
 #include "algos/equihash/equihash.h"
 

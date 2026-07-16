@@ -267,14 +267,14 @@
       <TreatWChar_tAsBuiltInType>false</TreatWChar_tAsBuiltInType>
       <Optimization Condition="'$(Configuration)'=='Release'">Full</Optimization>
     </ClCompile>
-    <ClCompile Include="crypto\mman.c" />
-    <ClCompile Include="crypto\wildkeccak-cpu.cpp" />
-    <ClCompile Include="crypto\xmr-rpc.cpp" />
-    <ClCompile Include="crypto\aesb.cpp" />
-    <ClCompile Include="crypto\oaes_lib.cpp" />
-    <ClCompile Include="crypto\cryptolight-cpu.cpp" />
-    <ClCompile Include="crypto\cryptonight-cpu.cpp" />
-    <ClCompile Include="crypto\cpu\c_keccak.c" />
+    <ClCompile Include="algos\cryptonight\mman.c" />
+    <ClCompile Include="algos\cryptonight\wildkeccak-cpu.cpp" />
+    <ClCompile Include="algos\cryptonight\xmr-rpc.cpp" />
+    <ClCompile Include="algos\cryptonight\aesb.cpp" />
+    <ClCompile Include="algos\cryptonight\oaes_lib.cpp" />
+    <ClCompile Include="algos\cryptonight\cryptolight-cpu.cpp" />
+    <ClCompile Include="algos\cryptonight\cryptonight-cpu.cpp" />
+    <ClCompile Include="algos\cryptonight\cpu\c_keccak.c" />
     <ClCompile Include="algos\equihash\blake2\blake2bx.cpp">
       <EnableEnhancedInstructionSet Condition="'$(Platform)'=='Win32'">StreamingSIMDExtensions</EnableEnhancedInstructionSet>
     </ClCompile>
@@ -291,8 +291,8 @@
     <ClCompile Include="bench.cpp" />
     <ClCompile Include="bignum.cpp" />
     <ClInclude Include="bignum.hpp" />
-    <ClCompile Include="fuguecoin.cpp" />
-    <ClCompile Include="groestlcoin.cpp" />
+    <ClCompile Include="algos\fugue\fuguecoin.cpp" />
+    <ClCompile Include="algos\groestlcoin\groestlcoin.cpp" />
     <ClCompile Include="hashlog.cpp" />
     <ClCompile Include="stats.cpp" />
     <ClCompile Include="nvml.cpp" />
@@ -300,7 +300,7 @@
     <ClCompile Include="sysinfos.cpp" />
     <ClCompile Include="crc32.c" />
     <ClCompile Include="algos\heavy\hefty1.c" />
-    <ClCompile Include="myriadgroestl.cpp" />
+    <ClCompile Include="algos\myriadgroestl\myriadgroestl.cpp" />
     <ClCompile Include="algos\lyra2\Lyra2.c" />
     <ClCompile Include="algos\lyra2\Sponge.c" />
     <ClCompile Include="algos\lyra2\Lyra2Z.c" />
@@ -308,10 +308,10 @@
     <ClCompile Include="algos/heavyhash/keccak_tiny.c" />
     <ClInclude Include="algos\equihash\eqcuda.hpp" />
     <ClInclude Include="algos\equihash\cuda_equi_tromp.h" />
-    <ClInclude Include="neoscrypt\neoscrypt.h" />
-    <ClCompile Include="neoscrypt\neoscrypt.cpp" />
-    <ClCompile Include="neoscrypt\neoscrypt-cpu.c" />
-    <ClInclude Include="neoscrypt\cuda_vectors.h" />
+    <ClInclude Include="algos\neoscrypt\neoscrypt.h" />
+    <ClCompile Include="algos\neoscrypt\neoscrypt.cpp" />
+    <ClCompile Include="algos\neoscrypt\neoscrypt-cpu.c" />
+    <ClInclude Include="algos\neoscrypt\cuda_vectors.h" />
     <ClInclude Include="sph\sha256_Y.h" />
     <ClInclude Include="sph\SHA3api_ref.h" />
     <ClInclude Include="sph\yescrypt-platform.h" />
@@ -335,34 +335,34 @@
     <CudaCompile Include="algos\evohash\evohash.cu" />
     <CudaCompile Include="algos\ghostrider\ghostrider.cu" />
     <CudaCompile Include="algos\odocrypt\cuda_odocrypt.cu" />
-    <CudaCompile Include="blake2b.cu" />
+    <CudaCompile Include="algos\blake2b\blake2b.cu" />
     <CudaCompile Include="algos/heavyhash/heavyhash.cu" />
     <CudaCompile Include="algos/heavyhash/cuda_heavyhash.cu" />
-    <CudaCompile Include="crypto\cryptolight.cu" />
-    <CudaCompile Include="crypto\cryptolight-core.cu">
+    <CudaCompile Include="algos\cryptonight\cryptolight.cu" />
+    <CudaCompile Include="algos\cryptonight\cryptolight-core.cu">
       <MaxRegCount>64</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="crypto\cryptonight.cu" />
-    <CudaCompile Include="crypto\cryptonight-core.cu">
+    <CudaCompile Include="algos\cryptonight\cryptonight.cu" />
+    <CudaCompile Include="algos\cryptonight\cryptonight-core.cu">
       <MaxRegCount>64</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="crypto\cryptonight-extra.cu">
+    <CudaCompile Include="algos\cryptonight\cryptonight-extra.cu">
       <MaxRegCount>255</MaxRegCount>
     </CudaCompile>
-    <ClInclude Include="crypto\cn_aes.cuh" />
-    <ClInclude Include="crypto\cn_blake.cuh" />
-    <ClInclude Include="crypto\cn_groestl.cuh" />
-    <ClInclude Include="crypto\cn_jh.cuh" />
-    <ClInclude Include="crypto\cn_keccak.cuh" />
-    <ClInclude Include="crypto\cn_skein.cuh" />
-    <CudaCompile Include="crypto\wildkeccak.cu">
+    <ClInclude Include="algos\cryptonight\cn_aes.cuh" />
+    <ClInclude Include="algos\cryptonight\cn_blake.cuh" />
+    <ClInclude Include="algos\cryptonight\cn_groestl.cuh" />
+    <ClInclude Include="algos\cryptonight\cn_jh.cuh" />
+    <ClInclude Include="algos\cryptonight\cn_keccak.cuh" />
+    <ClInclude Include="algos\cryptonight\cn_skein.cuh" />
+    <CudaCompile Include="algos\cryptonight\wildkeccak.cu">
       <MaxRegCount>128</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="neoscrypt\cuda_neoscrypt.cu">
+    <CudaCompile Include="algos\neoscrypt\cuda_neoscrypt.cu">
       <MaxRegCount>160</MaxRegCount>
     </CudaCompile>
-    <ClCompile Include="sia\sia-rpc.cpp" />
-    <ClCompile Include="skein2.cpp" />
+    <ClCompile Include="algos\sia\sia-rpc.cpp" />
+    <ClCompile Include="algos\skein\skein2.cpp" />
     <ClCompile Include="sph\aes_helper.c" />
     <ClCompile Include="sph\blake.c" />
     <ClCompile Include="sph\blake2b.c" />
@@ -422,12 +422,12 @@
     <ClInclude Include="compat\unistd.h" />
     <ClInclude Include="compat\winansi.h" />
     <ClInclude Include="compat\ccminer-config.h" />
-    <ClInclude Include="crypto\cryptolight.h" />
-    <ClInclude Include="crypto\cryptonight.h" />
-    <ClInclude Include="crypto\mman.h" />
-    <ClInclude Include="crypto\wildkeccak.h" />
-    <ClInclude Include="crypto\xmr-rpc.h" />
-    <ClInclude Include="cuda_groestlcoin.h" />
+    <ClInclude Include="algos\cryptonight\cryptolight.h" />
+    <ClInclude Include="algos\cryptonight\cryptonight.h" />
+    <ClInclude Include="algos\cryptonight\mman.h" />
+    <ClInclude Include="algos\cryptonight\wildkeccak.h" />
+    <ClInclude Include="algos\cryptonight\xmr-rpc.h" />
+    <ClInclude Include="algos\groestlcoin\cuda_groestlcoin.h" />
     <ClInclude Include="cuda_helper.h" />
     <ClInclude Include="cuda_helper_alexis.h" />
     <ClInclude Include="cuda_vector_uint2x4.h" />
@@ -438,7 +438,7 @@
     <ClInclude Include="miner.h" />
     <ClInclude Include="nvml.h" />
     <ClInclude Include="res\resource.h" />
-    <ClInclude Include="sia\sia-rpc.h" />
+    <ClInclude Include="algos\sia\sia-rpc.h" />
     <ClInclude Include="algos\scrypt\salsa_kernel.h" />
     <ClInclude Include="sph\blake2b.h" />
     <ClInclude Include="sph\blake2s.h" />
@@ -482,8 +482,8 @@
     <CudaCompile Include="algos\argon2d\argon2d.cu" />
     <CudaCompile Include="algos\argon2d\argon2d_fill.cu" />
     <CudaCompile Include="algos\argon2d\blake2b_kernels.cu" />
-    <CudaCompile Include="cuda_groestlcoin.cu" />
-    <CudaCompile Include="cuda_myriadgroestl.cu" />
+    <CudaCompile Include="algos\groestlcoin\cuda_groestlcoin.cu" />
+    <CudaCompile Include="algos\myriadgroestl\cuda_myriadgroestl.cu" />
     <CudaCompile Include="algos\scrypt\blake.cu" />
     <CudaCompile Include="algos\scrypt\keccak.cu" />
     <CudaCompile Include="algos\scrypt\sha256.cu" />
@@ -613,11 +613,11 @@
     <CudaCompile Include="algos\stages\cuda_lyra2Z.cu" />
     <ClInclude Include="algos\stages\cuda_lyra2Z_sm5.cuh" />
     <CudaCompile Include="algos\polytimos\polytimos.cu" />
-    <CudaCompile Include="sia\sia.cu" />
-    <CudaCompile Include="skein.cu">
+    <CudaCompile Include="algos\sia\sia.cu" />
+    <CudaCompile Include="algos\skein\skein.cu">
       <MaxRegCount>64</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="cuda_skeincoin.cu">
+    <CudaCompile Include="algos\skein\cuda_skeincoin.cu">
       <MaxRegCount>48</MaxRegCount>
     </CudaCompile>
     <CudaCompile Include="algos\skunk\skunk.cu" />
