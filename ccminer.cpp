@@ -334,6 +334,7 @@ Options:\n\
 			x16rv2		X16R V2\n\
 			x16s		X16S\n\
 			x21s		X21S\n\
+			x25x		X25X (SUQA/SIN)\n\
 			skydoge		SkyDoge\n\
 			hoohash		HoohashV110 (PEPEPOW)\n\
 			ghostrider	GhostRider (Raptoreum)\n\
@@ -2810,6 +2811,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_SOTERG:
 			rc = scanhash_soterg(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_X25X:
+			rc = scanhash_x25x(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_EQUIHASH:
 			rc = scanhash_equihash(thr_id, &work, max_nonce, &hashes_done);

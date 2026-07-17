@@ -79,6 +79,9 @@
     <Filter Include="Source Files\CUDA\x21">
       <UniqueIdentifier>{64ac22a6-f49f-11e8-a49f-e3788c43d09c}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\CUDA\x25x">
+      <UniqueIdentifier>{7c9f1e2a-3b4d-4c6e-8f10-2a5b7d9e0c31}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Source Files\CUDA\pentablake">
       <UniqueIdentifier>{3f2a9c14-7b6d-4e58-9a1c-2d5e8f0a4b73}</UniqueIdentifier>
     </Filter>
@@ -406,6 +409,15 @@
     <ClCompile Include="algos\argon2d\argon2ref\encoding.c" />
     <ClCompile Include="algos\argon2d\argon2ref\opt.c" />
     <ClCompile Include="algos\argon2d\argon2ref\thread.c" />
+    <ClCompile Include="algos\x25x\swifftx.c">
+      <Filter>Source Files\CUDA\x25x</Filter>
+    </ClCompile>
+    <ClCompile Include="sph\sph_panama.c">
+      <Filter>Source Files\sph</Filter>
+    </ClCompile>
+    <ClCompile Include="algos\x25x\lane.c">
+      <Filter>Source Files\CUDA\x25x</Filter>
+    </ClCompile>
     <ClCompile Include="algos\balloon\balloon.cpp">
       <Filter>Source Files\balloon</Filter>
     </ClCompile>
@@ -1116,6 +1128,24 @@
     </CudaCompile>
     <CudaCompile Include="algos\x21\x21s.cu">
       <Filter>Source Files\CUDA\x21</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\x25x\x25x.cu">
+      <Filter>Source Files\CUDA\x25x</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\x25x\cuda_x25x_panama.cu">
+      <Filter>Source Files\CUDA\x25x</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\x25x\cuda_x25x_lane.cu">
+      <Filter>Source Files\CUDA\x25x</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\x25x\cuda_x25x_blake2s.cu">
+      <Filter>Source Files\CUDA\x25x</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\x25x\cuda_x25x_shuffle.cu">
+      <Filter>Source Files\CUDA\x25x</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\x25x\cuda_x25x_swifftx.cu">
+      <Filter>Source Files\CUDA\x25x</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\stages\cuda_sha256_2.cu">
       <Filter>Source Files\CUDA\stages</Filter>

@@ -125,8 +125,11 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/x17/x17.cu algos/x17/skydoge.cu algos/x17/hmq1725.cu algos/soterg/soterg.cu algos/stages/cuda_haval256.cu algos/stages/cuda_sha512.cu \
 			  algos/x11/phi.cu \
 			  algos/x11/c11.cu algos/x11/s3.cu algos/x11/sib.cu algos/x11/veltor.cu algos/x11/0x10.cu \
-			  algos/x21/x21s.cu algos/stages/cuda_sha256_2.cu algos/stages/cuda_tiger192.cu 
-			  
+			  algos/x21/x21s.cu algos/stages/cuda_sha256_2.cu algos/stages/cuda_tiger192.cu \
+			  algos/x25x/x25x.cu algos/x25x/cuda_x25x_panama.cu algos/x25x/cuda_x25x_lane.cu \
+			  algos/x25x/cuda_x25x_blake2s.cu algos/x25x/cuda_x25x_shuffle.cu algos/x25x/cuda_x25x_swifftx.cu \
+			  algos/x25x/swifftx.c sph/sph_panama.c algos/x25x/lane.c
+
 # scrypt
 ccminer_SOURCES += algos/scrypt/scrypt.cpp algos/scrypt/scrypt-jane.cpp \
     algos/scrypt/blake.cu algos/scrypt/keccak.cu algos/scrypt/sha256.cu \

@@ -125,6 +125,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `x16s` | X16S (Pigeoncoin) |
 | `x17` | X17 |
 | `x21s` | X21S |
+| `x25x` | X25X (SUQA/SIN) |
 | `yescrypt` | Yescrypt / Globalboost-Y (BSTY), custom `--yescrypt-param` |
 | `yescryptr8` | BitZeny (ZNY) |
 | `yescryptr16` | Yenten (YTN) |

@@ -164,7 +164,7 @@
 #define PACKAGE_URL "https://github.com/tpfuemp/ccminer-tpfuemp"
 
 /* Define to the version of this package. */
-#define PACKAGE_VERSION "2026.07"
+#define PACKAGE_VERSION "2026.07.1"
 
 /* If using the C implementation of alloca, define if you know the
    direction of stack growth for your system; otherwise it will be

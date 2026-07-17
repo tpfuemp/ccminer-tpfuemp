@@ -1,5 +1,5 @@
 
-ccminer-tpfuemp 2026.07     "CUDA 11.8 modernisation, algos/ refactor, added + optimised algorithms"
+ccminer-tpfuemp 2026.07.1   "algos/ refactor + shared stage libraries; added x25x / soterg / sha512256d"
 ---------------------------------------------------------------
 
 Donation addresses and contributor credits are in CREDITS.txt.
@@ -117,6 +117,7 @@ its command line interface and options.
                           x16s                X16S (Pigeoncoin)
                           x17                 X17
                           x21s                X21S
+                          x25x                X25X (SUQA/SIN)
                           yescrypt            Globalboost-Y (BSTY) or custom --yescrypt-param
                           yescryptr8          BitZeny (ZNY)
                           yescryptr16         Yenten (YTN)
@@ -283,6 +284,18 @@ Toolkit, use the upstream project instead -- it retains that wider hardware and
 toolkit range: https://github.com/tpruvot/ccminer
 
 >>> RELEASE HISTORY <<<
+  Jul. 17th 2026  ccminer-tpfuemp 2026.07.1
+                  New algorithms: x25x (SUQA/SIN), soterg (Soteria / X12R),
+                  sha512256d (Radiant, double SHA-512/256)
+                  algos/ refactor: all algorithm families migrated into the algos/ tree;
+                  shared CUDA device-primitive libraries (x11 / x16 / keccak / SHA-512)
+                  with de-branded bare stage launchers and consolidated headers
+                  Register-resident fused multi-stage kernels for the x16 / x-family chains
+                  Linux (autotools) build refreshed
+                  Optimise: keccak sha3d +20%; x25x shared-memory shuffle + slot-major
+                  accumulator (~3.7x over the first working build)
+                  Fix: BMW-256 (-a bmw) out-of-bounds crash
+
   Jul. 12th 2026  ccminer-tpfuemp 2026.07
                   Require the CUDA 11.8 Toolkit (Visual Studio 2022); drop 10.x/11.0-11.7
                   Build floor is now sm_61 (Pascal): default gencode sm_61/75/86 + compute_86 PTX

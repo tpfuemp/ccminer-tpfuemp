@@ -230,6 +230,9 @@
     <ClCompile Include="algos\argon2d\argon2ref\encoding.c" />
     <ClCompile Include="algos\argon2d\argon2ref\opt.c" />
     <ClCompile Include="algos\argon2d\argon2ref\thread.c" />
+    <ClCompile Include="algos\x25x\swifftx.c" />
+    <ClCompile Include="sph\sph_panama.c" />
+    <ClCompile Include="algos\x25x\lane.c" />
     <ClCompile Include="algos\balloon\balloon.cpp" />
     <ClCompile Include="algos\balloon\balloon_scan.cpp" />
     <ClCompile Include="algos\rinhash\rinhash_scanhash.cpp" />
@@ -690,6 +693,12 @@
       <MaxRegCount>80</MaxRegCount>
     </CudaCompile>
     <CudaCompile Include="algos\x21\x21s.cu" />
+    <CudaCompile Include="algos\x25x\x25x.cu" />
+    <CudaCompile Include="algos\x25x\cuda_x25x_panama.cu" />
+    <CudaCompile Include="algos\x25x\cuda_x25x_lane.cu" />
+    <CudaCompile Include="algos\x25x\cuda_x25x_blake2s.cu" />
+    <CudaCompile Include="algos\x25x\cuda_x25x_shuffle.cu" />
+    <CudaCompile Include="algos\x25x\cuda_x25x_swifftx.cu" />
     <CudaCompile Include="algos\stages\cuda_sha256_2.cu" />
     <CudaCompile Include="algos\stages\cuda_tiger192.cu" />
   </ItemGroup>
