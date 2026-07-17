@@ -284,6 +284,10 @@
     <ClCompile Include="algos\equihash\equi-stratum.cpp" />
     <ClCompile Include="algos\equihash\equi.cpp" />
     <ClCompile Include="algos\equihash\equihash.cpp" />
+    <ClCompile Include="algos\curvehash\curvehash.cpp" />
+    <ClCompile Include="algos\curvehash\secp256k1_unity.c">
+      <AdditionalIncludeDirectories>algos\curvehash\secp256k1;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
     <ClCompile Include="nvapi.cpp" />
     <ClCompile Include="nvsettings.cpp" />
     <ClCompile Include="pools.cpp" />
@@ -328,6 +332,7 @@
     <CudaCompile Include="algos\allium\allium.cu" />
     <CudaCompile Include="algos\balloon\cuda_balloon.cu" />
     <CudaCompile Include="algos\rinhash\rinhash.cu" />
+    <CudaCompile Include="algos\curvehash\curvehash.cu" />
     <CudaCompile Include="algos\hoohash\cuda_hoohashv110.cu">
       <FastMath>false</FastMath>
       <FmadOptimization>false</FmadOptimization>

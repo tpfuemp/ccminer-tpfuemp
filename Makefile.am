@@ -29,6 +29,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/balloon/sha256-ref.c algos/balloon/cuda_balloon.cu \
 			  algos/balloon/balloon.h algos/balloon/sha256.h \
 			  algos/rinhash/rinhash_scanhash.cpp algos/rinhash/rinhash.cu \
+			  algos/curvehash/curvehash.cpp algos/curvehash/curvehash.cu algos/curvehash/secp256k1_unity.c \
 			  algos/hoohash/cuda_hoohashv110.cu algos/hoohash/hoohash.cu \
 			  algos/hoohash/hoohash_device.cuh \
 			  algos/evohash/evohash.cu \
@@ -148,7 +149,7 @@ endif
 
 ccminer_LDFLAGS  = $(PTHREAD_FLAGS) @CUDA_LDFLAGS@
 ccminer_LDADD    = @LIBCURL@ @JANSSON_LIBS@ @PTHREAD_LIBS@ @WS2_LIBS@ @CUDA_LIBS@ @OPENMP_CFLAGS@ @LIBS@ $(nvml_libs)
-ccminer_CPPFLAGS = @LIBCURL_CPPFLAGS@ @OPENMP_CFLAGS@ $(CPPFLAGS) $(PTHREAD_FLAGS) -fno-strict-aliasing $(JANSSON_INCLUDES) $(DEF_INCLUDES) $(nvml_defs)
+ccminer_CPPFLAGS = @LIBCURL_CPPFLAGS@ @OPENMP_CFLAGS@ $(CPPFLAGS) $(PTHREAD_FLAGS) -fno-strict-aliasing $(JANSSON_INCLUDES) $(DEF_INCLUDES) $(nvml_defs) -I$(top_srcdir)/algos/curvehash/secp256k1
 
 if HAVE_OSX
 ccminer_CPPFLAGS += -I/usr/local/llvm/lib/clang/4.0.0/include

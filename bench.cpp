@@ -119,6 +119,7 @@ void algo_free_all(int thr_id)
 	free_hoohash(thr_id);
 	free_ghostrider(thr_id);
 	free_zr5(thr_id);
+	free_curvehash(thr_id);
 	free_timetravel(thr_id);
 	free_tribus(thr_id);
 	free_bitcore(thr_id);

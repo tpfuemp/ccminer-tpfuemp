@@ -2815,6 +2815,9 @@ static void *miner_thread(void *userdata)
 		case ALGO_X25X:
 			rc = scanhash_x25x(thr_id, &work, max_nonce, &hashes_done);
 			break;
+		case ALGO_CURVEHASH:
+			rc = scanhash_curvehash(thr_id, &work, max_nonce, &hashes_done);
+			break;
 		case ALGO_EQUIHASH:
 			rc = scanhash_equihash(thr_id, &work, max_nonce, &hashes_done);
 			break;

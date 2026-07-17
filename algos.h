@@ -104,6 +104,7 @@ enum sha_algos {
 	ALGO_SHA512256D,
 	ALGO_SOTERG,
 	ALGO_X25X,
+	ALGO_CURVEHASH,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -210,6 +211,7 @@ static const char *algo_names[] = {
 	"sha512256d",
 	"soterg",
 	"x25x",
+	"curvehash",
 	"auto", /* reserved for multi algo */
 	""
 };
@@ -279,6 +281,8 @@ static inline int algo_to_int(char* arg)
 			i = ALGO_XAYA;
 		else if (!strcasecmp("odocrypt", arg))
 			i = ALGO_ODO;
+		else if (!strcasecmp("curve", arg))
+			i = ALGO_CURVEHASH;
 		else
 			i = -1;
 	}
