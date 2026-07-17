@@ -7,7 +7,12 @@
 
 srcdir="$(cd "$(dirname "$0")" && pwd)"
 
-extracflags="-march=native -D_REENTRANT -falign-functions=16 -falign-jumps=16 -falign-labels=16"
+# NOTE: use a portable baseline (-mtune=generic, default -march=x86-64 / SSE2),
+# NOT -march=native. Host-side code here is only reference/verification (the GPU
+# does the mining), so there is no perf reason to specialise, and -march=native
+# bakes in the build machine's ISA (AVX/BMI2/SHA-NI on newer CPUs) which makes
+# the distributed binary SIGILL ("Illegal instruction") on older target CPUs.
+extracflags="-mtune=generic -D_REENTRANT -falign-functions=16 -falign-jumps=16 -falign-labels=16"
 
 CUDA_CFLAGS="-O3 -lineno -Xcompiler -Wall  -D_FORCE_INLINES" \
 	"$srcdir/configure" CXXFLAGS="-O3 $extracflags" LDFLAGS="-L/usr/lib/wsl/lib" \
