@@ -895,6 +895,12 @@
     <CudaCompile Include="algos\x15\whirlpool.cu">
       <Filter>Source Files\CUDA\x15</Filter>
     </CudaCompile>
+    <CudaCompile Include="algos\whirlpoolx2\whirlpoolx2.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\whirlpoolx2\cuda_whirlpoolx2.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
     <CudaCompile Include="algos\stages\cuda_haval256.cu">
       <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>

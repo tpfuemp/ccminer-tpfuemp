@@ -120,6 +120,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/x15/x14.cu algos/x15/x15.cu algos/stages/cuda_shabal512.cu algos/stages/cuda_whirlpool512.cu \
 			  algos/stages/cuda_whirlpool512_80.cu \
 			  algos/x15/whirlpool.cu \
+			  algos/whirlpoolx2/whirlpoolx2.cu algos/whirlpoolx2/cuda_whirlpoolx2.cu \
 			  algos/x16/x16r.cu algos/x16/x16rv2.cu algos/x16/x16s.cu algos/stages/cuda_echo512_80.cu algos/stages/cuda_fugue512_80.cu \
 			  algos/stages/cuda_shabal512_80.cu algos/stages/cuda_shavite512_80.cu algos/stages/cuda_simd512_80.cu \
 			  algos/stages/cuda_echo512_64.cu algos/common/cuda_x_fused.cu \

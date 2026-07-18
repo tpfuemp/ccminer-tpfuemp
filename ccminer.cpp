@@ -2442,6 +2442,7 @@ static void *miner_thread(void *userdata)
 			case ALGO_SHA256DV:
 			case ALGO_SHA512256D:
 			//case ALGO_WHIRLPOOLX:
+			case ALGO_WHIRLPOOLX2:
 				minmax = 0x40000000U;
 				break;
 			case ALGO_BLAKE2B:
@@ -2761,6 +2762,9 @@ static void *miner_thread(void *userdata)
 		//case ALGO_WHIRLPOOLX:
 		//	rc = scanhash_whirlx(thr_id, &work, max_nonce, &hashes_done);
 		//	break;
+		case ALGO_WHIRLPOOLX2:
+			rc = scanhash_whirlpoolx2(thr_id, &work, max_nonce, &hashes_done);
+			break;
 		case ALGO_WILDKECCAK:
 			rc = scanhash_wildkeccak(thr_id, &work, max_nonce, &hashes_done);
 			break;

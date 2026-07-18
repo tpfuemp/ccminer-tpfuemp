@@ -677,6 +677,8 @@
     <CudaCompile Include="algos\stages\cuda_whirlpool512_80.cu" />
     <CudaCompile Include="algos\x15\x15.cu" />
     <CudaCompile Include="algos\x15\whirlpool.cu" />
+    <CudaCompile Include="algos\whirlpoolx2\whirlpoolx2.cu" />
+    <CudaCompile Include="algos\whirlpoolx2\cuda_whirlpoolx2.cu" />
     <CudaCompile Include="algos\x16\x16r.cu" />
     <CudaCompile Include="algos\common\cuda_x_fused.cu" />
     <CudaCompile Include="algos\x16\x16rv2.cu" />
