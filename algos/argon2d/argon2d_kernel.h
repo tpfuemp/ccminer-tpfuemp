@@ -31,15 +31,27 @@ enum algo_constants {
 };
 
 enum algo_params {
-    ALGO_LANES = 8,
-    ALGO_MCOST = 1000,
-    ALGO_PASSES = 2,
-    ALGO_OUTLEN = 32,
-    ALGO_VERSION = 0x10,
-    ALGO_TOTAL_BLOCKS = (ALGO_MCOST / (4 * ALGO_LANES)) * 4 * ALGO_LANES,
-    ALGO_LANE_LENGHT = ALGO_TOTAL_BLOCKS / ALGO_LANES,
-    ALGO_SEGMENT_BLOCKS = ALGO_LANE_LENGHT / 4
+    ALGO_OUTLEN = 32
 };
+
+/* Per-coin Argon2d geometry. All supported coins share OUTLEN=32; m_cost /
+ * lanes / t_cost / version vary, so the kernels take the geometry as runtime
+ * arguments (the heavy argon2_fill kernel always did). Note the Argon2
+ * version is hashed into H0 by argon2_initialize; the v1.0-vs-v1.3 overwrite
+ * rule in the fill core only differs on passes after the first, so the fill
+ * kernel is version-correct for any t_cost=1 variant and for v0x10 ones. */
+struct argon2d_variant {
+    uint32_t mcost;          /* m_cost in KiB */
+    uint32_t lanes;          /* degree of parallelism */
+    uint32_t passes;         /* t_cost */
+    uint32_t version;        /* 0x10 or 0x13 (t_cost=1 only) */
+    uint32_t total_blocks;   /* (mcost / (4*lanes)) * 4*lanes */
+    uint32_t segment_blocks; /* total_blocks / (4*lanes) */
+};
+
+#define ARGON2D_VARIANT_INIT(mcost, lanes, passes, version) \
+    { (mcost), (lanes), (passes), (version), \
+      ((mcost) / (4 * (lanes))) * 4 * (lanes), (mcost) / (4 * (lanes)) }
 
 struct partialState {
     uint64_t a, b;
@@ -146,15 +158,19 @@ void g_shuffle(
 }
 
 
-__global__ void argon2_initialize(struct block* memory, uint32_t startNonce);
+__global__ void argon2_initialize(
+        struct block* memory, uint32_t startNonce,
+        uint32_t mcost, uint32_t lanes, uint32_t passes,
+        uint32_t version, uint32_t total_blocks);
 
 __global__ void argon2_fill(
         struct block_g *memory, uint32_t passes, uint32_t lanes,
         uint32_t segment_blocks);
 
 __global__ void argon2_finalize(
-        block* memory, uint32_t target,
-        uint32_t startNounce, uint32_t* resNonces);
+        block* memory, uint32_t startNonce,
+        uint32_t target, uint32_t* resNonces,
+        uint32_t total_blocks);
 
 
 __host__ void set_data(const void* data);

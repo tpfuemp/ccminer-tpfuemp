@@ -469,13 +469,19 @@ __global__ void argon2_fill(
 
     __syncthreads();
 
+    /* Final block = XOR of each lane's last-column block (all held in c[lane][0]).
+     * The block has lanes*32 threads for 256 output words, so stride-loop for
+     * lanes < 8 (e.g. lanes=1 has 32 threads covering 8 words each). */
     thread=threadIdx.x + blockDim.x * threadIdx.y;
     uint32_t* shared_col=(uint32_t*)&c[0][0];
-    uint32_t buf = 0;
 
-    for (uint32_t i=0; i<8; i++){
-        buf ^= shared_col[thread+i*256*6];
+    for (uint32_t j = thread; j < 256; j += blockDim.x * blockDim.y) {
+        uint32_t buf = 0;
+
+        for (uint32_t i=0; i<lanes; i++){
+            buf ^= shared_col[j+i*256*6];
+        }
+
+        ((uint32_t*)memory)[j] = buf;
     }
-
-    ((uint32_t*)memory)[thread] = buf;
 }
