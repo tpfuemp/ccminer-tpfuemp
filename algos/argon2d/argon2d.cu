@@ -140,6 +140,12 @@ static void argon2d_init(int thr_id, const argon2d_variant *v){
 }
 
 
+/* In-pipeline per-kernel split timing, only active with -D (debug). */
+static cudaEvent_t prof_ev[MAX_GPUS][4];
+static bool prof_ready[MAX_GPUS] = {0};
+static float prof_ms[MAX_GPUS][3] = {0};
+static int prof_n[MAX_GPUS] = {0};
+
 __host__ static void argon2d_hash_cuda(int thr_id, uint32_t throughput, uint32_t startNonce, uint32_t target, uint32_t* resNonces, const argon2d_variant *v){
 
     struct block_g *memory_blocks=(struct block_g *)memory[thr_id];
@@ -148,16 +154,43 @@ __host__ static void argon2d_hash_cuda(int thr_id, uint32_t throughput, uint32_t
     const dim3 th_2 = dim3(THREADS_PER_LANE, v->lanes, 1);
     const dim3 th_3 = dim3(4, 16, 1);
 
+    if (opt_debug && !prof_ready[thr_id]) {
+        for (int i = 0; i < 4; i++)
+            cudaEventCreate(&prof_ev[thr_id][i]);
+        prof_ready[thr_id] = true;
+    }
 
     CUDA_SAFE_CALL(cudaMemset(d_resNonces[thr_id], 0xff, NBN*sizeof(uint32_t)));
 
+    if (opt_debug) cudaEventRecord(prof_ev[thr_id][0]);
+
     argon2_initialize<<<throughput/16, th_1>>>((block*) memory[thr_id], startNonce, v->mcost, v->lanes, v->passes, v->version, v->total_blocks);
 
-    argon2_fill<<<blocks, th_2>>>(memory_blocks, v->passes, v->lanes, v->segment_blocks);
+    if (opt_debug) cudaEventRecord(prof_ev[thr_id][1]);
+
+    argon2_fill<<<blocks, th_2, v->lanes * ARGON2_SHARED_BLOCKS_PER_LANE * sizeof(block_g)>>>(memory_blocks, v->passes, v->lanes, v->segment_blocks);
+
+    if (opt_debug) cudaEventRecord(prof_ev[thr_id][2]);
 
     argon2_finalize<<<throughput/16, th_3, 16 * 258 * sizeof(uint32_t)>>>((block*) memory[thr_id], startNonce, target, d_resNonces[thr_id], v->total_blocks);
 
+    if (opt_debug) cudaEventRecord(prof_ev[thr_id][3]);
+
     cudaDeviceSynchronize();
+
+    if (opt_debug) {
+        float ms;
+        for (int i = 0; i < 3; i++) {
+            cudaEventElapsedTime(&ms, prof_ev[thr_id][i], prof_ev[thr_id][i+1]);
+            prof_ms[thr_id][i] += ms;
+        }
+        if (++prof_n[thr_id] % 20 == 0) {
+            float tot = prof_ms[thr_id][0] + prof_ms[thr_id][1] + prof_ms[thr_id][2];
+            gpulog(LOG_DEBUG, thr_id, "splits over %d batches: init %.1f%% fill %.1f%% final %.1f%% (%.2f ms/batch)",
+                   prof_n[thr_id], 100.f*prof_ms[thr_id][0]/tot, 100.f*prof_ms[thr_id][1]/tot,
+                   100.f*prof_ms[thr_id][2]/tot, tot/prof_n[thr_id]);
+        }
+    }
 
     CUDA_SAFE_CALL(cudaMemcpy(resNonces, d_resNonces[thr_id], NBN*sizeof(uint32_t), cudaMemcpyDeviceToHost));
 
@@ -240,8 +273,16 @@ static int scanhash_argon2d( int thr_id, struct work *work, uint32_t max_nonce, 
             }
             else if (vhash[7] > Htarg) {
                 gpu_increment_reject(thr_id);
-                if (!opt_quiet)
+                if (!opt_quiet) {
                     gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
+                    /* full input for offline replay of the mismatch (endiandata
+                     * still holds the candidate nonce at word 19) */
+                    char *hex = bin2hex((uchar*)endiandata, 80);
+                    if (hex) {
+                        applog(LOG_WARNING, "argon2d replay: %s", hex);
+                        free(hex);
+                    }
+                }
             }
 
         }
