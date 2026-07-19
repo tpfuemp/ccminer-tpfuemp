@@ -368,6 +368,8 @@ extern int scanhash_sha3t(int thr_id, struct work* work, uint32_t max_nonce, uns
 extern int scanhash_soterg(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_x25x(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_curvehash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_kawpow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern void free_kawpow(int thr_id);
 extern int scanhash_equihash(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_zr5(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 
@@ -743,6 +745,12 @@ struct stratum_job {
 	unsigned char veil_merkle_be[32];
 	uint32_t      veil_ntime;
 	uint32_t      veil_nonce_hi;
+	// KawPoW (Ravencoin) job (ethproxy notify, see algos/kawpow/)
+	bool          is_kawpow;
+	unsigned char kawpow_header[32];  // ProgPoW header_hash
+	unsigned char kawpow_seed[32];    // epoch seed_hash
+	unsigned char kawpow_target[32];  // 256-bit share target, MSB first
+	uint16_t      kawpow_prefix;      // 2-byte extranonce nonce prefix
 };
 
 struct stratum_ctx {
@@ -818,6 +826,14 @@ struct work {
 	uint32_t      veil_ntime;
 	uint32_t      veil_nonce_hi;
 	uint32_t      veil_nonce_lo;
+
+	// KawPoW (Ravencoin) job fields (ethproxy notify/submit, see algos/kawpow/)
+	bool          is_kawpow;
+	unsigned char kawpow_header[32];  // ProgPoW header_hash (from notify)
+	unsigned char kawpow_target[32];  // 256-bit share target, MSB first
+	unsigned char kawpow_mix[32];     // mix_hash of the found solution (for submit)
+	uint16_t      kawpow_prefix;      // 2-byte extranonce nonce prefix (top 16 bits)
+	uint64_t      kawpow_nonce;       // full 64-bit nonce of the found solution
 
 	/* pok getwork txs */
 	uint32_t tx_count;

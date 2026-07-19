@@ -108,6 +108,7 @@ enum sha_algos {
 	ALGO_SOTERG,
 	ALGO_X25X,
 	ALGO_CURVEHASH,
+	ALGO_KAWPOW,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -218,6 +219,7 @@ static const char *algo_names[] = {
 	"soterg",
 	"x25x",
 	"curvehash",
+	"kawpow",
 	"auto", /* reserved for multi algo */
 	""
 };

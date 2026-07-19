@@ -1190,6 +1190,16 @@ static bool stratum_parse_extranonce(struct stratum_ctx *sctx, json_t *params, i
 				goto out;
 			}
 			goto skip_n2;
+		} else if (opt_algo == ALGO_KAWPOW) {
+			// KawPoW subscribe reply is [null, extranonce1] with no xnonce2 size;
+			// extranonce1 is the 2- (or 3-) byte prefix of the 8-byte nonce.
+			int xn1_size = (int)strlen(xnonce1) / 2;
+			if (xn1_size < 1 || xn1_size > 6) {
+				applog(LOG_ERR, "KawPoW: unsupported extranonce prefix size %d", xn1_size);
+				goto out;
+			}
+			xn2_size = 8 - xn1_size;
+			goto skip_n2;
 		} else {
 			applog(LOG_ERR, "Failed to get extranonce2_size");
 			goto out;
@@ -1510,6 +1520,78 @@ static bool sha256dv_stratum_notify(struct stratum_ctx *sctx, json_t *params)
 	return true;
 }
 
+// KawPoW (Ravencoin) ethproxy mining.notify. The pool supplies a finished
+// ProgPoW header_hash + seed_hash + 256-bit share target; there is no coinbase.
+// Params: [job_id, header_hash(64hex), seed_hash(64hex), target(64hex),
+//          clean(bool), height(int), nbits_hex].
+static bool kawpow_stratum_notify(struct stratum_ctx *sctx, json_t *params)
+{
+	if (!params || !json_is_array(params) || json_array_size(params) < 7) {
+		applog(LOG_ERR, "KawPoW notify: expected >= 7 params");
+		return false;
+	}
+
+	const char *job_id = json_string_value(json_array_get(params, 0));
+	const char *hh     = json_string_value(json_array_get(params, 1));
+	const char *seed   = json_string_value(json_array_get(params, 2));
+	const char *target = json_string_value(json_array_get(params, 3));
+	json_t *j_clean    = json_array_get(params, 4);
+	json_t *j_height   = json_array_get(params, 5);
+	const char *nbits  = json_string_value(json_array_get(params, 6));
+
+	if (!job_id || !hh || !seed || !target ||
+	    strlen(hh) != 64 || strlen(seed) != 64 || strlen(target) != 64) {
+		applog(LOG_ERR, "KawPoW notify: invalid parameters");
+		return false;
+	}
+
+	pthread_mutex_lock(&stratum_work_lock);
+
+	free(sctx->job.job_id);
+	sctx->job.job_id = strdup(job_id);
+
+	hex2bin(sctx->job.kawpow_header, hh,     32);
+	hex2bin(sctx->job.kawpow_seed,   seed,   32);
+	hex2bin(sctx->job.kawpow_target, target, 32);  // 256-bit, MSB first
+
+	if (nbits && strlen(nbits) == 8)
+		hex2bin(sctx->job.nbits, nbits, 4);
+
+	// The 2- (or 3-) byte nonce prefix from subscribe (sctx->xnonce1).
+	uint16_t prefix = 0;
+	if (sctx->xnonce1 && sctx->xnonce1_size >= 2)
+		prefix = ((uint16_t)sctx->xnonce1[0] << 8) | sctx->xnonce1[1];
+	else if (sctx->xnonce1 && sctx->xnonce1_size == 1)
+		prefix = (uint16_t)sctx->xnonce1[0] << 8;
+	sctx->job.kawpow_prefix = prefix;
+
+	sctx->job.is_kawpow = true;
+	sctx->job.clean = j_clean ? json_is_true(j_clean) : true;
+	if (json_is_integer(j_height))
+		sctx->job.height = (uint32_t) json_integer_value(j_height);
+	sctx->job.diff = sctx->next_diff;
+
+	pthread_mutex_unlock(&stratum_work_lock);
+
+	return true;
+}
+
+// KawPoW mining.set_target: pool pushes the 256-bit share target (64 hex, MSB
+// first). Store it so it applies even before/without a fresh notify. Unlike the
+// equihash set_target, this must NOT set sctx->is_equihash.
+static bool kawpow_stratum_set_target(struct stratum_ctx *sctx, json_t *params)
+{
+	const char *tgt = json_string_value(json_array_get(params, 0));
+	if (!tgt || strlen(tgt) != 64) {
+		applog(LOG_ERR, "KawPoW set_target: invalid target");
+		return false;
+	}
+	pthread_mutex_lock(&stratum_work_lock);
+	hex2bin(sctx->job.kawpow_target, tgt, 32);
+	pthread_mutex_unlock(&stratum_work_lock);
+	return true;
+}
+
 static bool stratum_notify(struct stratum_ctx *sctx, json_t *params)
 {
 	const char *job_id, *prevhash, *coinb1, *coinb2, *version, *nbits, *stime;
@@ -1524,6 +1606,12 @@ static bool stratum_notify(struct stratum_ctx *sctx, json_t *params)
 	char algo[64] = { 0 };
 	get_currentalgo(algo, sizeof(algo));
 	bool has_claim = !strcasecmp(algo, "lbry");
+
+	// KawPoW pools push mining.set_target (which otherwise flips is_equihash),
+	// so route KawPoW notify before the is_equihash branch.
+	if (opt_algo == ALGO_KAWPOW) {
+		return kawpow_stratum_notify(sctx, params);
+	}
 
 	if (sctx->is_equihash) {
 		return equi_stratum_notify(sctx, params);
@@ -1938,6 +2026,10 @@ bool stratum_handle_method(struct stratum_ctx *sctx, const char *s)
 		goto out;
 	}
 	if (!strcasecmp(method, "mining.set_target")) {
+		if (opt_algo == ALGO_KAWPOW) {
+			ret = kawpow_stratum_set_target(sctx, params);
+			goto out;
+		}
 		sctx->is_equihash = true;
 		ret = equi_stratum_set_target(sctx, params);
 		goto out;

@@ -1027,6 +1027,32 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 		char *ntimestr, *noncestr, *xnonce2str, *nvotestr;
 		uint16_t nvote = 0;
 
+		// KawPoW: ethproxy mining.submit [worker, job_id, nonce(16hex), header_hash,
+		// mixhash]. nonce is the full 64-bit value (big-endian hex) beginning with
+		// the pool's extranonce prefix; the pool re-derives the hash from header +
+		// nonce + mixhash and checks it against the share target.
+		if (opt_algo == ALGO_KAWPOW) {
+			uint8_t noncebe[8];
+			for (int b = 0; b < 8; b++)
+				noncebe[b] = (uint8_t)(work->kawpow_nonce >> (56 - 8 * b));
+			char *noncestr = bin2hex(noncebe, 8);
+			char *hhstr    = bin2hex(work->kawpow_header, 32);
+			char *mixstr   = bin2hex(work->kawpow_mix, 32);
+			stratum.sharediff = work->sharediff[idnonce];
+			snprintf(s, sizeof(s), "{\"method\": \"mining.submit\", \"params\": ["
+				"\"%s\", \"%s\", \"0x%s\", \"0x%s\", \"0x%s\"], \"id\":%u}",
+				pool->user, work->job_id + 8, noncestr, hhstr, mixstr,
+				stratum.job.shares_count + 10);
+			free(noncestr); free(hhstr); free(mixstr);
+			gettimeofday(&stratum.tv_submit, NULL);
+			if (unlikely(!stratum_send_line(&stratum, s))) {
+				applog(LOG_ERR, "submit_upstream_work stratum_send_line failed");
+				return false;
+			}
+			stratum.job.shares_count++;
+			return true;
+		}
+
 		// Veil SHA256Dv: bespoke mining.submit carrying (nonce_hi, ntime, nonce_lo).
 		if (opt_algo == ALGO_SHA256DV) {
 			uint32_t v_ntime, v_hi, v_lo;
@@ -1694,6 +1720,7 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_EQUIHASH:
 		case ALGO_SIA:
 		case ALGO_SHA256DV:
+		case ALGO_KAWPOW:
 			// getwork over stratum / pool-supplied midstate, no merkle to generate
 			break;
 #ifdef WITH_HEAVY_ALGO
@@ -1823,6 +1850,16 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		work->data[17] = sctx->job.veil_ntime;        // for debug/diff display only
 		work->data[18] = le32dec(sctx->job.nbits);    // for calc_network_diff only
 		work->data[19] = 0;                           // nonce_lo cursor
+	} else if (opt_algo == ALGO_KAWPOW) {
+		// KawPoW: pool supplies the ProgPoW header_hash + 256-bit target; no header
+		// to assemble. Height selects the epoch/period; the nonce prefix is fixed
+		// by extranonce1. scanhash searches the low 48 bits (see algos/kawpow/).
+		work->is_kawpow = sctx->job.is_kawpow;
+		memcpy(work->kawpow_header, sctx->job.kawpow_header, 32);
+		memcpy(work->kawpow_target, sctx->job.kawpow_target, 32);
+		work->kawpow_prefix = sctx->job.kawpow_prefix;
+		work->data[18] = le32dec(sctx->job.nbits);    // for calc_network_diff only
+		work->data[19] = 0;
 	} else {
 		for (i = 0; i < 8; i++)
 			work->data[9 + i] = be32dec((uint32_t *)merkle_root + i);
@@ -1926,6 +1963,16 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 			break;
 		case ALGO_EQUIHASH:
 			equi_work_set_target(work, sctx->job.diff / opt_difficulty);
+			break;
+		case ALGO_KAWPOW:
+			// Pool sends the 256-bit share target directly (MSB-first bytes);
+			// mirror it into work->target (LE words, target[7] = MSW). scanhash
+			// compares against work->kawpow_target. targetdiff is the pool's
+			// share difficulty (set_difficulty), consistent with that target, so
+			// bn_set_target_ratio yields a real share diff for --show-diff.
+			for (i = 0; i < 8; i++)
+				work->target[7 - i] = be32dec(work->kawpow_target + 4 * i);
+			work->targetdiff = sctx->job.diff;
 			break;
 		case ALGO_SHA3D:
 		default:
@@ -2287,6 +2334,8 @@ static void *miner_thread(void *userdata)
 		else if (opt_algo == ALGO_DECRED) nodata_check_oft = 4; // testnet ver is 0
 		else if (opt_algo == ALGO_SHA256D || opt_algo == ALGO_SHA256T || opt_algo == ALGO_SHA256CSM || opt_algo == ALGO_SHA512256D)
 			nodata_check_oft = 17; // ntime; zpool sha256 jobs carry block version 0
+		else if (opt_algo == ALGO_KAWPOW)
+			nodata_check_oft = 18; // nbits; KawPoW jobs carry no header/version word
 		else nodata_check_oft = 0;
 		if (have_stratum && work.data[nodata_check_oft] == 0 && !opt_benchmark) {
 			sleep(1);
@@ -2733,6 +2782,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_SHA256DV:
 			rc = scanhash_sha256dv(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_KAWPOW:
+			rc = scanhash_kawpow(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_SHA3D:
 			rc = scanhash_sha3d(thr_id, &work, max_nonce, &hashes_done);
