@@ -109,11 +109,24 @@ enum sha_algos {
 	ALGO_X25X,
 	ALGO_CURVEHASH,
 	ALGO_KAWPOW,
+	ALGO_MEOWPOW,
+	ALGO_EVRPROGPOW,
+	ALGO_FIROPOW,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
 
 extern volatile enum sha_algos opt_algo;
+
+// ProgPoW-over-ethash family (KawPoW + the MeowPow/EvrProgPow/FiroPoW variants
+// in algos/progpow_multi/). They share the ethproxy/kawpow stratum wire format
+// and the work->kawpow_* job fields, so the stratum/submit/gen_work paths treat
+// them uniformly; only the scanhash dispatch differs per variant.
+static inline int is_progpow_algo(int a)
+{
+	return a == ALGO_KAWPOW || a == ALGO_MEOWPOW || a == ALGO_EVRPROGPOW ||
+	       a == ALGO_FIROPOW;
+}
 
 static const char *algo_names[] = {
 	"anime",
@@ -220,6 +233,9 @@ static const char *algo_names[] = {
 	"x25x",
 	"curvehash",
 	"kawpow",
+	"meowpow",
+	"evrprogpow",
+	"firopow",
 	"auto", /* reserved for multi algo */
 	""
 };

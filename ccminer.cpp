@@ -283,10 +283,13 @@ Options:\n\
 			gostcoin	Double GOST R 34.11\n\
 			groestl		Groestlcoin\n"
 #ifdef WITH_HEAVY_ALGO
-"			heavy       Heavycoin\n"
+"			heavy       Heavycoin\n\
+			mjollnir	Mjollnircoin (Hefty)\n"
 #endif
 "			hmq1725		Doubloons / Espers\n\
+			hsr		Hshare / HSR (X13 SM3)\n\
 			jackpot		JHA v8\n\
+			jha		JHA (Jackpothash)\n\
 			keccak		Deprecated Keccak-256\n\
 			keccakc		Keccak-256 (CreativeCoin)\n\
 			lbry		LBRY Credits (Sha/Ripemd)\n\
@@ -294,6 +297,8 @@ Options:\n\
 			lyra2		CryptoCoin\n\
 			lyra2v2		VertCoin\n\
 			lyra2z		ZeroCoin (3rd impl)\n\
+			lyra2re		Lyra2RE\n\
+			lyra2z330	Lyra2Z330\n\
 			myr-gr		Myriad-Groestl\n\
 			neoscrypt	FeatherCoin, Phoenix, UFO...\n\
 			neoscrypt-xaya	XAYA's version...\n\
@@ -325,6 +330,8 @@ Options:\n\
 			veltor		Thorsriddle streebog\n\
 			whirlcoin	Old Whirlcoin (Whirlpool algo)\n\
 			whirlpool	Whirlpool algo\n\
+			whirlpoolx	WhirlpoolX\n\
+			whirlpoolx2	WhirlpoolX2 (CapStash)\n\
 			x11evo		Permuted x11 (Revolver)\n\
 			x11		X11 (DarkCoin)\n\
 			x13		X13 (MaruCoin)\n\
@@ -340,6 +347,11 @@ Options:\n\
 			skydoge		SkyDoge\n\
 			hoohash		HoohashV110 (PEPEPOW)\n\
 			ghostrider	GhostRider (Raptoreum)\n\
+			curvehash	CurvehashCoin\n\
+			kawpow		KawPoW (Ravencoin)\n\
+			meowpow		MeowPow (Meowcoin)\n\
+			evrprogpow	EvrProgPow (Evrmore)\n\
+			firopow		FiroPoW (Firo, StakeCube)\n\
 			wildkeccak	Boolberry\n\
 			yescrypt     Globlboost-Y (BSTY) or any params\n\
             yescryptr8   BitZeny (ZNY)\n\
@@ -1027,11 +1039,11 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 		char *ntimestr, *noncestr, *xnonce2str, *nvotestr;
 		uint16_t nvote = 0;
 
-		// KawPoW: ethproxy mining.submit [worker, job_id, nonce(16hex), header_hash,
-		// mixhash]. nonce is the full 64-bit value (big-endian hex) beginning with
-		// the pool's extranonce prefix; the pool re-derives the hash from header +
-		// nonce + mixhash and checks it against the share target.
-		if (opt_algo == ALGO_KAWPOW) {
+		// KawPoW-family: ethproxy mining.submit [worker, job_id, nonce(16hex),
+		// header_hash, mixhash]. nonce is the full 64-bit value (big-endian hex)
+		// beginning with the pool's extranonce prefix; the pool re-derives the hash
+		// from header + nonce + mixhash and checks it against the share target.
+		if (is_progpow_algo(opt_algo)) {
 			uint8_t noncebe[8];
 			for (int b = 0; b < 8; b++)
 				noncebe[b] = (uint8_t)(work->kawpow_nonce >> (56 - 8 * b));
@@ -1721,6 +1733,9 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_SIA:
 		case ALGO_SHA256DV:
 		case ALGO_KAWPOW:
+		case ALGO_MEOWPOW:
+		case ALGO_EVRPROGPOW:
+		case ALGO_FIROPOW:
 			// getwork over stratum / pool-supplied midstate, no merkle to generate
 			break;
 #ifdef WITH_HEAVY_ALGO
@@ -1850,10 +1865,11 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		work->data[17] = sctx->job.veil_ntime;        // for debug/diff display only
 		work->data[18] = le32dec(sctx->job.nbits);    // for calc_network_diff only
 		work->data[19] = 0;                           // nonce_lo cursor
-	} else if (opt_algo == ALGO_KAWPOW) {
-		// KawPoW: pool supplies the ProgPoW header_hash + 256-bit target; no header
-		// to assemble. Height selects the epoch/period; the nonce prefix is fixed
-		// by extranonce1. scanhash searches the low 48 bits (see algos/kawpow/).
+	} else if (is_progpow_algo(opt_algo)) {
+		// KawPoW-family: pool supplies the ProgPoW header_hash + 256-bit target; no
+		// header to assemble. Height selects the epoch/period; the nonce prefix is
+		// fixed by extranonce1. scanhash searches the low 48 bits (see algos/kawpow/
+		// and algos/progpow_multi/).
 		work->is_kawpow = sctx->job.is_kawpow;
 		memcpy(work->kawpow_header, sctx->job.kawpow_header, 32);
 		memcpy(work->kawpow_target, sctx->job.kawpow_target, 32);
@@ -1965,6 +1981,9 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 			equi_work_set_target(work, sctx->job.diff / opt_difficulty);
 			break;
 		case ALGO_KAWPOW:
+		case ALGO_MEOWPOW:
+		case ALGO_EVRPROGPOW:
+		case ALGO_FIROPOW:
 			// Pool sends the 256-bit share target directly (MSB-first bytes);
 			// mirror it into work->target (LE words, target[7] = MSW). scanhash
 			// compares against work->kawpow_target. targetdiff is the pool's
@@ -1972,7 +1991,10 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 			// bn_set_target_ratio yields a real share diff for --show-diff.
 			for (i = 0; i < 8; i++)
 				work->target[7 - i] = be32dec(work->kawpow_target + 4 * i);
-			work->targetdiff = sctx->job.diff;
+			// Derive the share difficulty from the 256-bit target itself (these
+			// pools use mining.set_target, not a numeric mining.set_difficulty, so
+			// sctx->job.diff would otherwise be stuck at its default of 1).
+			work->targetdiff = target_to_diff(work->target);
 			break;
 		case ALGO_SHA3D:
 		default:
@@ -2334,8 +2356,8 @@ static void *miner_thread(void *userdata)
 		else if (opt_algo == ALGO_DECRED) nodata_check_oft = 4; // testnet ver is 0
 		else if (opt_algo == ALGO_SHA256D || opt_algo == ALGO_SHA256T || opt_algo == ALGO_SHA256CSM || opt_algo == ALGO_SHA512256D)
 			nodata_check_oft = 17; // ntime; zpool sha256 jobs carry block version 0
-		else if (opt_algo == ALGO_KAWPOW)
-			nodata_check_oft = 18; // nbits; KawPoW jobs carry no header/version word
+		else if (is_progpow_algo(opt_algo))
+			nodata_check_oft = 18; // nbits; ProgPoW jobs carry no header/version word
 		else nodata_check_oft = 0;
 		if (have_stratum && work.data[nodata_check_oft] == 0 && !opt_benchmark) {
 			sleep(1);
@@ -2785,6 +2807,15 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_KAWPOW:
 			rc = scanhash_kawpow(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_MEOWPOW:
+			rc = scanhash_meowpow(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_EVRPROGPOW:
+			rc = scanhash_evrprogpow(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_FIROPOW:
+			rc = scanhash_firopow(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_SHA3D:
 			rc = scanhash_sha3d(thr_id, &work, max_nonce, &hashes_done);

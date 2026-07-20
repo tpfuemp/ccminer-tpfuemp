@@ -877,6 +877,16 @@ double target_to_diff(uint32_t* target)
 		return (double)0x0000ffff00000000/m;
 }
 
+// Difficulty of a 256-bit share target delivered MSB-first, as KawPoW-family
+// pools do via mining.set_target (instead of a numeric mining.set_difficulty).
+double kawpow_target_to_diff(const unsigned char* target_be)
+{
+	uint32_t t[8];
+	for (int i = 0; i < 8; i++)
+		t[7 - i] = be32dec(target_be + 4 * i);
+	return target_to_diff(t);
+}
+
 #ifdef WIN32
 #define socket_blocks() (WSAGetLastError() == WSAEWOULDBLOCK)
 #else
@@ -1190,12 +1200,12 @@ static bool stratum_parse_extranonce(struct stratum_ctx *sctx, json_t *params, i
 				goto out;
 			}
 			goto skip_n2;
-		} else if (opt_algo == ALGO_KAWPOW) {
-			// KawPoW subscribe reply is [null, extranonce1] with no xnonce2 size;
-			// extranonce1 is the 2- (or 3-) byte prefix of the 8-byte nonce.
+		} else if (is_progpow_algo(opt_algo)) {
+			// KawPoW-family subscribe reply is [null, extranonce1] with no xnonce2
+			// size; extranonce1 is the 2- (or 3-) byte prefix of the 8-byte nonce.
 			int xn1_size = (int)strlen(xnonce1) / 2;
 			if (xn1_size < 1 || xn1_size > 6) {
-				applog(LOG_ERR, "KawPoW: unsupported extranonce prefix size %d", xn1_size);
+				applog(LOG_ERR, "ProgPoW: unsupported extranonce prefix size %d", xn1_size);
 				goto out;
 			}
 			xn2_size = 8 - xn1_size;
@@ -1569,7 +1579,9 @@ static bool kawpow_stratum_notify(struct stratum_ctx *sctx, json_t *params)
 	sctx->job.clean = j_clean ? json_is_true(j_clean) : true;
 	if (json_is_integer(j_height))
 		sctx->job.height = (uint32_t) json_integer_value(j_height);
-	sctx->job.diff = sctx->next_diff;
+	// These pools carry the share difficulty in the 256-bit target, not in a
+	// numeric mining.set_difficulty; derive it so displays/stats aren't stuck at 1.
+	sctx->job.diff = kawpow_target_to_diff(sctx->job.kawpow_target);
 
 	pthread_mutex_unlock(&stratum_work_lock);
 
@@ -1588,6 +1600,10 @@ static bool kawpow_stratum_set_target(struct stratum_ctx *sctx, json_t *params)
 	}
 	pthread_mutex_lock(&stratum_work_lock);
 	hex2bin(sctx->job.kawpow_target, tgt, 32);
+	// Reflect the new share target as the job difficulty (these pools don't send
+	// a numeric mining.set_difficulty).
+	sctx->job.diff = kawpow_target_to_diff(sctx->job.kawpow_target);
+	sctx->next_diff = sctx->job.diff;
 	pthread_mutex_unlock(&stratum_work_lock);
 	return true;
 }
@@ -1607,9 +1623,9 @@ static bool stratum_notify(struct stratum_ctx *sctx, json_t *params)
 	get_currentalgo(algo, sizeof(algo));
 	bool has_claim = !strcasecmp(algo, "lbry");
 
-	// KawPoW pools push mining.set_target (which otherwise flips is_equihash),
-	// so route KawPoW notify before the is_equihash branch.
-	if (opt_algo == ALGO_KAWPOW) {
+	// KawPoW-family pools push mining.set_target (which otherwise flips
+	// is_equihash), so route their notify before the is_equihash branch.
+	if (is_progpow_algo(opt_algo)) {
 		return kawpow_stratum_notify(sctx, params);
 	}
 
@@ -2026,7 +2042,7 @@ bool stratum_handle_method(struct stratum_ctx *sctx, const char *s)
 		goto out;
 	}
 	if (!strcasecmp(method, "mining.set_target")) {
-		if (opt_algo == ALGO_KAWPOW) {
+		if (is_progpow_algo(opt_algo)) {
 			ret = kawpow_stratum_set_target(sctx, params);
 			goto out;
 		}

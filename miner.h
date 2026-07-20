@@ -370,6 +370,12 @@ extern int scanhash_x25x(int thr_id, struct work* work, uint32_t max_nonce, unsi
 extern int scanhash_curvehash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_kawpow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern void free_kawpow(int thr_id);
+extern int scanhash_meowpow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern void free_meowpow(int thr_id);
+extern int scanhash_evrprogpow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern void free_evrprogpow(int thr_id);
+extern int scanhash_firopow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern void free_firopow(int thr_id);
 extern int scanhash_equihash(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_zr5(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 

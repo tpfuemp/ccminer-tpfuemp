@@ -36,6 +36,10 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/kawpow/ethash/ethash.cpp algos/kawpow/ethash/progpow.cpp algos/kawpow/ethash/managed.cpp \
 			  algos/kawpow/ethash/primes.c algos/kawpow/ethash/keccak.c \
 			  algos/kawpow/ethash/keccakf1600.c algos/kawpow/ethash/keccakf800.c \
+			  algos/progpow_multi/progpow_pp.cpp algos/progpow_multi/ppmulti_jit.cpp \
+			  algos/progpow_multi/ppmulti_dag.cpp algos/progpow_multi/ppmulti_epoch.cpp \
+			  algos/progpow_multi/ppmulti_core.cpp \
+			  algos/progpow_multi/ppmulti_bridge.cpp \
 			  algos/hoohash/cuda_hoohashv110.cu algos/hoohash/hoohash.cu \
 			  algos/hoohash/hoohash_device.cuh \
 			  algos/evohash/evohash.cu \

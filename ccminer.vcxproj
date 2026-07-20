@@ -301,6 +301,12 @@
     </ClCompile>
     <ClCompile Include="algos\kawpow\ethash\keccakf1600.c" />
     <ClCompile Include="algos\kawpow\ethash\keccakf800.c" />
+    <ClCompile Include="algos\progpow_multi\progpow_pp.cpp" />
+    <ClCompile Include="algos\progpow_multi\ppmulti_jit.cpp" />
+    <ClCompile Include="algos\progpow_multi\ppmulti_dag.cpp" />
+    <ClCompile Include="algos\progpow_multi\ppmulti_epoch.cpp" />
+    <ClCompile Include="algos\progpow_multi\ppmulti_core.cpp" />
+    <ClCompile Include="algos\progpow_multi\ppmulti_bridge.cpp" />
     <ClCompile Include="nvapi.cpp" />
     <ClCompile Include="nvsettings.cpp" />
     <ClCompile Include="pools.cpp" />
