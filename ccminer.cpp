@@ -184,6 +184,14 @@ pthread_mutex_t stratum_sock_lock;
 pthread_mutex_t stratum_work_lock;
 
 char *opt_cert;
+char *opt_verthash_data = NULL;  // --verthash-data <path> to verthash.dat
+bool opt_gen_verthash_data = false;  // --generate-verthash-dat: (re)create it, then exit
+// verthash.dat generator / loader (algos/verthash/verthash-data.cpp)
+extern "C" {
+	int verthash_generate_data_file(const char *path);
+	int verthash_data_load(const char *path, uint8_t **out_buf, size_t *out_size);
+	int verthash_data_verify(const uint8_t *buf, size_t size);
+}
 char *opt_proxy;
 long opt_proxy_type;
 struct thr_info *thr_info = NULL;
@@ -374,6 +382,8 @@ Options:\n\
   -u, --user=USERNAME   username for mining server\n\
   -p, --pass=PASSWORD   password for mining server\n\
       --cert=FILE       certificate for mining server using SSL\n\
+      --verthash-data=FILE  path to verthash.dat (verthash; default ./verthash.dat)\n\
+      --generate-verthash-dat  (re)create the verthash.dat at --verthash-data, then exit\n\
   -x, --proxy=[PROTOCOL://]HOST[:PORT]  connect through a proxy\n\
   -t, --threads=N       number of miner threads (default: number of nVidia GPUs)\n\
   -r, --retries=N       number of times to retry if a network call fails\n\
@@ -523,6 +533,8 @@ struct option options[] = {
 	{ "shares-limit", 1, NULL, 1009 },
 	{ "time-limit", 1, NULL, 1008 },
 	{ "threads", 1, NULL, 't' },
+	{ "verthash-data", 1, NULL, 1099 },
+	{ "generate-verthash-dat", 0, NULL, 1210 },
 	{ "vote", 1, NULL, 1022 },
 	{ "trust-pool", 0, NULL, 1023 },
 	{ "timeout", 1, NULL, 'T' },
@@ -1136,6 +1148,14 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 			// odo hashes the nonce little-endian (matching cpuminer / the pool),
 			// so the submit nonce is big-endian (the pool reverses it back to LE);
 			// ntime keeps the standard little-endian encoding.
+			check_dups = true;
+			le32enc(&ntime, work->data[17]);
+			be32enc(&nonce, work->data[19]);
+			break;
+		case ALGO_VERTHASH:
+			// Verthash hashes the raw nonce counter little-endian (cpuminer-opt
+			// edata[19]=n, no swap), so the submit nonce is big-endian -- same as
+			// odo. ntime stays little-endian.
 			check_dups = true;
 			le32enc(&ntime, work->data[17]);
 			be32enc(&nonce, work->data[19]);
@@ -1959,6 +1979,7 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_X16RV2:
 		case ALGO_X16S:
 		case ALGO_X21S:
+		case ALGO_VERTHASH:  // opt_target_factor 256 (cpuminer-opt verthash-gate)
 			work_set_target(work, sctx->job.diff / (256.0 * opt_difficulty));
 			break;
 		case ALGO_RINHASH:
@@ -2917,6 +2938,9 @@ static void *miner_thread(void *userdata)
 		case ALGO_CURVEHASH:
 			rc = scanhash_curvehash(thr_id, &work, max_nonce, &hashes_done);
 			break;
+		case ALGO_VERTHASH:
+			rc = scanhash_verthash(thr_id, &work, max_nonce, &hashes_done);
+			break;
 		case ALGO_EQUIHASH:
 			rc = scanhash_equihash(thr_id, &work, max_nonce, &hashes_done);
 			break;
@@ -3819,6 +3843,13 @@ void parse_arg(int key, char *arg)
 		free(opt_cert);
 		opt_cert = strdup(arg);
 		break;
+	case 1099: /* --verthash-data */
+		free(opt_verthash_data);
+		opt_verthash_data = strdup(arg);
+		break;
+	case 1210: /* --generate-verthash-dat */
+		opt_gen_verthash_data = true;
+		break;
 	case 1002:
 		use_colors = false;
 		break;
@@ -4402,6 +4433,27 @@ int main(int argc, char *argv[])
 			parse_arg('c', defconfig);
 			parse_cmdline(argc, argv);
 		}
+	}
+
+	// One-shot utility: (re)create the Verthash data file, verify it, then exit.
+	// Needs no pool/URL. Takes several minutes and writes ~1.19 GiB to disk.
+	if (opt_gen_verthash_data) {
+		const char *vpath = opt_verthash_data ? opt_verthash_data : "verthash.dat";
+		applog(LOG_NOTICE, "Generating Verthash data file '%s' (this takes several minutes)...", vpath);
+		if (verthash_generate_data_file(vpath) != 0) {
+			applog(LOG_ERR, "Verthash data file generation failed");
+			proper_exit(EXIT_CODE_SW_INIT_ERROR);
+		}
+		uint8_t *vbuf = NULL; size_t vsz = 0;
+		if (verthash_data_load(vpath, &vbuf, &vsz) == 0) {
+			applog(LOG_NOTICE, "Verthash data file created: '%s' (%zu bytes)", vpath, vsz);
+			if (verthash_data_verify(vbuf, vsz))
+				applog(LOG_NOTICE, "Verthash data file verified against the canonical digest");
+			else
+				applog(LOG_WARNING, "Verthash data file digest does NOT match the canonical file");
+			free(vbuf);
+		}
+		proper_exit(EXIT_CODE_OK);
 	}
 
 	if (!strlen(rpc_url)) {

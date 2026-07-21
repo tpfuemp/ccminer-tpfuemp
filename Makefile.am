@@ -30,6 +30,8 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/balloon/balloon.h algos/balloon/sha256.h \
 			  algos/rinhash/rinhash_scanhash.cpp algos/rinhash/rinhash.cu \
 			  algos/curvehash/curvehash.cpp algos/curvehash/curvehash.cu algos/curvehash/secp256k1_unity.c \
+			  algos/verthash/verthash.cu algos/verthash/cuda_verthash.cu \
+			  algos/verthash/verthash-cpu.c algos/verthash/verthash-data.cpp \
 			  algos/kawpow/cuda_kawpow.cu \
 			  algos/kawpow/kawpow.cpp algos/kawpow/kawpow_core.cpp \
 			  algos/kawpow/kawpow_dag.cpp algos/kawpow/kawpow_jit.cpp \

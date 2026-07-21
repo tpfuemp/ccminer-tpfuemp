@@ -112,6 +112,7 @@ enum sha_algos {
 	ALGO_MEOWPOW,
 	ALGO_EVRPROGPOW,
 	ALGO_FIROPOW,
+	ALGO_VERTHASH,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -236,6 +237,7 @@ static const char *algo_names[] = {
 	"meowpow",
 	"evrprogpow",
 	"firopow",
+	"verthash",
 	"auto", /* reserved for multi algo */
 	""
 };

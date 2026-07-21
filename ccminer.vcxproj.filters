@@ -433,6 +433,12 @@
     <ClCompile Include="algos\curvehash\secp256k1_unity.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="algos\verthash\verthash-cpu.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="algos\verthash\verthash-data.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="algos\kawpow\kawpow.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1251,6 +1257,12 @@
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\curvehash\curvehash.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\verthash\verthash.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\verthash\cuda_verthash.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\hoohash\cuda_hoohashv110.cu">

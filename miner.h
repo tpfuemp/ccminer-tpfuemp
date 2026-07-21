@@ -376,6 +376,8 @@ extern int scanhash_evrprogpow(int thr_id, struct work* work, uint32_t max_nonce
 extern void free_evrprogpow(int thr_id);
 extern int scanhash_firopow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern void free_firopow(int thr_id);
+extern int scanhash_verthash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern void free_verthash(int thr_id);
 extern int scanhash_equihash(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_zr5(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 
@@ -615,6 +617,7 @@ extern bool have_stratum;
 extern bool opt_stratum_stats;
 extern char *opt_user_agent;
 extern char *opt_cert;
+extern char *opt_verthash_data;
 extern char *opt_proxy;
 extern long opt_proxy_type;
 extern bool use_syslog;

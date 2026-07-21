@@ -285,6 +285,8 @@
     <ClCompile Include="algos\equihash\equi.cpp" />
     <ClCompile Include="algos\equihash\equihash.cpp" />
     <ClCompile Include="algos\curvehash\curvehash.cpp" />
+    <ClCompile Include="algos\verthash\verthash-cpu.c" />
+    <ClCompile Include="algos\verthash\verthash-data.cpp" />
     <ClCompile Include="algos\curvehash\secp256k1_unity.c">
       <AdditionalIncludeDirectories>algos\curvehash\secp256k1;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
     </ClCompile>
@@ -352,6 +354,8 @@
     <CudaCompile Include="algos\balloon\cuda_balloon.cu" />
     <CudaCompile Include="algos\rinhash\rinhash.cu" />
     <CudaCompile Include="algos\curvehash\curvehash.cu" />
+    <CudaCompile Include="algos\verthash\verthash.cu" />
+    <CudaCompile Include="algos\verthash\cuda_verthash.cu" />
     <CudaCompile Include="algos\kawpow\cuda_kawpow.cu" />
     <CudaCompile Include="algos\hoohash\cuda_hoohashv110.cu">
       <FastMath>false</FastMath>
