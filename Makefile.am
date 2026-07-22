@@ -174,9 +174,11 @@ endif
 #ccminer_LDFLAGS += -Lalgos/equihash/lib
 #ccminer_LDADD += -lsodium
 ccminer_LDADD += -lcuda
-# NVRTC: per-period ProgPoW kernel JIT (kawpow_jit / ppmulti_jit). Windows links
-# nvrtc.lib via the vcxproj; on Linux it lives in $CUDA/lib64 (@CUDA_LDFLAGS@).
-ccminer_LDADD += -lnvrtc
+# NVRTC: per-period ProgPoW kernel JIT (kawpow_jit / ppmulti_jit). Linked
+# STATICALLY so the binary self-contains the JIT and runs on driver-only rigs
+# (no libnvrtc.so.11.2 needed at load time); mirror the vcxproj which uses the
+# nvrtc*_static.lib set. Order matters: nvrtc -> builtins -> ptxcompiler.
+ccminer_LDADD += -lnvrtc_static -lnvrtc-builtins_static -lnvptxcompiler_static -ldl
 
 nvcc_ARCH :=
 nvcc_ARCH += -gencode=arch=compute_86,code=\"sm_86,compute_86\"

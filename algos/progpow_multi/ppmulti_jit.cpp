@@ -171,7 +171,11 @@ std::string gen_progpowloop(const pp_params& p, uint64_t period)
 const char* kDevicePrefix = R"CUDA(
 typedef unsigned int       uint32_t;
 typedef unsigned long long uint64_t;
-typedef unsigned long long size_t;
+// NOTE: do NOT typedef size_t here -- NVRTC's builtin header already declares it
+// (as unsigned long). A conflicting typedef is only a warning under dynamically
+// loaded NVRTC but a hard "invalid redeclaration" error under the statically
+// linked NVRTC (which force-includes __nv_nvrtc_builtin_header.h). size_t is not
+// used in the emitted device code anyway.
 
 #define ROTL32(x,n) __funnelshift_l((x), (x), (n))
 #define ROTR32(x,n) __funnelshift_r((x), (x), (n))
