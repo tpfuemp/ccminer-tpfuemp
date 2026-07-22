@@ -27,6 +27,7 @@ static const pp_params PP_MEOWPOW = {
     /*num_regs     */ 16,
     /*cnt_cache    */ 6,
     /*cnt_math     */ 9,
+    /*cnt_dag      */ 64,
     /*seal_mode    */ PP_SEAL_SEEDWORDS,
     /*seed_words   */ { 0x4D, 0x45, 0x4F, 0x57, 0x43, 0x4F, 0x49, 0x4E,   // MEOWCOIN
                         0x4D, 0x45, 0x4F, 0x57, 0x50, 0x4F, 0x57 },       // MEOWPOW
@@ -42,6 +43,7 @@ static const pp_params PP_EVRPROGPOW = {
     /*num_regs     */ 32,
     /*cnt_cache    */ 11,
     /*cnt_math     */ 18,
+    /*cnt_dag      */ 64,
     /*seal_mode    */ PP_SEAL_SEEDWORDS,
     /*seed_words   */ { 0x45, 0x56, 0x52, 0x4D, 0x4F, 0x52, 0x45, 0x2D,   // EVRMORE-
                         0x50, 0x52, 0x4F, 0x47, 0x50, 0x4F, 0x57 },       // PROGPOW
@@ -57,12 +59,32 @@ static const pp_params PP_FIROPOW = {
     /*num_regs     */ 32,
     /*cnt_cache    */ 11,
     /*cnt_math     */ 18,
+    /*cnt_dag      */ 64,
     /*seal_mode    */ PP_SEAL_VANILLA,
     /*seed_words   */ { 0 },
     /*name         */ "firopow",
     /*dagchange    */ 0,
     /*dag_epoch_mul*/ 1,
     /*dag_full_off */ 64,    // Firo: full_dataset_init_size 1.5x (1<<30 + 1<<29)
+};
+
+// Telestai (TLS). Reuses KawPoW's exact keccak seal (RAVENCOINKAWPOW seed words)
+// but halves the ProgPoW main loop (cnt_dag 64 -> 32) and reshapes the per-loop
+// op counts (cnt_cache 11 -> 12, cnt_math 18 -> 5). Standard ethash DAG sizing.
+static const pp_params PP_MERAKI = {
+    /*epoch_length */ 27500,
+    /*period_length*/ 3,
+    /*num_regs     */ 32,
+    /*cnt_cache    */ 12,
+    /*cnt_math     */ 5,
+    /*cnt_dag      */ 32,
+    /*seal_mode    */ PP_SEAL_SEEDWORDS,
+    /*seed_words   */ { 0x72, 0x41, 0x56, 0x45, 0x4E, 0x43, 0x4F, 0x49,   // rAVENCOI  (kawpow's
+                        0x4E, 0x4B, 0x41, 0x57, 0x50, 0x4F, 0x57 },       // NKAWPOW   1st word is 0x72)
+    /*name         */ "meraki",
+    /*dagchange    */ 0,
+    /*dag_epoch_mul*/ 1,
+    /*dag_full_off */ 0,     // Telestai: standard full_dataset_init_size (1<<30)
 };
 
 // ---- Shared per-GPU state (one algo active per process) ---------------------
@@ -196,6 +218,10 @@ extern "C" int scanhash_evrprogpow(int thr_id, struct work* work, uint32_t max_n
 extern "C" int scanhash_firopow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done)
 { return ppmulti_scan(&PP_FIROPOW, thr_id, work, max_nonce, hashes_done); }
 
+extern "C" int scanhash_meraki(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done)
+{ return ppmulti_scan(&PP_MERAKI, thr_id, work, max_nonce, hashes_done); }
+
 extern "C" void free_meowpow(int thr_id)    { ppmulti_free(thr_id); }
 extern "C" void free_evrprogpow(int thr_id) { ppmulti_free(thr_id); }
 extern "C" void free_firopow(int thr_id)    { ppmulti_free(thr_id); }
+extern "C" void free_meraki(int thr_id)     { ppmulti_free(thr_id); }

@@ -376,6 +376,8 @@ extern int scanhash_evrprogpow(int thr_id, struct work* work, uint32_t max_nonce
 extern void free_evrprogpow(int thr_id);
 extern int scanhash_firopow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern void free_firopow(int thr_id);
+extern int scanhash_meraki(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern void free_meraki(int thr_id);
 extern int scanhash_verthash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern void free_verthash(int thr_id);
 extern int scanhash_equihash(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);

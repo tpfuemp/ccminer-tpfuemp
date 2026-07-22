@@ -112,6 +112,7 @@ enum sha_algos {
 	ALGO_MEOWPOW,
 	ALGO_EVRPROGPOW,
 	ALGO_FIROPOW,
+	ALGO_MERAKI,
 	ALGO_VERTHASH,
 	ALGO_AUTO,
 	ALGO_COUNT
@@ -126,7 +127,7 @@ extern volatile enum sha_algos opt_algo;
 static inline int is_progpow_algo(int a)
 {
 	return a == ALGO_KAWPOW || a == ALGO_MEOWPOW || a == ALGO_EVRPROGPOW ||
-	       a == ALGO_FIROPOW;
+	       a == ALGO_FIROPOW || a == ALGO_MERAKI;
 }
 
 static const char *algo_names[] = {
@@ -237,6 +238,7 @@ static const char *algo_names[] = {
 	"meowpow",
 	"evrprogpow",
 	"firopow",
+	"meraki",
 	"verthash",
 	"auto", /* reserved for multi algo */
 	""

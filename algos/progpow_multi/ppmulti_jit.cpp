@@ -374,7 +374,7 @@ std::string gen_device_entry(const pp_params& p)
     s << "        const uint32_t s1 = __shfl_sync(0xFFFFFFFFu, state2[1], h, PROGPOW_LANES);\n";
     s << "        fill_mix(s0, s1, lane_id, mix);\n\n";
     s << "        #pragma unroll 1\n";
-    s << "        for (uint32_t loop = 0; loop < 64; ++loop)\n";
+    s << "        for (uint32_t loop = 0; loop < PROGPOW_CNT_DAG; ++loop)\n";
     s << "            progPowLoop(loop, mix, g_dag, c_dag, hack_false);\n\n";
     s << "        uint32_t digest_lane = FNV_OFFSET_BASIS;\n";
     s << "        #pragma unroll\n";
@@ -417,6 +417,7 @@ std::string ppmulti_progpow_source(const pp_params& p, uint64_t period, uint32_t
     s << "#define PROGPOW_DAG_ELEMENTS " << num_items << "u\n";
     s << "#define PROGPOW_LANES        " << PP_LANES << "\n";
     s << "#define PROGPOW_REGS         " << p.num_regs << "\n";
+    s << "#define PROGPOW_CNT_DAG      " << p.cnt_dag << "\n";
     s << "#define PROGPOW_DAG_LOADS    " << PP_DAG_LOADS << "\n";
     s << "#define PROGPOW_CACHE_WORDS  4096\n";
     s << "#define FNV_OFFSET_BASIS     0x811c9dc5u\n";

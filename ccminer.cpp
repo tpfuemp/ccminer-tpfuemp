@@ -360,6 +360,7 @@ Options:\n\
 			meowpow		MeowPow (Meowcoin)\n\
 			evrprogpow	EvrProgPow (Evrmore)\n\
 			firopow		FiroPoW (Firo, StakeCube)\n\
+			meraki		Meraki (Telestai)\n\
 			wildkeccak	Boolberry\n\
 			yescrypt     Globlboost-Y (BSTY) or any params\n\
             yescryptr8   BitZeny (ZNY)\n\
@@ -1756,6 +1757,7 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_MEOWPOW:
 		case ALGO_EVRPROGPOW:
 		case ALGO_FIROPOW:
+		case ALGO_MERAKI:
 			// getwork over stratum / pool-supplied midstate, no merkle to generate
 			break;
 #ifdef WITH_HEAVY_ALGO
@@ -2005,6 +2007,7 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_MEOWPOW:
 		case ALGO_EVRPROGPOW:
 		case ALGO_FIROPOW:
+		case ALGO_MERAKI:
 			// Pool sends the 256-bit share target directly (MSB-first bytes);
 			// mirror it into work->target (LE words, target[7] = MSW). scanhash
 			// compares against work->kawpow_target. targetdiff is the pool's
@@ -2837,6 +2840,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_FIROPOW:
 			rc = scanhash_firopow(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_MERAKI:
+			rc = scanhash_meraki(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_SHA3D:
 			rc = scanhash_sha3d(thr_id, &work, max_nonce, &hashes_done);

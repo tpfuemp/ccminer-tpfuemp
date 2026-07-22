@@ -26,6 +26,7 @@ typedef struct pp_params
     int      num_regs;        // uint32 registers per lane (16 or 32; <= 32)
     int      cnt_cache;       // random cache accesses per loop
     int      cnt_math;        // random math operations per loop
+    int      cnt_dag;         // DAG accesses == ProgPoW main-loop iterations (standard 64; Meraki 32)
     int      seal_mode;       // PP_SEAL_SEEDWORDS or PP_SEAL_VANILLA
     uint32_t seed_words[15];  // keccak seed words, used only when seal_mode == SEEDWORDS
     const char* name;         // short algo name (for logs)

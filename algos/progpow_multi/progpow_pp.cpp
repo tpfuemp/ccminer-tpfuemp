@@ -231,7 +231,7 @@ hash256 hash_mix(const epoch_context& context, const pp_params& p, int block_num
     new_state[1] = (uint32_t)(number >> 32);
     mix_rng_state state{new_state, static_cast<uint32_t>(p.num_regs)};
 
-    for (uint32_t i = 0; i < 64; ++i)
+    for (uint32_t i = 0; i < static_cast<uint32_t>(p.cnt_dag); ++i)
         round(context, i, mix, state, lookup, p);
 
     // Reduce mix data to a single per-lane result.
