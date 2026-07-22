@@ -361,6 +361,7 @@ Options:\n\
 			evrprogpow	EvrProgPow (Evrmore)\n\
 			firopow		FiroPoW (Firo, StakeCube)\n\
 			meraki		Meraki (Telestai)\n\
+			verthash	Verthash (Vertcoin)\n\
 			wildkeccak	Boolberry\n\
 			yescrypt     Globlboost-Y (BSTY) or any params\n\
             yescryptr8   BitZeny (ZNY)\n\

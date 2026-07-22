@@ -15,6 +15,7 @@
 
 #include <cuda_runtime.h>
 #include <stdint.h>
+#include <unistd.h>   // sleep() on Linux (Windows shim: compat/unistd.h + compat.h)
 
 extern "C" {
 #include "miner.h"

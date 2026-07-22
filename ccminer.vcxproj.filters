@@ -427,7 +427,7 @@
     <ClCompile Include="algos\rinhash\rinhash_scanhash.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="algos\curvehash\curvehash.cpp">
+    <ClCompile Include="algos\curvehash\curvehash_oracle.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="algos\curvehash\secp256k1_unity.c">

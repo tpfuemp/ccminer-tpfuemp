@@ -21,4 +21,9 @@
 #define USE_FIELD_10X26 1
 #define USE_SCALAR_8X32 1
 
+// The config above is self-contained; drop any global HAVE_CONFIG_H (the Linux
+// autotools build defines it project-wide) so the vendored util.h does not try
+// to pull a nonexistent libsecp256k1-config.h. MSVC never defines it.
+#undef HAVE_CONFIG_H
+
 #include "secp256k1/src/secp256k1.c"

@@ -284,7 +284,7 @@
     <ClCompile Include="algos\equihash\equi-stratum.cpp" />
     <ClCompile Include="algos\equihash\equi.cpp" />
     <ClCompile Include="algos\equihash\equihash.cpp" />
-    <ClCompile Include="algos\curvehash\curvehash.cpp" />
+    <ClCompile Include="algos\curvehash\curvehash_oracle.cpp" />
     <ClCompile Include="algos\verthash\verthash-cpu.c" />
     <ClCompile Include="algos\verthash\verthash-data.cpp" />
     <ClCompile Include="algos\curvehash\secp256k1_unity.c">

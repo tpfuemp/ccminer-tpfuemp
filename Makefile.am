@@ -29,7 +29,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/balloon/sha256-ref.c algos/balloon/cuda_balloon.cu \
 			  algos/balloon/balloon.h algos/balloon/sha256.h \
 			  algos/rinhash/rinhash_scanhash.cpp algos/rinhash/rinhash.cu \
-			  algos/curvehash/curvehash.cpp algos/curvehash/curvehash.cu algos/curvehash/secp256k1_unity.c \
+			  algos/curvehash/curvehash_oracle.cpp algos/curvehash/curvehash.cu algos/curvehash/secp256k1_unity.c \
 			  algos/verthash/verthash.cu algos/verthash/cuda_verthash.cu \
 			  algos/verthash/verthash-cpu.c algos/verthash/verthash-data.cpp \
 			  algos/kawpow/cuda_kawpow.cu \
@@ -174,6 +174,9 @@ endif
 #ccminer_LDFLAGS += -Lalgos/equihash/lib
 #ccminer_LDADD += -lsodium
 ccminer_LDADD += -lcuda
+# NVRTC: per-period ProgPoW kernel JIT (kawpow_jit / ppmulti_jit). Windows links
+# nvrtc.lib via the vcxproj; on Linux it lives in $CUDA/lib64 (@CUDA_LDFLAGS@).
+ccminer_LDADD += -lnvrtc
 
 nvcc_ARCH :=
 nvcc_ARCH += -gencode=arch=compute_86,code=\"sm_86,compute_86\"

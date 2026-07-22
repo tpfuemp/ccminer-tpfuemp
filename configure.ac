@@ -1,4 +1,4 @@
-AC_INIT([ccminer-tpfuemp], [2026.07.1], [], [ccminer-tpfuemp], [https://github.com/tpfuemp/ccminer-tpfuemp])
+AC_INIT([ccminer-tpfuemp], [2026.07.2], [], [ccminer-tpfuemp], [https://github.com/tpfuemp/ccminer-tpfuemp])
 
 AC_PREREQ([2.59c])
 AC_CANONICAL_SYSTEM

@@ -38,7 +38,9 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `0x10` | ChainOX |
 | `allium` | Lyra2 + Blake2s (Garlicoin) |
 | `anime` | Animecoin |
-| `argon2d1000` | Zero Dynamics Cash (DYN) |
+| `argon2d500` | Dynamic (DYN) |
+| `argon2d1000` | Zero Dynamics Cash |
+| `argon2d4096` | Argentum / Myriad (XMY) |
 | `argon2d16000` | Alterdot (ADOT) |
 | `balloon` | Balloon hash |
 | `bastion` | Hefty bastion |
@@ -52,11 +54,14 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `c11` (`flax`) | X11 variant |
 | `cryptolight` (`cryptonight-lite`) | AEON CryptoNight (MEM/2) |
 | `cryptonight` | Monero-style CryptoNight |
+| `curvehash` | CurvehashCoin (secp256k1 EC) |
 | `decred` | Decred Blake-256 |
 | `deep` | Deepcoin |
 | `dmd-gr` (`diamond`) | Diamond-Groestl |
 | `equihash` (`equi`, `equihash144`) | Zcash Equihash 200/9 (+ 144/5 Tromp) |
 | `evohash` | EvoAI |
+| `evrprogpow` | EvrProgPow (Evrmore) |
+| `firopow` | FiroPoW (Firo, StakeCube) |
 | `fresh` | Freshcoin (Shavite-80) |
 | `fugue256` | Fuguecoin |
 | `ghostrider` (`gr`) | GhostRider (Raptoreum) |
@@ -69,6 +74,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `hsr` (`hshare`) | HShare / HSR (X13 + SM3) |
 | `jackpot` | JHA v8 |
 | `jha` | JHA |
+| `kawpow` | KawPoW (Ravencoin) |
 | `keccak` | Keccak-256 (deprecated) |
 | `keccakc` | Keccak-256 (CreativeCoin) |
 | `lbry` | LBRY Credits (SHA/RIPEMD) |
@@ -77,6 +83,8 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `lyra2v2` (`lyra2rev2`) | Lyra2REv2 (VertCoin) |
 | `lyra2z` | Lyra2Z (ZeroCoin) |
 | `lyra2z330` | Lyra2Z330 |
+| `meowpow` | MeowPow (Meowcoin) |
+| `meraki` | Meraki (Telestai) |
 | `mjollnir` | Mjollnir (Hefty hash) |
 | `myr-gr` | Myriad-Groestl |
 | `neoscrypt` | NeoScrypt (FeatherCoin, Phoenix, UFO…) |
@@ -110,9 +118,11 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `tribus` | Tribus (Denarius) |
 | `vanilla` | Blake256-8 (VNL) |
 | `veltor` (`thorsriddle`) | Veltor (Thorsriddle + Streebog) |
+| `verthash` | Verthash (Vertcoin) |
 | `whirlcoin` | Old Whirlcoin (Whirlpool) |
 | `whirlpool` (`whirl`) | Whirlpool |
 | `whirlpoolx` | WhirlpoolX |
+| `whirlpoolx2` | WhirlpoolX2 (CapStash) |
 | `wildkeccak` | Boolberry |
 | `x11` | X11 (DarkCoin) |
 | `x11evo` | Permuted X11 (Revolver) |
