@@ -163,7 +163,12 @@ static __device__ __forceinline__ void sha2_round_body(uint32_t* in, uint32_t* r
 }
 
 
-__global__ void __launch_bounds__(512,2) sha256_gpu_hash_64(int threads, uint32_t *g_hash)
+// launch_bounds min-blocks was (512,2): the donor `,2` hint provisioned ptxas
+// for only 2 resident blocks = 67% occupancy on Ampere even though this kernel
+// is 40 reg / 0 smem (3 blocks of 512, or 6 of 256, all fit = 100%). (256,4)
+// at tpb=256 reaches full occupancy; event-timed +~9-10% on RTX 3060 vs the
+// shipped 512-thread config.
+__global__ void __launch_bounds__(256,4) sha256_gpu_hash_64(int threads, uint32_t *g_hash)
 {
 	int thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads) {
@@ -191,8 +196,14 @@ __global__ void __launch_bounds__(512,2) sha256_gpu_hash_64(int threads, uint32_
 
 __host__
 void sha256_cpu_hash_64(int thr_id, int threads, uint32_t *d_hash) {
-	const int threadsperblock = 512;
-	dim3 grid(threads/threadsperblock);
+	// tpb 512->256: the kernel's (256,4) bound reaches 100% occupancy vs the old
+	// 512/(512,2) = 67% (see kernel comment; +~9-10% event-timed).
+	const int threadsperblock = 256;
+	// Ceiling division: a truncating `threads/threadsperblock` drops the final
+	// partial block (up to 255 tail nonces silently never hashed on a ragged
+	// final scan batch) — the kernel's `if (thread < threads)` guard exists
+	// precisely to make the round-up safe.
+	dim3 grid((threads + threadsperblock - 1) / threadsperblock);
 	dim3 block(threadsperblock);
 	sha256_gpu_hash_64<<<grid, block>>>(threads, d_hash);
 }
@@ -201,7 +212,8 @@ void sha256_cpu_hash_64(int thr_id, int threads, uint32_t *d_hash) {
 // Variant that also zeros the high 32 bytes (words 8..15) of each 64-byte slot,
 // so a following 64-byte hash consumes (32 bytes digest || 32 bytes zero).
 // Used by SkyDoge for its sha256 -> haval256 finalize (saves a separate launch).
-__global__ void __launch_bounds__(512,2) sha256_gpu_hash_64z(int threads, uint32_t *g_hash)
+// (256,4): same launch-shape retune as sha256_gpu_hash_64 (see its comment).
+__global__ void __launch_bounds__(256,4) sha256_gpu_hash_64z(int threads, uint32_t *g_hash)
 {
 	int thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads) {
@@ -230,8 +242,10 @@ __global__ void __launch_bounds__(512,2) sha256_gpu_hash_64z(int threads, uint32
 
 __host__
 void sha256_cpu_hash_64z(int thr_id, int threads, uint32_t *d_hash) {
-	const int threadsperblock = 512;
-	dim3 grid(threads/threadsperblock);
+	const int threadsperblock = 256; // (256,4) 100%-occ retune (see _64).
+	// Ceiling division (see sha256_cpu_hash_64) — truncating grid drops tail
+	// nonces; the `if (thread < threads)` guard makes the round-up safe.
+	dim3 grid((threads + threadsperblock - 1) / threadsperblock);
 	dim3 block(threadsperblock);
 	sha256_gpu_hash_64z<<<grid, block>>>(threads, d_hash);
 }

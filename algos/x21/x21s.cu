@@ -43,6 +43,7 @@ static uint32_t *d_hash[MAX_GPUS];
 static uint64_t* d_matrix[MAX_GPUS];
 
 extern void streebog_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash);
+extern bool streebog_device_selftest(int thr_id);
 
 extern void lyra2v2_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix);
 extern void lyra2v2_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint64_t *g_hash, int order);
@@ -328,6 +329,7 @@ extern "C" int scanhash_x21s(int thr_id, struct work* work, uint32_t max_nonce, 
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput), 0);
 
 		cuda_check_cpu_init(thr_id, throughput);
+		streebog_device_selftest(thr_id);
 
 		init[thr_id] = true;
 	}

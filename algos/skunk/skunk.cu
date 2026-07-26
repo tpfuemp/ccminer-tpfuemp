@@ -21,6 +21,7 @@ extern void skunk_cuda_hash_80(int thr_id, uint32_t threads, uint32_t startNounc
 // shared streebog terminal (algos/stages/cuda_streebog.cu)
 extern void streebog_set_target(uint32_t* ptarget);
 extern void streebog_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t* d_resNonce);
+extern bool streebog_device_selftest(int thr_id);
 
 #include <stdio.h>
 #include <memory.h>
@@ -92,6 +93,7 @@ extern "C" int scanhash_skunk(int thr_id, struct work* work, uint32_t max_nonce,
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput), 0);
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_resNonce[thr_id], NBN * sizeof(uint32_t)), -1);
 
+		streebog_device_selftest(thr_id);
 		init[thr_id] = true;
 	}
 

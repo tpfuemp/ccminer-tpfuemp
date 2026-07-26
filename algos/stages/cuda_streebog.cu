@@ -18,10 +18,16 @@
  * @author   Alexis Provos - 2016
  */
 
+#include <string.h>
+
 #include <miner.h>
 #include <cuda_helper.h>
 #include <cuda_vectors.h>
 #include <cuda_vector_uint2x4.h>
+
+extern "C" {
+#include "sph/sph_streebog.h"
+}
 
 #include "streebog_arrays.cuh"
 
@@ -220,7 +226,10 @@ void streebog_gpu_hash_64(uint64_t *g_hash){
 	uint2 buf[8], t[8], temp[8], K0[8], hash[8];
 
 	__shared__ uint2 shared[7][256];
-	shared[0][threadIdx.x] = __ldg(&T02[threadIdx.x]);
+	// shared[0] (T02) is never read here: GOST_FS/GOST_FS_LDG reach the T0 slot
+	// via __ldg and only gather shared[1..6]; T72 stays in __ldg too. Staging
+	// row 0 was a dead cooperative load (only the _final kernel's tail reads it).
+	//shared[0][threadIdx.x] = __ldg(&T02[threadIdx.x]);
 	shared[1][threadIdx.x] = __ldg(&T12[threadIdx.x]);
 	shared[2][threadIdx.x] = __ldg(&T22[threadIdx.x]);
 	shared[3][threadIdx.x] = __ldg(&T32[threadIdx.x]);
@@ -472,4 +481,110 @@ void streebog_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, 
 	dim3 block(TPB);
 
 	streebog_gpu_hash_64_final <<< grid, block >>> ((uint64_t*)d_hash, d_resNonce);
+}
+
+/* ------------------------------------------------------------------ self-test
+ * Init-time KAT for the streebog stage (docs/coding-guideline.md §7): drives the
+ * real production launcher (streebog_cpu_hash_64) over a full 256-thread block —
+ * the kernel has no if(thread<threads) tail guard, so the buffer must cover the
+ * whole block — and compares GPU output against the vendored sph_gost512 CPU
+ * reference, itself anchored to the GOST R 34.11-2012 / RFC 6986 H_512(M1)
+ * vector. A flipped-input-bit negative test proves the harness isn't vacuous.
+ * The scanhash CPU-verify path remains the per-share safety net.
+ */
+#define STREEBOG_ST_ALLOC 256   /* full block (no tail guard in the kernel) */
+#define STREEBOG_ST_VEC   4     /* leading vectors actually verified */
+
+/* GOST R 34.11-2012 / RFC 6986 §10.1.1 message M1 (63 bytes, in message order):
+ * the ASCII digit run the standard hashes to its published H_512(M1). */
+static const uint8_t streebog_m1[63] = {
+	0x32,0x31,0x30,0x39,0x38,0x37,0x36,0x35,0x34,0x33,0x32,0x31,0x30,0x39,0x38,0x37,
+	0x36,0x35,0x34,0x33,0x32,0x31,0x30,0x39,0x38,0x37,0x36,0x35,0x34,0x33,0x32,0x31,
+	0x30,0x39,0x38,0x37,0x36,0x35,0x34,0x33,0x32,0x31,0x30,0x39,0x38,0x37,0x36,0x35,
+	0x34,0x33,0x32,0x31,0x30,0x39,0x38,0x37,0x36,0x35,0x34,0x33,0x32,0x31,0x30
+};
+
+/* sph_gost512(M1) — verified byte-for-byte against RFC 6986 §10.1.1 H_512(M1). */
+static const uint8_t kat_streebog512_m1[64] = {
+	0x48,0x6f,0x64,0xc1,0x91,0x78,0x79,0x41,0x7f,0xef,0x08,0x2b,0x33,0x81,0xa4,0xe2,
+	0x11,0xc3,0x24,0xf0,0x74,0x65,0x4c,0x38,0x82,0x3a,0x7b,0x76,0xf8,0x30,0xad,0x00,
+	0xfa,0x1f,0xba,0xe4,0x2b,0x12,0x85,0xc0,0x35,0x2f,0x22,0x75,0x24,0xbc,0x9a,0xb1,
+	0x62,0x54,0x28,0x8d,0xd6,0x86,0x3d,0xcc,0xd5,0xb9,0xf5,0x4a,0x1a,0xd0,0x54,0x1b
+};
+/* sph_gost512 of the 64-byte pattern 00 01 .. 3F — anchored drift check
+ * (computed once from the RFC-anchored sph reference). */
+static const uint8_t kat_streebog512_pat64[64] = {
+	0xfb,0x41,0x80,0x21,0x9f,0x50,0x7b,0x8f,0x4b,0xf5,0x5e,0xbf,0x96,0x4e,0x3c,0xfd,
+	0x80,0x62,0xaa,0x87,0x23,0xc1,0xb8,0x78,0x3c,0x54,0x69,0xb6,0x1e,0xe9,0xd4,0xe6,
+	0xc5,0xc2,0xfb,0x9d,0x78,0x4c,0x66,0xf3,0xaa,0xaa,0x07,0xb1,0x26,0x6b,0x70,0x74,
+	0x8e,0x6d,0x90,0x77,0x56,0x28,0x1c,0x7d,0x28,0x39,0x1b,0x83,0x7b,0x7c,0xe0,0xb9
+};
+
+static bool streebog_selftest_run(uint8_t (*io)[64] /* [STREEBOG_ST_ALLOC] */)
+{
+	uint32_t *d_hash = NULL;
+	if (cudaMalloc(&d_hash, (size_t) STREEBOG_ST_ALLOC * 64) != cudaSuccess)
+		return false;
+	bool ok = (cudaMemcpy(d_hash, io, (size_t) STREEBOG_ST_ALLOC * 64, cudaMemcpyHostToDevice) == cudaSuccess);
+	streebog_cpu_hash_64(0, STREEBOG_ST_ALLOC, d_hash);
+	ok = ok && (cudaDeviceSynchronize() == cudaSuccess);
+	ok = ok && (cudaMemcpy(io, d_hash, (size_t) STREEBOG_ST_ALLOC * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
+	cudaFree(d_hash);
+	return ok;
+}
+
+__host__
+bool streebog_device_selftest(int thr_id)
+{
+	static bool tested = false, passed = false;
+	if (tested) return passed;
+	tested = true;
+
+	sph_gost512_context ctx;
+	uint8_t dig[64];
+
+	// --- anchor the sph reference against the RFC 6986 M1 spec vector ---
+	sph_gost512_init(&ctx);
+	sph_gost512(&ctx, streebog_m1, sizeof(streebog_m1));
+	sph_gost512_close(&ctx, dig);
+	const bool sph_ok = (memcmp(dig, kat_streebog512_m1, 64) == 0);
+
+	// --- test vectors: fixed pattern + LCG-filled (256 to fill the block) ---
+	uint8_t (*io)[64] = (uint8_t(*)[64]) malloc((size_t) STREEBOG_ST_ALLOC * 64);
+	if (!io) return false;
+	uint8_t ref[STREEBOG_ST_VEC][64];
+	uint32_t seed = 0x47535431; /* 'GST1' */
+	for (int i = 0; i < 64; i++) io[0][i] = (uint8_t) i;
+	for (int v = 1; v < STREEBOG_ST_ALLOC; v++)
+		for (int i = 0; i < 64; i++) {
+			seed = seed * 1664525u + 1013904223u;
+			io[v][i] = (uint8_t)(seed >> 24);
+		}
+	for (int v = 0; v < STREEBOG_ST_VEC; v++) {
+		sph_gost512_init(&ctx);
+		sph_gost512(&ctx, io[v], 64);
+		sph_gost512_close(&ctx, ref[v]);
+	}
+	const bool kat_ok = (memcmp(ref[0], kat_streebog512_pat64, 64) == 0);
+
+	// --- GPU hash vs the sph digests (first STREEBOG_ST_VEC vectors) ---
+	bool gpu_ok = streebog_selftest_run(io);
+	if (gpu_ok)
+		gpu_ok = (memcmp(io, ref, sizeof(ref)) == 0);
+
+	// --- negative test: one flipped input bit must change the digest ---
+	for (int i = 0; i < 64; i++) io[0][i] = (uint8_t) i;
+	io[0][0] ^= 0x01;
+	bool neg_ok = streebog_selftest_run(io)
+	           && (memcmp(io[0], ref[0], 64) != 0);
+
+	free(io);
+
+	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
+	if (!passed)
+		gpulog(LOG_WARNING, thr_id, "streebog device self-test FAILED (sph %d kat %d gpu %d neg %d)",
+			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
+	else
+		gpulog(LOG_DEBUG, thr_id, "streebog device self-test passed");
+	return passed;
 }

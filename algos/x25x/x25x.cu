@@ -64,6 +64,7 @@ extern void x25x_swifftx_cpu_init(int thr_id);
 
 // Tail-stage launchers not declared in the shared bridge header (as in x21s).
 extern void streebog_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash);
+extern bool streebog_device_selftest(int thr_id);
 extern void lyra2v2_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix);
 extern void lyra2v2_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint64_t *g_hash, int order);
 extern void sha256_cpu_hash_64(int thr_id, int threads, uint32_t *d_hash);
@@ -457,6 +458,7 @@ extern "C" int scanhash_x25x(int thr_id, struct work* work, uint32_t max_nonce, 
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)), -1);
 
 		x25x_selftest(thr_id, d_hash[thr_id], d_acc[thr_id], d_final[thr_id]);
+		streebog_device_selftest(thr_id);
 
 		init[thr_id] = true;
 	}

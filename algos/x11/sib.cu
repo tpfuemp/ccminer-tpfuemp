@@ -35,6 +35,7 @@ extern "C" {
 
 /* consolidated streebog stage (algos/stages/cuda_streebog.cu) */
 extern void streebog_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash);
+extern bool streebog_device_selftest(int thr_id);
 
 #include <stdio.h>
 #include <memory.h>
@@ -184,6 +185,7 @@ extern "C" int scanhash_sib(int thr_id, struct work* work, uint32_t max_nonce, u
 
 		cuda_check_cpu_init(thr_id, throughput);
 
+		streebog_device_selftest(thr_id);
 		/* fused-kernel unit test (clobbers the order constant) must run before
 		 * the real upload of the fixed sib fused sequence */
 		x_fused_device_selftest(thr_id);

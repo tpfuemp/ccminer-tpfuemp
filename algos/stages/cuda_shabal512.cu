@@ -49,8 +49,6 @@
 // GPU Hash Function
 __global__ void shabal512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t *g_hash, uint32_t *g_nonceVector)
 {
-	__syncthreads();
-
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 
 	if (thread < threads)
@@ -105,7 +103,14 @@ __host__ void shabal512_cpu_init(int thr_id, uint32_t threads)
 
 __host__ void shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
-	const uint32_t threadsperblock = 256;
+	// tpb 128, not the sph-era 256: this kernel is ~66 reg / 0 spill and is
+	// latency-bound on the serial shabal permutation chain (SHABAL_APPLY_P), so
+	// resident-warp count matters. At tpb256 only 3 blocks/SM fit (768 thr = 50%
+	// occ, ~24% of the register file wasted to quantization); tpb128 packs 7
+	// blocks (896 thr = 58%) and feeds the extra warps to hide the chain latency
+	// -> +~17% isolated on sm_86. 58/62.5/67% all tie above this, so 128 is the
+	// sweet spot (tpb256 itself carries the penalty, not just the occupancy).
+	const uint32_t threadsperblock = 128;
 
 	// berechne wie viele Thread Blocks wir brauchen
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
@@ -118,7 +123,7 @@ __host__ void shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t start
 
 __host__ void shabal512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t *d_resNonce, const uint64_t target)
 {
-	const uint32_t threadsperblock = 256;
+	const uint32_t threadsperblock = 128; // see shabal512_cpu_hash_64: latency-bound, 128 packs more warps (58% vs 50%)
 
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
 	dim3 block(threadsperblock);

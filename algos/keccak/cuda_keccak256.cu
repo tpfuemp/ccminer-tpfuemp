@@ -18,7 +18,13 @@ extern "C" {
 
 extern bool keccak_device_selftest(int thr_id);
 
-#define TPB52 1024
+/* Ampere retune: the alexis donor __launch_bounds__(1024,1) forces the reg
+ * allocator to <=64 reg/thread, which spills (STACK:8) on sm_86. TPB128/minb5
+ * (= the sha3d/sha3t sibling config) gives an 80-reg spill-free build; the
+ * eliminated local-memory round-trips beat the higher occupancy (~+2.6%
+ * event-timed on RTX 3060). The 64-reg kernel is throughput/spill-bound, not
+ * occupancy-bound, so 42% (spill-free) > 67% (spilling). */
+#define TPB52 128
 #define NPT 2
 #define NBN 2
 
@@ -28,7 +34,7 @@ static uint32_t *h_nonces[MAX_GPUS];
 __constant__ uint2 c_message48[6];
 __constant__ uint2 c_mid[17];
 
-__global__ __launch_bounds__(TPB52, 1)
+__global__ __launch_bounds__(TPB52, 5)
 void keccak256_gpu_hash_80(uint32_t threads, uint32_t startNonce, uint32_t *resNounce, const uint2 highTarget)
 {
 	uint32_t thread = blockDim.x * blockIdx.x + threadIdx.x;

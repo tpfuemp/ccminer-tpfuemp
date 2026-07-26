@@ -2,6 +2,16 @@
 
 #define TPB52 512
 #define TPB50 256
+/* Ampere retune of the hash_64 / _final workhorse: the alexis donor
+ * __launch_bounds__(512,3) budgets 65536/(512*3)=42 reg/thread, so ptxas caps
+ * skein512_hash_64 at 40 reg and SPILLS 16 B (STACK:16, _final STACK:24) on
+ * sm_86. The kernel's natural footprint is 48 reg; TPB128/minb6 gives a
+ * 48-reg/0-spill build at ~83% occupancy. The eliminated local-memory
+ * round-trips beat the 100%-vs-83% occupancy delta (~+3% event-timed on RTX
+ * 3060) — a throughput/spill-bound kernel, so 83% (spill-free) > 100%
+ * (spilling); the spill-free TPB512/minb2 at 67% only ties the donor, so the
+ * win is spill-elimination at recovered mid occupancy, not block shape. */
+#define TPB64 128
 
 #include <stdio.h>
 
@@ -20,7 +30,7 @@
 
 __global__
 #if __CUDA_ARCH__ > 500
-__launch_bounds__(TPB52, 3)
+__launch_bounds__(TPB64, 6)
 #else
 __launch_bounds__(TPB50, 3)
 #endif
@@ -51,7 +61,7 @@ void skein512_gpu_hash_64(const uint32_t threads, const uint32_t startNonce, uin
 }
 
 
-__global__ __launch_bounds__(512, 3)
+__global__ __launch_bounds__(TPB64, 6)
 void skein512_gpu_hash_64_final(const uint32_t threads, uint64_t* g_hash, uint32_t* resNonce, uint64_t target)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
@@ -355,7 +365,7 @@ __host__
 //void skein512_cpu_hash_64(int thr_id,uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash)
 void skein512_cpu_hash_64(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
-	uint32_t tpb = TPB52;
+	uint32_t tpb = TPB64;
 	int dev_id = device_map[thr_id];
 
 	if (device_sm[dev_id] <= 500) tpb = TPB50;
@@ -368,7 +378,7 @@ void skein512_cpu_hash_64(int thr_id, const uint32_t threads, const uint32_t sta
 __host__
 void skein512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint64_t target, uint32_t *d_resNonce)
 {
-	uint32_t tpb = TPB52;
+	uint32_t tpb = TPB64;
 	int dev_id = device_map[thr_id];
 
 	if (device_sm[dev_id] <= 500) tpb = TPB50;

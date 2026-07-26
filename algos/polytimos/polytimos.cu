@@ -31,6 +31,7 @@ static uint32_t *d_resNonce[MAX_GPUS];
 /* streebog terminal launchers are not declared in the shared bridge */
 extern void streebog_set_target(uint32_t* ptarget);
 extern void streebog_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t* d_resNonce);
+extern bool streebog_device_selftest(int thr_id);
 
 // CPU Hash
 extern "C" void polytimos_hash(void *output, const void *input)
@@ -112,6 +113,7 @@ extern "C" int scanhash_polytimos(int thr_id, struct work* work, uint32_t max_no
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_hash[thr_id], 16 * sizeof(uint32_t) * throughput), 0);
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)), -1);
 
+		streebog_device_selftest(thr_id);
 		init[thr_id] = true;
 	}
 

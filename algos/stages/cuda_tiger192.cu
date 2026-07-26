@@ -132,7 +132,11 @@ __host__ void tiger192_cpu_hash_64(int thr_id, int threads, int zero_pad_64, uin
 	tiger192_device_selftest(thr_id);
 
 	const int threadsperblock = 256;
-	dim3 grid(threads/threadsperblock);
+	// Ceiling division: a truncating `threads/threadsperblock` drops the final
+	// partial block (up to 255 tail nonces silently never hashed) — the kernel's
+	// `if (thread < threads)` guard exists precisely to make this safe. Matches
+	// every sibling stage (jh512/luffa512/…).
+	dim3 grid((threads + threadsperblock - 1) / threadsperblock);
 	dim3 block(threadsperblock);
 	tiger192_gpu_hash_64<<<grid, block>>>(threads, zero_pad_64, d_hash);
 }
@@ -146,7 +150,9 @@ void tiger192_setBlock_80(void *pdata)
 __host__ void tiger192_cpu_hash_80(int thr_id, int threads, uint32_t startNonce, uint32_t *d_hash)
 {
 	const int threadsperblock = 256;
-	dim3 grid(threads/threadsperblock);
+	// Ceiling division (see tiger192_cpu_hash_64) — truncating grid drops tail
+	// nonces; the `if (thread < threads)` guard makes the round-up safe.
+	dim3 grid((threads + threadsperblock - 1) / threadsperblock);
 	dim3 block(threadsperblock);
 	tiger192_gpu_hash_80<<<grid, block>>>(threads, startNonce, d_hash);
 }

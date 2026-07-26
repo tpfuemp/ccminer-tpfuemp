@@ -10,7 +10,7 @@
 
 #include "cuda/echo512_device.cuh"
 
-__global__ __launch_bounds__(128, 5) /* will force 80 registers */
+__global__ __launch_bounds__(128, 5)
 static void x16_echo512_gpu_hash_64(uint32_t threads, uint32_t* g_hash)
 {
 	__shared__ uint32_t sharedMemory[4][256];

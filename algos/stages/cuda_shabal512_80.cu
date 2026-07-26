@@ -19,7 +19,12 @@ void shabal512_setBlock_80(void *pdata)
 	cudaMemcpyToSymbol(c_PaddedMessage80, pdata, sizeof(c_PaddedMessage80), 0, cudaMemcpyHostToDevice);
 }
 
-#define TPB_SHABAL 256
+// tpb 128, not the sph-era 256: shabal512_hash_80 is ~66 reg / 0 spill and
+// latency-bound on the serial permutation chain, so more resident warps help.
+// tpb256 fits only 3 blocks/SM (50% occ, register-file quantization waste);
+// tpb128 packs 7 blocks (58%) -> +~17% isolated on sm_86 (same profile as the
+// 64-byte kernel measured in algos/stages/cuda_shabal512.cu).
+#define TPB_SHABAL 128
 
 __global__ __launch_bounds__(TPB_SHABAL, 2)
 void shabal512_gpu_hash_80(uint32_t threads, const uint32_t startNonce, uint32_t *g_hash)

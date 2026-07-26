@@ -23,7 +23,14 @@
 
 #include "cuda/cubehash512_device.cuh"
 
-#define TPB 1024
+/* Block size re-tuned for Ampere (sm_86) 2026-07-23: the donor's TPB=1024
+ * thread-caps to 1 resident block = 67% occupancy; this kernel is 47 reg / 0
+ * smem / 0 spill, so a smaller block runs more blocks/SM. Event-timed microbench
+ * (RTX 3060, 4M hashes, interleaved A/B): 1024 -> 128 = +0.8-1.3% (thermal-
+ * sensitive: ~245 MH/s cool / ~238 warm; monotonic 128>1024 in every pass; 64
+ * ties 128 but 128 matches the sibling echo/hamsi/simd stages). Small but real
+ * and correctness-neutral. */
+#define TPB 128
 
 __global__
 void cubehash512_gpu_hash_64(uint32_t threads, uint64_t *g_hash){
