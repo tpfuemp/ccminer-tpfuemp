@@ -23,6 +23,7 @@
 #include <memory.h>
 
 #include "cuda_lyra2_vectors.h"
+#include "cuda/blake2b_device.cuh"
 
 #define Nrow 330
 #define Ncol 256
@@ -42,46 +43,6 @@ __constant__ uint2 c_blake2b_IV[8] = {
 	{ 0xfb41bd6b, 0x1f83d9ab },
 	{ 0x137e2179, 0x5be0cd19 }
 };
-
-// The 4 lanes of one hash are 4 consecutive lanes of a warp (blockDim.x == 4).
-// Shuffles name only those 4, so quads that exited on the thread-count guard
-// cannot make the mask name an inactive thread.
-__device__ __forceinline__ uint32_t quad_mask()
-{
-	const uint32_t laneid = (threadIdx.y * 4 + threadIdx.x) & 31;
-	return 0xfu << (laneid & ~3u);
-}
-
-__device__ __forceinline__ uint2 WarpShuffle(uint2 a, uint32_t srcLane, uint32_t mask)
-{
-	return make_uint2(__shfl_sync(mask, a.x, srcLane, 4), __shfl_sync(mask, a.y, srcLane, 4));
-}
-
-__device__ __forceinline__ void WarpShuffle3(uint2 &a1, uint2 &a2, uint2 &a3,
-	uint32_t b1, uint32_t b2, uint32_t b3, uint32_t mask)
-{
-	a1 = WarpShuffle(a1, b1, mask);
-	a2 = WarpShuffle(a2, b2, mask);
-	a3 = WarpShuffle(a3, b3, mask);
-}
-
-static __device__ __forceinline__
-void Gfunc(uint2 &a, uint2 &b, uint2 &c, uint2 &d)
-{
-	a += b; uint2 tmp = d; d.y = a.x ^ tmp.x; d.x = a.y ^ tmp.y;
-	c += d; b ^= c; b = ROR24(b);
-	a += b; d ^= a; d = ROR16(d);
-	c += d; b ^= c; b = ROR2(b, 63);
-}
-
-// one ROUND_LYRA: G over the columns, then over the diagonals
-__device__ __forceinline__ void round_lyra(uint2 s[4], const uint32_t qmask)
-{
-	Gfunc(s[0], s[1], s[2], s[3]);
-	WarpShuffle3(s[1], s[2], s[3], threadIdx.x + 1, threadIdx.x + 2, threadIdx.x + 3, qmask);
-	Gfunc(s[0], s[1], s[2], s[3]);
-	WarpShuffle3(s[1], s[2], s[3], threadIdx.x + 3, threadIdx.x + 2, threadIdx.x + 1, qmask);
-}
 
 // Lane-interleaved so the 4 lanes of a quad hit 4 consecutive uint2 (64 B) and
 // consecutive hashes are adjacent -- one warp covers 512 contiguous bytes.
@@ -113,7 +74,7 @@ __device__ __forceinline__
 void xor_rotW(uint2 inOut[3], const uint2 state[4], const uint32_t qmask)
 {
 	uint2 d0 = state[0], d1 = state[1], d2 = state[2];
-	WarpShuffle3(d0, d1, d2, threadIdx.x - 1, threadIdx.x - 1, threadIdx.x - 1, qmask);
+	QuadShuffle3(d0, d1, d2, threadIdx.x - 1, threadIdx.x - 1, threadIdx.x - 1, qmask);
 
 	if (threadIdx.x == 0) {
 		inOut[0] ^= d2;
@@ -136,7 +97,7 @@ void reduceDuplex(uint2 *M, uint2 state[4], const uint32_t qmask, const uint32_t
 	for (uint32_t i = 0; i < Ncol; i++)
 	{
 		ST4G(M, 0, Ncol - i - 1, state, thread, threads);
-		round_lyra(state, qmask);
+		round_lyra_quad(state, qmask);
 	}
 
 	#pragma unroll 1
@@ -148,7 +109,7 @@ void reduceDuplex(uint2 *M, uint2 state[4], const uint32_t qmask, const uint32_t
 		for (int j = 0; j < 3; j++)
 			state[j] ^= state1[j];
 
-		round_lyra(state, qmask);
+		round_lyra_quad(state, qmask);
 
 		#pragma unroll
 		for (int j = 0; j < 3; j++)
@@ -175,7 +136,7 @@ void reduceDuplexRowSetup(uint2 *M, const uint32_t rowIn, const uint32_t rowInOu
 		for (int j = 0; j < 3; j++)
 			state[j] ^= state1[j] + state2[j];
 
-		round_lyra(state, qmask);
+		round_lyra_quad(state, qmask);
 
 		#pragma unroll
 		for (int j = 0; j < 3; j++)
@@ -205,7 +166,7 @@ void reduceDuplexRowt(uint2 *M, const uint32_t rowIn, const uint32_t rowInOut, c
 		for (int j = 0; j < 3; j++)
 			state[j] ^= state1[j] + state2[j];
 
-		round_lyra(state, qmask);
+		round_lyra_quad(state, qmask);
 
 		xor_rotW(state2, state, qmask);
 		ST4G(M, rowInOut, i, state2, thread, threads);
@@ -262,7 +223,7 @@ void lyra2z330_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint2
 
 		#pragma unroll
 		for (int r = 0; r < 12; r++)		// blake2bLyra
-			round_lyra(state, qmask);
+			round_lyra_quad(state, qmask);
 	}
 
 	// Setup phase, matrix fill
@@ -292,7 +253,7 @@ void lyra2z330_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint2
 		const int64_t step64 = (tau & 1) ? (Nrow / 2 - 1) : -1;
 		uint32_t row = 0;
 		do {
-			const uint2 w0 = WarpShuffle(state[0], 0, qmask);	// sponge word 0 lives in lane 0
+			const uint2 w0 = QuadShuffle(state[0], 0, qmask);	// sponge word 0 lives in lane 0
 			rowa = (uint32_t)(devectorize(w0) % (uint64_t)Nrow);
 
 			reduceDuplexRowt(M, prev, rowa, row, state, qmask, thread, threads);
@@ -312,7 +273,7 @@ void lyra2z330_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint2
 
 	#pragma unroll
 	for (int r = 0; r < 12; r++)
-		round_lyra(state, qmask);
+		round_lyra_quad(state, qmask);
 
 	// squeeze 32 bytes: sponge words 0..3, i.e. state[0] of each lane
 	g_hash[thread * 4 + lane] = state[0];

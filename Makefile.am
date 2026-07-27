@@ -80,6 +80,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/lyra2/lyra2REv2.cu algos/stages/cuda_lyra2v2.cu \
 			  algos/lyra2/Lyra2Z.c algos/lyra2/lyra2Z.cu algos/stages/cuda_lyra2Z.cu \
 			  algos/lyra2/lyra2Z330.cu algos/stages/cuda_lyra2Z330.cu \
+			  cuda/blake2b_device.cuh cuda/lyra2_device.cuh \
 			  algos/stages/cuda_bmw256.cu algos/stages/cuda_cubehash256.cu \
 			  algos/stages/cuda_blake256.cu algos/stages/cuda_groestl256.cu \
 			  algos/stages/cuda_skein256.cu \

@@ -23,9 +23,24 @@ the dispatchers and CPU references here. The stage launchers keep their
 `lyra2*_cpu_*` names because they are co-owned with allium/x21s/evohash, which reach
 them via `extern`.
 
+Two shared device headers:
+
+- `cuda/blake2b_device.cuh` — the reduced-round BLAKE2b permutation all four stages
+  use: `Gfunc`, the warp shuffles, both `round_lyra` layouts (4-lanes-per-hash
+  `uint2[4]`, single-thread `uint2x4[4]`) and the quad-scoped variants z330 needs.
+- `cuda/lyra2_device.cuh` — the shared-memory row ops (`LD4S`/`ST4S`,
+  `reduceDuplex`, `reduceDuplexRowSetup`, `reduceDuplexRowt`), macro-driven off the
+  includer's `Nrow`/`Ncol`/`memshift`/`BUF_COUNT`. Used by lyra2 and lyra2z (both
+  8 × 8, memshift 3, BUF_COUNT 0).
+
+The row ops are not shared further: **lyra2v2** uses flat-indexed unrolled
+accessors (`ST4S(index, data)`, `reduceDuplexRowSetupV2`) rather than (row, col)
+ops, and **lyra2z330** streams a global matrix, so its accessors take the matrix
+pointer and interleave by thread. The `blake2b_IV` tables likewise stay per-TU —
+v1/v2 `__constant__`, Z kernel-local `const`, z330 a lane-indexed `uint2` view.
+
 The build floor is sm_61, so the stages carry no arch guards, no pre-`__shfl`
-shuffle emulation and no `cuda_arch`/`device_sm` dispatch; `__constant__ pTarget[8]`
-and `Gfunc` live directly in `cuda_lyra2Z.cu`. `lyra2_cpu_hash_32` /
+shuffle emulation and no `cuda_arch`/`device_sm` dispatch. `lyra2_cpu_hash_32` /
 `lyra2_cuda_hash_64` keep a vestigial `gtx750ti` parameter (public signature).
 
 The 256-bit primitives this family shares with Algo256

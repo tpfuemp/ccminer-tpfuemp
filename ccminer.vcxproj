@@ -503,6 +503,8 @@
     <ClInclude Include="algos/heavyhash/heavyhash-gate.h" />
     <ClInclude Include="algos/heavyhash/keccak_tiny.h" />
     <ClInclude Include="cuda\groestl512_device.cuh" />
+    <ClInclude Include="cuda\blake2b_device.cuh" />
+    <ClInclude Include="cuda\lyra2_device.cuh" />
     <ClInclude Include="cuda\echo512_device.cuh" />
     <ClInclude Include="cuda\shavite512_device.cuh" />
     <ClInclude Include="cuda\whirlpool512_device.cuh" />

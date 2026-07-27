@@ -639,6 +639,12 @@
     <ClInclude Include="algos\lyra2\Sponge.h">
       <Filter>Header Files\lyra2</Filter>
     </ClInclude>
+    <ClInclude Include="cuda\blake2b_device.cuh">
+      <Filter>Source Files\CUDA\lyra2</Filter>
+    </ClInclude>
+    <ClInclude Include="cuda\lyra2_device.cuh">
+      <Filter>Source Files\CUDA\lyra2</Filter>
+    </ClInclude>
     <ClInclude Include="cuda\groestl512_device.cuh">
       <Filter>Source Files\CUDA\quark</Filter>
     </ClInclude>

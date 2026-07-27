@@ -5,6 +5,7 @@
 #define TPB52 32
 
 #include "cuda_lyra2_vectors.h"
+#include "cuda/blake2b_device.cuh"
 
 #define Nrow 4
 #define Ncol 4
@@ -26,54 +27,6 @@ __device__ __forceinline__ void ST4S(const int index, const uint2 data)
 	shared_mem[(index * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x] = data;
 }
 
-__device__ __forceinline__
-void Gfunc_v5(uint2 &a, uint2 &b, uint2 &c, uint2 &d)
-{
-	a += b; uint2 tmp = d; d.y = a.x ^ tmp.x; d.x = a.y ^ tmp.y;
-	c += d; b ^= c; b = ROR24(b);
-	a += b; d ^= a; d = ROR16(d);
-	c += d; b ^= c; b = ROR2(b, 63);
-}
-
-__device__ __forceinline__ uint32_t WarpShuffle(uint32_t a, uint32_t b, uint32_t c)
-{
-	return __shfl(a, b, c);
-}
-
-__device__ __forceinline__ uint2 WarpShuffle(uint2 a, uint32_t b, uint32_t c)
-{
-	return make_uint2(__shfl(a.x, b, c), __shfl(a.y, b, c));
-}
-
-__device__ __forceinline__ void WarpShuffle3(uint2 &a1, uint2 &a2, uint2 &a3, uint32_t b1, uint32_t b2, uint32_t b3, uint32_t c)
-{
-	a1 = WarpShuffle(a1, b1, c);
-	a2 = WarpShuffle(a2, b2, c);
-	a3 = WarpShuffle(a3, b3, c);
-}
-
-
-__device__ __forceinline__ void round_lyra(uint2 s[4])
-{
-	Gfunc_v5(s[0], s[1], s[2], s[3]);
-	WarpShuffle3(s[1], s[2], s[3], threadIdx.x + 1, threadIdx.x + 2, threadIdx.x + 3, 4);
-	Gfunc_v5(s[0], s[1], s[2], s[3]);
-	WarpShuffle3(s[1], s[2], s[3], threadIdx.x + 3, threadIdx.x + 2, threadIdx.x + 1, 4);
-}
-
-__device__ __forceinline__
-void round_lyra(uint2x4* s)
-{
-	Gfunc_v5(s[0].x, s[1].x, s[2].x, s[3].x);
-	Gfunc_v5(s[0].y, s[1].y, s[2].y, s[3].y);
-	Gfunc_v5(s[0].z, s[1].z, s[2].z, s[3].z);
-	Gfunc_v5(s[0].w, s[1].w, s[2].w, s[3].w);
-
-	Gfunc_v5(s[0].x, s[1].y, s[2].z, s[3].w);
-	Gfunc_v5(s[0].y, s[1].z, s[2].w, s[3].x);
-	Gfunc_v5(s[0].z, s[1].w, s[2].x, s[3].y);
-	Gfunc_v5(s[0].w, s[1].x, s[2].y, s[3].z);
-}
 
 
 __device__ __forceinline__ void reduceDuplexRowSetupV2(uint2 state[4])
