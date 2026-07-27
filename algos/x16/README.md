@@ -1,4 +1,4 @@
-# x16 family (x16r / x16rv2 / x16s)
+# x16 family (x16r / x16rt / x16rv2 / x16s)
 
 Guideline: `docs/coding-guideline.md`
 
@@ -7,6 +7,10 @@ Guideline: `docs/coding-guideline.md`
 - `x16r.cu` / `x16s.cu` — tpruvot 2018 lineage; the 16 stage kernels are
   dispatched per-block from the hash-order nibbles of the previous block hash
   (x16r) or a sorted permutation of them (x16s).
+- `x16rt.cu` — x16r with the order derived from the **block timestamp** rather than
+  the previous block hash: `sha256d` of `ntime & 0xffffff80`, a 128-second window, so
+  the order changes on a clock boundary. Does not use the fused-run kernel.
+  `whirlpool_midstate` lives in `x16r.cu` — its only definition in the project.
 - `x16rv2.cu` — penfold 2019: x16r with Tiger-192 inserted before the keccak,
   luffa and sha512 stages (`tiger192_cpu_hash_64` with `zero_pad_64=1`;
   `tiger192_cpu_hash_80` when the tiger'd stage comes first).
@@ -70,9 +74,9 @@ Exception (fast-path promotion, like the alexis echo): the bare 64-byte
 `shavite512_cpu_hash_64` is now the **sp-optimised** launcher (3-arg,
 `cuda_x11_shavite512_sp.cu`; self-contained, in-kernel AES init, `__ldg4` I/O —
 ~+2.5% on x11) rather than a bridge alias. The legacy 6-arg
-`x11_shavite512_cpu_hash_64` (shared `c512`) stays for the not-yet-migrated
-x11-family consumers. All migrated x-family sources (x11/x16r/x16rv2/x16s) get
-the faster shavite on their mid-chain 64-byte stage.
+`x11_shavite512_cpu_hash_64` (shared `c512`) stays for its remaining consumers,
+evohash and ghostrider. All x-family sources (x11/x16r/x16rv2/x16s) get the
+faster shavite on their mid-chain 64-byte stage.
 
 ## Fused stage runs
 
@@ -105,6 +109,7 @@ pass register-local state; `__ldg` then faults with error 717).
 | algo   | card     | driver | CUDA | intensity | rate |
 |--------|----------|--------|------|-----------|------|
 | x16r   | RTX 3060 | 595.95 | 11.8 | default   | ~12.0 MH/s (benchmark, fused; +0.8% vs unfused ~11.9); **live-validated** (19/19 accepted, 6 blocks solved; ~15-16 MH/s warm; live orders exercised fused runs up to length 7; no invalid shares) |
+| x16rt  | RTX 3060 | 595.95 | 11.8 | 19        | **live-validated** after the split out of `x16r.cu` (zpool, 45/45 accepted, 0 does-not-validate, 6 distinct timestamp orders): 10.1-18.1 MH/s, avg ~13.3, order-dependent |
 | x16rv2 | RTX 3060 | 595.95 | 11.8 | default   | ~12.0 MH/s (benchmark, fused; +3% vs unfused ~11.6); **~14-15.5 MH/s live** (zpool 2026-07-13, 32/32 accepted, vs ~11.6 live unfused) |
 | x16s   | RTX 3060 | 595.95 | 11.8 | default   | ~12.4 MH/s (benchmark; fused delta within thermal drift) |
 

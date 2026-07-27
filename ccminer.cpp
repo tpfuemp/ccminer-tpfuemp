@@ -1973,6 +1973,7 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_LBRY:
 		case ALGO_LYRA2v2:
 		case ALGO_LYRA2Z:
+		case ALGO_LYRA2Z330:
 		case ALGO_ALLIUM:
 		case ALGO_TIMETRAVEL:
 		case ALGO_BITCORE:
@@ -2598,12 +2599,12 @@ static void *miner_thread(void *userdata)
 			case ALGO_YESCRYPTR16V2:
 			case ALGO_YESCRYPTR24:
 			case ALGO_YESCRYPTR32:
-			case ALGO_LYRA2Z330:
 				minmax = 0x8000;
 				break;
 			case ALGO_CRYPTOLIGHT:
 			case ALGO_CRYPTONIGHT:
 			case ALGO_SCRYPT_JANE:
+			case ALGO_LYRA2Z330:  // ~7.7 MB matrix per hash, so VRAM caps it at a few kH/s
 				minmax = 0x1000;
 				break;
 			}
@@ -2757,6 +2758,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_LYRA2Z:
 			rc = scanhash_lyra2Z(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_LYRA2Z330:
+			rc = scanhash_lyra2z330(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_ALLIUM:
 			rc = scanhash_allium(thr_id, &work, max_nonce, &hashes_done);

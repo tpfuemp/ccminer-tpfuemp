@@ -79,6 +79,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/lyra2/lyra2RE.cu algos/stages/cuda_lyra2.cu \
 			  algos/lyra2/lyra2REv2.cu algos/stages/cuda_lyra2v2.cu \
 			  algos/lyra2/Lyra2Z.c algos/lyra2/lyra2Z.cu algos/stages/cuda_lyra2Z.cu \
+			  algos/lyra2/lyra2Z330.cu algos/stages/cuda_lyra2Z330.cu \
 			  algos/stages/cuda_bmw256.cu algos/stages/cuda_cubehash256.cu \
 			  algos/stages/cuda_blake256.cu algos/stages/cuda_groestl256.cu \
 			  algos/stages/cuda_skein256.cu \
@@ -133,7 +134,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/stages/cuda_whirlpool512_80.cu \
 			  algos/x15/whirlpool.cu \
 			  algos/whirlpoolx2/whirlpoolx2.cu algos/whirlpoolx2/cuda_whirlpoolx2.cu \
-			  algos/x16/x16r.cu algos/x16/x16rv2.cu algos/x16/x16s.cu algos/stages/cuda_echo512_80.cu algos/stages/cuda_fugue512_80.cu \
+			  algos/x16/x16r.cu algos/x16/x16rt.cu algos/x16/x16rv2.cu algos/x16/x16s.cu algos/stages/cuda_echo512_80.cu algos/stages/cuda_fugue512_80.cu \
 			  algos/stages/cuda_shabal512_80.cu algos/stages/cuda_shavite512_80.cu algos/stages/cuda_simd512_80.cu \
 			  algos/stages/cuda_echo512_64.cu algos/common/cuda_x_fused.cu \
 			  algos/x17/x17.cu algos/x17/skydoge.cu algos/x17/hmq1725.cu algos/soterg/soterg.cu algos/stages/cuda_haval256.cu algos/stages/cuda_sha512.cu \
@@ -200,9 +201,6 @@ nvcc_FLAGS += $(JANSSON_INCLUDES) --ptxas-options="-v"
 # BUCKBITS=20/RESTBITS=4 code paths); no register cap, ptxas cache hints.
 algos/equihash/cuda_equi_tromp.o: algos/equihash/cuda_equi_tromp.cu
 	$(NVCC) $(nvcc_FLAGS) -DWN=144 -DWK=5 -DRESTBITS=4 -Xptxas -dlcm=ca -Xptxas -dscm=cs -o $@ -c $<
-
-algos/stages/cuda_lyra2.o: algos/stages/cuda_lyra2.cu
-	$(NVCC) $(nvcc_FLAGS) --maxrregcount=128 -o $@ -c $<
 
 # HoohashV110 device TU: consensus-critical strict FP (must match the glibc oracle).
 # No fast-math; disable FMA contraction; precise div/sqrt; no flush-to-zero.

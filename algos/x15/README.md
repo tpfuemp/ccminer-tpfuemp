@@ -29,9 +29,12 @@ whirlpool (WHC):  Whirlpool ×4 (80-byte header then 3×64)
 ## Shared stages moved to `algos/stages/` + de-branded
 
 Two stage launchers are shared across the x14–x17/x21 families, so they moved to
-`algos/stages/` and were de-branded to bare names (real symbols), with the old
-prefixed names kept as thin forwarders for the not-yet-migrated consumers
-(x17/skydoge/hmq17, x21s, ghostrider, evohash, bastion):
+`algos/stages/` and were de-branded to bare names (real symbols). Every consuming
+family has since migrated, so the old prefixed spellings are no longer kept for
+migration reasons — only where something still links them: the
+`x14_shabal512_*` forwarders were deleted once nothing referenced them
+(2026-07-16), while `x15_whirlpool_*` survives because evohash and ghostrider
+still call it:
 
 - `cuda_x14_shabal512.cu`: `x14_shabal512_cpu_*` → **`shabal512_cpu_*`**.
 - `cuda_x15_whirlpool.cu`: `x15_whirlpool_cpu_*` → **`whirlpool512_cpu_*`**

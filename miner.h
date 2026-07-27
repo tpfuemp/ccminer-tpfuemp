@@ -322,6 +322,7 @@ extern int scanhash_luffa(int thr_id, struct work* work, uint32_t max_nonce, uns
 extern int scanhash_lyra2(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_lyra2v2(int thr_id,struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_lyra2Z(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_lyra2z330(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_myriad(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_neoscrypt(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_nist5(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
@@ -427,6 +428,7 @@ extern void free_luffa(int thr_id);
 extern void free_lyra2(int thr_id);
 extern void free_lyra2v2(int thr_id);
 extern void free_lyra2Z(int thr_id);
+extern void free_lyra2z330(int thr_id);
 extern void free_myriad(int thr_id);
 extern void free_neoscrypt(int thr_id);
 extern void free_nist5(int thr_id);

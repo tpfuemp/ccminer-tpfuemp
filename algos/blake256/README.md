@@ -16,8 +16,10 @@ Relocation only (layout B). The Blake-256 device kernels live in the shared
 its `--maxrregcount=64` + `-dlcm=cg` + FastMath build overrides. Dispatchers
 reach the primitive through their own `extern` declarations (unchanged by the
 move). Symbol names are **kept** because `cuda_blake256.cu` is co-owned with the
-not-yet-migrated lyra2 family (lyra2RE/REv2/REv3/Z) and migrated allium — a
-de-brand would touch those; deferred until lyra2 migrates.
+lyra2 family (lyra2RE/REv2/Z) and allium, all of which are now migrated too
+(`algos/lyra2/`, `algos/allium/`). A de-brand is therefore a family-wide 256-bit
+naming pass across every owner rather than a blake256-local change, so it stays a
+separate follow-up — it is no longer waiting on a migration.
 
 ## Validation
 

@@ -14,7 +14,6 @@ extern void blake256_cpu_hash_80(const int thr_id, const uint32_t threads, const
 extern void blake256_cpu_setBlock_80(uint32_t *pdata);
 
 extern void lyra2Z_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix);
-extern void lyra2Z_cpu_init_sm2(int thr_id, uint32_t threads);
 extern void lyra2Z_cpu_free(int thr_id);
 extern uint32_t lyra2Z_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNonce, uint64_t *d_outputHash, bool gtx750ti);
 
@@ -74,14 +73,11 @@ extern "C" int scanhash_lyra2Z(int thr_id, struct work* work, uint32_t max_nonce
 
 		blake256_cpu_init(thr_id, throughput);
 
-		if (device_sm[dev_id] >= 350)
-		{
-			size_t matrix_sz = device_sm[dev_id] > 500 ? sizeof(uint64_t) * 4 * 4 : sizeof(uint64_t) * 8 * 8 * 3 * 4;
-			CUDA_SAFE_CALL(cudaMalloc(&d_matrix[thr_id], matrix_sz * throughput));
-			lyra2Z_cpu_init(thr_id, throughput, d_matrix[thr_id]);
-		}
-		else
-			lyra2Z_cpu_init_sm2(thr_id, throughput);
+		// the wander matrix is shared-resident, so DMatrix only carries the
+		// 4 x uint2x4 state the init/final kernels stage per nonce
+		const size_t matrix_sz = sizeof(uint64_t) * 4 * 4;
+		CUDA_SAFE_CALL(cudaMalloc(&d_matrix[thr_id], matrix_sz * throughput));
+		lyra2Z_cpu_init(thr_id, throughput, d_matrix[thr_id]);
 
 		CUDA_SAFE_CALL(cudaMalloc(&d_hash[thr_id], (size_t)32 * throughput));
 
@@ -151,15 +147,13 @@ extern "C" int scanhash_lyra2Z(int thr_id, struct work* work, uint32_t max_nonce
 // cleanup
 extern "C" void free_lyra2Z(int thr_id)
 {
-	int dev_id = device_map[thr_id];
 	if (!init[thr_id])
 		return;
 
 	cudaDeviceSynchronize();
 
 	cudaFree(d_hash[thr_id]);
-	if (device_sm[dev_id] >= 350)
-		cudaFree(d_matrix[thr_id]);
+	cudaFree(d_matrix[thr_id]);
 	lyra2Z_cpu_free(thr_id);
 
 	init[thr_id] = false;

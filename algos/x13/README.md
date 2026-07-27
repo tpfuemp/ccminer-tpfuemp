@@ -25,9 +25,10 @@ SIMD-512  →  Echo-512  →  Hamsi-512  →  Fugue-512 (terminal)
   - `cuda_x13_fugue512.cu` — the 64-byte Fugue stage.
 
   Both keep their `x13_` symbol names (aliased to the bare
-  `hamsi512_*`/`fugue512_*` names by the `cuda_x_stages.h` bridge) because they
-  are still consumed by the not-yet-migrated x14/x15/x17/hsr families and by
-  x16/x21s/evohash/ghostrider.
+  `hamsi512_*`/`fugue512_*` names by the `cuda_x_stages.h` bridge) because the
+  `x13_`-prefixed spellings are still linked by the x16 dispatchers (`x16r`,
+  `x16rv2`, `x16s`); every consuming family has since migrated, so dropping the
+  aliases is now just a churn decision, not a migration dependency.
 
 The `hsr` algo (HShare — x13 chain with an SM3 stage inserted) and its `sm3.*`
 support still live in `x13/`; it is a separate algo and was not part of this

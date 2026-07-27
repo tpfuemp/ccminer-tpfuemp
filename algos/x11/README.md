@@ -30,7 +30,7 @@ launchers. shavite uses the sp-optimised 64-byte launcher (bare
 `shavite512_cpu_hash_64` → `cuda_x11_shavite512_sp.cu`: self-contained,
 in-kernel AES-table init, vectorised `__ldg4` I/O — ~+2.5% over the shared
 `c512` path, measured A/B; the legacy 6-arg `x11_shavite512_cpu_hash_64` stays
-for the not-yet-migrated x11-family consumers). simd is the sp-optimised
+for its remaining consumers, evohash and ghostrider). simd is the sp-optimised
 `+20%` kernel (`cuda_x11_simd512.cu`). echo uses the optimised alexis 64-byte launcher
 (`echo512_cpu_hash_64`) with the tpruvot `*_compat` variant only on arch < 500
 (below the sm_61 build floor — effectively dead).

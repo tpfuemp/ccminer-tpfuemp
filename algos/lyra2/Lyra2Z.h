@@ -37,6 +37,11 @@ typedef unsigned char byte;
         #define BLOCK_LEN_BYTES (BLOCK_LEN_INT64 * 8)    //Block length, in bytes
 #endif
 
+// Row indices use the generic (modulo) form, so nRows need not be a power of 2:
+// lyra2z uses 8 rows, lyra2z330 uses 330. LYRA2Z allocates its own memory matrix;
+// LYRA2Z_reuse takes a caller-owned one (nRows * nCols * BLOCK_LEN_BYTES bytes),
+// which a hashing loop wants since lyra2z330's matrix is ~7.7 MB.
 int LYRA2Z(void *K, int64_t kLen, const void *pwd, int32_t pwdlen, const void *salt, int32_t saltlen, int64_t timeCost, const int16_t nRows, const int16_t nCols);
+int LYRA2Z_reuse(uint64_t *wholeMatrix, void *K, int64_t kLen, const void *pwd, int32_t pwdlen, const void *salt, int32_t saltlen, int64_t timeCost, const int16_t nRows, const int16_t nCols);
 
 #endif /* LYRA2_H_ */

@@ -15,9 +15,11 @@ Standalone Blue Midnight Wish coins (tpruvot lineage, GPLv3), relocated from
 ## Layout
 
 Relocation only (layout B). The `bmw256` primitives keep their names because
-`cuda_bmw256.cu` is co-owned with the not-yet-migrated lyra2 family
-(lyra2REv2/REv3); a de-brand would touch those, so it is deferred. Consumers
-reach the primitives via `extern` declarations (unchanged by the move).
+`cuda_bmw256.cu` is co-owned with the lyra2 family (`lyra2REv2`), which has since
+migrated as well (`algos/lyra2/`). Renaming is therefore a family-wide 256-bit
+naming pass touching both owners rather than a bmw-local change, so it remains a
+separate follow-up — it is no longer waiting on a migration. Consumers reach the
+primitives via `extern` declarations (unchanged by the move).
 
 ## Validation
 

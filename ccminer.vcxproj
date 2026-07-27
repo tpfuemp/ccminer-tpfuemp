@@ -638,11 +638,10 @@
     <CudaCompile Include="algos\stages\cuda_lyra2.cu" />
     <CudaCompile Include="algos\lyra2\lyra2REv2.cu" />
     <CudaCompile Include="algos\stages\cuda_lyra2v2.cu" />
-    <ClInclude Include="algos\stages\cuda_lyra2_sm2.cuh" />
-    <ClInclude Include="algos\stages\cuda_lyra2v2_sm3.cuh" />
     <CudaCompile Include="algos\lyra2\lyra2Z.cu" />
+    <CudaCompile Include="algos\lyra2\lyra2Z330.cu" />
+    <CudaCompile Include="algos\stages\cuda_lyra2Z330.cu" />
     <CudaCompile Include="algos\stages\cuda_lyra2Z.cu" />
-    <ClInclude Include="algos\stages\cuda_lyra2Z_sm5.cuh" />
     <CudaCompile Include="algos\polytimos\polytimos.cu" />
     <CudaCompile Include="algos\sia\sia.cu" />
     <CudaCompile Include="algos\skein\skein.cu">
@@ -704,6 +703,7 @@
     <CudaCompile Include="algos\whirlpoolx2\whirlpoolx2.cu" />
     <CudaCompile Include="algos\whirlpoolx2\cuda_whirlpoolx2.cu" />
     <CudaCompile Include="algos\x16\x16r.cu" />
+    <CudaCompile Include="algos\x16\x16rt.cu" />
     <CudaCompile Include="algos\common\cuda_x_fused.cu" />
     <CudaCompile Include="algos\x16\x16rv2.cu" />
     <CudaCompile Include="algos\x16\x16s.cu" />

@@ -32,6 +32,9 @@
  * integer parameters (treated as type "unsigned int") in the order they are provided, plus the value
  * of nCols, (i.e., basil = kLen || pwdlen || saltlen || timeCost || nRows || nCols).
  *
+ * @param wholeMatrix Caller-owned memory matrix, nRows * nCols * BLOCK_LEN_BYTES
+ *                    bytes. Its previous contents are irrelevant, so one buffer
+ *                    can be reused across hashes.
  * @param K The derived key to be output by the algorithm
  * @param kLen Desired key length
  * @param pwd User password
@@ -44,7 +47,7 @@
  *
  * @return 0 if the key is generated correctly; -1 if there is an error (usually due to lack of memory for allocation)
  */
-int LYRA2Z(void *K, int64_t kLen, const void *pwd, int32_t pwdlen, const void *salt, int32_t saltlen, int64_t timeCost, const int16_t nRows, const int16_t nCols)
+int LYRA2Z_reuse(uint64_t *wholeMatrix, void *K, int64_t kLen, const void *pwd, int32_t pwdlen, const void *salt, int32_t saltlen, int64_t timeCost, const int16_t nRows, const int16_t nCols)
 {
 	//============================= Basic variables ============================//
 	int64_t row = 2; //index of row to be processed
@@ -58,32 +61,18 @@ int LYRA2Z(void *K, int64_t kLen, const void *pwd, int32_t pwdlen, const void *s
 	int64_t v64; // 64bit var for memcpy
 	//==========================================================================/
 
-	//========== Initializing the Memory Matrix and pointers to it =============//
-	//Tries to allocate enough space for the whole memory matrix
+	//===================== Pointers into the memory matrix ====================//
+	// The caller owns the matrix (nRows rows of ROW_LEN_BYTES); rows are indexed
+	// arithmetically, so no per-call allocation happens here at all. Every row is
+	// fully written by the Setup phase before it can be read, so a reused (dirty)
+	// matrix yields the same digest as a fresh one -- only the pwd/salt/basil
+	// input blocks are explicitly cleared below.
 
 	const int64_t ROW_LEN_INT64 = BLOCK_LEN_INT64 * nCols;
-	const int64_t ROW_LEN_BYTES = ROW_LEN_INT64 * 8;
 	// for Lyra2REv2, nCols = 4, v1 was using 8
 	const int64_t BLOCK_LEN = BLOCK_LEN_BLAKE2_SAFE_INT64;
 
-	size_t sz = (size_t)ROW_LEN_BYTES * nRows;
-	uint64_t *wholeMatrix = malloc(sz);
-	if (wholeMatrix == NULL) {
-		return -1;
-	}
-	memset(wholeMatrix, 0, sz);
-
-	//Allocates pointers to each row of the matrix
-	uint64_t **memMatrix = malloc(sizeof(uint64_t*) * nRows);
-	if (memMatrix == NULL) {
-		return -1;
-	}
-	//Places the pointers in the correct positions
-	uint64_t *ptrWord = wholeMatrix;
-	for (i = 0; i < nRows; i++) {
-		memMatrix[i] = ptrWord;
-		ptrWord += ROW_LEN_INT64;
-	}
+	#define ROW(idx) (&wholeMatrix[(size_t)(idx) * (size_t)ROW_LEN_INT64])
 	//==========================================================================/
 
 	//============= Getting the password + salt + basil padded with 10*1 ===============//
@@ -139,21 +128,21 @@ int LYRA2Z(void *K, int64_t kLen, const void *pwd, int32_t pwdlen, const void *s
 
 	//================================ Setup Phase =============================//
 	//Absorbing salt, password and basil: this is the only place in which the block length is hard-coded to 512 bits
-	ptrWord = wholeMatrix;
+	uint64_t *ptrWord = wholeMatrix;
 	for (i = 0; i < nBlocksInput; i++) {
 		absorbBlockBlake2Safe(state, ptrWord); //absorbs each block of pad(pwd || salt || basil)
 		ptrWord += BLOCK_LEN; //goes to next block of pad(pwd || salt || basil)
 	}
 
 	//Initializes M[0] and M[1]
-	reducedSqueezeRow0(state, memMatrix[0], nCols); //The locally copied password is most likely overwritten here
+	reducedSqueezeRow0(state, ROW(0), nCols); //The locally copied password is most likely overwritten here
 
-	reducedDuplexRow1(state, memMatrix[0], memMatrix[1], nCols);
+	reducedDuplexRow1(state, ROW(0), ROW(1), nCols);
 
 	do {
 		//M[row] = rand; //M[row*] = M[row*] XOR rotW(rand)
 
-		reducedDuplexRowSetup(state, memMatrix[prev], memMatrix[rowa], memMatrix[row], nCols);
+		reducedDuplexRowSetup(state, ROW(prev), ROW(rowa), ROW(row), nCols);
 
 		//updates the value of row* (deterministically picked during Setup))
 		rowa = (rowa + step) & (window - 1);
@@ -180,20 +169,23 @@ int LYRA2Z(void *K, int64_t kLen, const void *pwd, int32_t pwdlen, const void *s
 		do {
 			//Selects a pseudorandom index row*
 			//------------------------------------------------------------------------------------------
-			rowa = state[0] & (unsigned int)(nRows-1);  //(USE THIS IF nRows IS A POWER OF 2)
-			//rowa = state[0] % nRows; //(USE THIS FOR THE "GENERIC" CASE)
+			// The "generic" (modulo) form: required for a non-power-of-2 nRows
+			// (lyra2z330 uses 330). For a power-of-2 nRows this is bit-identical
+			// to the classic `& (nRows-1)` mask, including the negative-step wrap,
+			// because the modulo is evaluated on the unsigned value -- so the
+			// lyra2z (8 rows) digest is unchanged. Matches the reference miners.
+			rowa = (uint64_t)state[0] % (uint64_t)nRows;
 			//------------------------------------------------------------------------------------------
 
 			//Performs a reduced-round duplexing operation over M[row*] XOR M[prev], updating both M[row*] and M[row]
-			reducedDuplexRow(state, memMatrix[prev], memMatrix[rowa], memMatrix[row], nCols);
+			reducedDuplexRow(state, ROW(prev), ROW(rowa), ROW(row), nCols);
 
 			//update prev: it now points to the last row ever computed
 			prev = row;
 
 			//updates row: goes to the next row to be computed
 			//------------------------------------------------------------------------------------------
-			row = (row + step) & (unsigned int)(nRows-1); //(USE THIS IF nRows IS A POWER OF 2)
-			//row = (row + step) % nRows; //(USE THIS FOR THE "GENERIC" CASE)
+			row = (int64_t)((uint64_t)(row + step) % (uint64_t)nRows);
 			//------------------------------------------------------------------------------------------
 
 		} while (row != 0);
@@ -201,15 +193,31 @@ int LYRA2Z(void *K, int64_t kLen, const void *pwd, int32_t pwdlen, const void *s
 
 	//============================ Wrap-up Phase ===============================//
 	//Absorbs the last block of the memory matrix
-	absorbBlock(state, memMatrix[rowa]);
+	absorbBlock(state, ROW(rowa));
 
 	//Squeezes the key
 	squeeze(state, K, (unsigned int) kLen);
 
-	//========================= Freeing the memory =============================//
-	free(memMatrix);
-	free(wholeMatrix);
-
 	return 0;
+}
+#undef ROW
+
+/**
+ * Same as LYRA2Z_reuse, but allocates (and frees) the memory matrix itself.
+ * Convenient for one-shot callers such as the host-side verification of a GPU
+ * candidate; a hashing loop should reuse one matrix instead, since for
+ * lyra2z330 this allocation is ~7.7 MB per call.
+ */
+int LYRA2Z(void *K, int64_t kLen, const void *pwd, int32_t pwdlen, const void *salt, int32_t saltlen, int64_t timeCost, const int16_t nRows, const int16_t nCols)
+{
+	const size_t sz = (size_t)BLOCK_LEN_INT64 * nCols * 8 * nRows;
+	uint64_t *wholeMatrix = malloc(sz);
+	if (wholeMatrix == NULL)
+		return -1;
+
+	int rc = LYRA2Z_reuse(wholeMatrix, K, kLen, pwd, pwdlen, salt, saltlen, timeCost, nRows, nCols);
+
+	free(wholeMatrix);
+	return rc;
 }
 

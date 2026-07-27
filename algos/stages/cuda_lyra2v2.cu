@@ -3,24 +3,8 @@
 #include <memory.h>
 
 #define TPB52 32
-#define TPB50 32
-#define TPB30 32
-#define TPB20 32
-
-#ifdef __INTELLISENSE__
-/* just for vstudio code colors */
-#define __CUDA_ARCH__ 520
-#endif
 
 #include "cuda_lyra2_vectors.h"
-
-#ifdef __INTELLISENSE__
-/* just for vstudio code colors */
-__device__ void __threadfence_block();
-#if __CUDA_ARCH__ >= 300
-__device__ uint32_t __shfl(uint32_t a, uint32_t b, uint32_t c);
-#endif
-#endif
 
 #define Nrow 4
 #define Ncol 4
@@ -51,7 +35,6 @@ void Gfunc_v5(uint2 &a, uint2 &b, uint2 &c, uint2 &d)
 	c += d; b ^= c; b = ROR2(b, 63);
 }
 
-#if __CUDA_ARCH__ >= 300
 __device__ __forceinline__ uint32_t WarpShuffle(uint32_t a, uint32_t b, uint32_t c)
 {
 	return __shfl(a, b, c);
@@ -68,76 +51,6 @@ __device__ __forceinline__ void WarpShuffle3(uint2 &a1, uint2 &a2, uint2 &a3, ui
 	a2 = WarpShuffle(a2, b2, c);
 	a3 = WarpShuffle(a3, b3, c);
 }
-
-#else
-__device__ __forceinline__ uint32_t WarpShuffle(uint32_t a, uint32_t b, uint32_t c)
-{
-	extern __shared__ uint2 shared_mem[];
-
-	const uint32_t thread = blockDim.x * threadIdx.y + threadIdx.x;
-	uint32_t *_ptr = (uint32_t*)shared_mem;
-
-	__threadfence_block();
-	uint32_t buf = _ptr[thread];
-
-	_ptr[thread] = a;
-	__threadfence_block();
-	uint32_t result = _ptr[(thread&~(c - 1)) + (b&(c - 1))];
-
-	__threadfence_block();
-	_ptr[thread] = buf;
-
-	__threadfence_block();
-	return result;
-}
-
-__device__ __forceinline__ uint2 WarpShuffle(uint2 a, uint32_t b, uint32_t c)
-{
-	extern __shared__ uint2 shared_mem[];
-
-	const uint32_t thread = blockDim.x * threadIdx.y + threadIdx.x;
-
-	__threadfence_block();
-	uint2 buf = shared_mem[thread];
-
-	shared_mem[thread] = a;
-	__threadfence_block();
-	uint2 result = shared_mem[(thread&~(c - 1)) + (b&(c - 1))];
-
-	__threadfence_block();
-	shared_mem[thread] = buf;
-
-	__threadfence_block();
-	return result;
-}
-
-__device__ __forceinline__ void WarpShuffle3(uint2 &a1, uint2 &a2, uint2 &a3, uint32_t b1, uint32_t b2, uint32_t b3, uint32_t c)
-{
-	extern __shared__ uint2 shared_mem[];
-
-	const uint32_t thread = blockDim.x * threadIdx.y + threadIdx.x;
-
-	__threadfence_block();
-	uint2 buf = shared_mem[thread];
-
-	shared_mem[thread] = a1;
-	__threadfence_block();
-	a1 = shared_mem[(thread&~(c - 1)) + (b1&(c - 1))];
-	__threadfence_block();
-	shared_mem[thread] = a2;
-	__threadfence_block();
-	a2 = shared_mem[(thread&~(c - 1)) + (b2&(c - 1))];
-	__threadfence_block();
-	shared_mem[thread] = a3;
-	__threadfence_block();
-	a3 = shared_mem[(thread&~(c - 1)) + (b3&(c - 1))];
-
-	__threadfence_block();
-	shared_mem[thread] = buf;
-	__threadfence_block();
-}
-
-#endif
 
 
 __device__ __forceinline__ void round_lyra(uint2 s[4])
@@ -168,9 +81,7 @@ __device__ __forceinline__ void reduceDuplexRowSetupV2(uint2 state[4])
 	int i, j;
 	uint2 state1[Ncol][3], state0[Ncol][3], state2[3];
 
-#if __CUDA_ARCH__ > 500
 #pragma unroll
-#endif
 	for (int i = 0; i < Ncol; i++)
 	{
 #pragma unroll
@@ -559,15 +470,7 @@ void lyra2v2_gpu_hash_32_1(uint32_t threads, uint32_t startNounce, uint2 *output
 	} //thread
 }
 
-#if __CUDA_ARCH__ < 300
-__global__ __launch_bounds__(TPB20, 1)
-#elif __CUDA_ARCH__ < 500
-__global__ __launch_bounds__(TPB30, 1)
-#elif __CUDA_ARCH__ == 500
-__global__ __launch_bounds__(TPB50, 1)
-#else
 __global__ __launch_bounds__(TPB52, 1)
-#endif
 void lyra2v2_gpu_hash_32_2(uint32_t threads, uint32_t startNounce, uint64_t *outputHash)
 {
 	const uint32_t thread = blockDim.y * blockIdx.x + threadIdx.y;
@@ -626,7 +529,6 @@ void lyra2v2_gpu_hash_32_3(uint32_t threads, uint32_t startNounce, uint2 *output
 __host__
 void lyra2v2_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix)
 {
-	int dev_id = device_map[thr_id % MAX_GPUS];
 	// just assign the device pointer allocated in main loop
 	cudaMemcpyToSymbol(DState, &d_matrix, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice);
 }
@@ -634,14 +536,11 @@ void lyra2v2_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix)
 __host__
 void lyra2v2_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint64_t *g_hash, int order)
 {
-	int dev_id = device_map[thr_id % MAX_GPUS];
+	const uint32_t tpb = TPB52;
 
-	uint32_t tpb = TPB52;
-
-	if (cuda_arch[dev_id] > 500) tpb = TPB52;
-	else if (cuda_arch[dev_id] == 500) tpb = TPB50;
-	else if (cuda_arch[dev_id] >= 300) tpb = TPB30;
-	else if (cuda_arch[dev_id] >= 200) tpb = TPB20;
+	// the matrix lives in dynamic shared memory: memshift * Nrow * Ncol uint2
+	// per thread of the block
+	const size_t shared_mem = memshift * Nrow * Ncol * sizeof(uint2) * tpb;
 
 	dim3 grid1((threads * 4 + tpb - 1) / tpb);
 	dim3 block1(4, tpb >> 2);
@@ -649,12 +548,9 @@ void lyra2v2_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uin
 	dim3 grid2((threads + 64 - 1) / 64);
 	dim3 block2(64);
 
-	if (cuda_arch[dev_id] < 500)
-		cudaFuncSetCacheConfig(lyra2v2_gpu_hash_32_2, cudaFuncCachePreferShared);
-
 	lyra2v2_gpu_hash_32_1 << <grid2, block2 >> > (threads, startNounce, (uint2*)g_hash);
 
-	lyra2v2_gpu_hash_32_2 << <grid1, block1, 48 * sizeof(uint2) * tpb >> > (threads, startNounce, g_hash);
+	lyra2v2_gpu_hash_32_2 << <grid1, block1, shared_mem >> > (threads, startNounce, g_hash);
 
 	lyra2v2_gpu_hash_32_3 << <grid2, block2 >> > (threads, startNounce, (uint2*)g_hash);
 	//MyStreamSynchronize(NULL, order, thr_id);
