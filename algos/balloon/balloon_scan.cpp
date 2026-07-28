@@ -27,6 +27,10 @@ int scanhash_balloon(int thr_id, struct work *work, uint32_t max_nonce,
 	uint32_t _ALIGN(64) vhash[8];
 	uint32_t h_nounce[2] = { 0, 0 };
 
+	// benchmark-only: 0x0000ff still yields ~0 candidates at a kH/s rate
+	if (opt_benchmark)
+		ptarget[7] = 0x00ffff;
+
 	const uint32_t Htarg = ptarget[7];
 	const uint32_t first_nonce = pdata[19];
 	uint32_t n = first_nonce;
@@ -77,19 +81,24 @@ int scanhash_balloon(int thr_id, struct work *work, uint32_t max_nonce,
 		if (work_restart[thr_id].restart)
 			break;
 
-		// Re-hash the GPU candidate on the CPU; this is authoritative and avoids
-		// submitting GPU false positives. When the batch found nothing the GPU
-		// returns its last nonce, which fails fulltest() here and we continue.
-		be32enc(&endiandata[19], winning_nonce);
-		balloon_128_orig((unsigned char *)endiandata, (unsigned char *)vhash);
+		// CPU re-hash is authoritative: a kernel fault costs a local reject, not a bad share
+		if (winning_nonce != UINT32_MAX) {
+			be32enc(&endiandata[19], winning_nonce);
+			balloon_128_orig((unsigned char *)endiandata, (unsigned char *)vhash);
 
-		if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
-			work->nonces[0] = winning_nonce;
-			work_set_target_ratio(work, vhash);
-			work->valid_nonces = 1;
-			*hashes_done = winning_nonce - first_nonce + 1;
-			pdata[19] = winning_nonce;
-			return 1;
+			if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
+				work->nonces[0] = winning_nonce;
+				work_set_target_ratio(work, vhash);
+				work->valid_nonces = 1;
+				*hashes_done = winning_nonce - first_nonce + 1;
+				pdata[19] = winning_nonce;
+				return 1;
+			}
+			else if (vhash[7] > Htarg) {
+				gpu_increment_reject(thr_id);
+				if (!opt_quiet) gpulog(LOG_WARNING, thr_id,
+					"result for %08x does not validate on CPU!", winning_nonce);
+			}
 		}
 
 		n += batch;

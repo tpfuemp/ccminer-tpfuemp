@@ -5,8 +5,7 @@
 #include "cuda_helper.h"
 #include "balloon.h"
 #include "sha256.h"
-__global__ void cudaized_multi (struct hash_state *hs, uint64_t *prebuf_le, uint8_t *input, uint32_t len, uint8_t *output, uint32_t max_nonce, int gpuid, uint32_t *winning_nonce, uint32_t num_threads, uint32_t *device_target, uint32_t *is_winning, uint32_t num_blocks, uint8_t *sbufs);
-__global__ void conv_onethread(int n, int fn, const float * signal, const float * filter, float * retSignal);
+__global__ void cudaized_multi (struct hash_state *hs, uint64_t *prebuf_le, uint8_t *input, uint32_t len, uint8_t *output, uint32_t max_nonce, int gpuid, uint32_t *winning_nonce, uint32_t num_threads, uint32_t *device_target, uint32_t *is_winning, uint32_t num_blocks);
 __device__ void cuda_hash_state_mix(struct hash_state *s, int32_t mixrounds, uint64_t *prebuf_le);
 __device__ void device_sha256_osol(const __sha256_block_t blk, __sha256_hash_t ctx);
 __device__ void device_sha256_168byte(uint8_t *data, uint8_t *outhash);
@@ -31,10 +30,6 @@ void update_device_data(int gpuid);
 
 void update_device_data(int gpuid);
 static uint32_t *d_KNonce[MAX_GPUS];
-__constant__ uint64_t vpre[16];
-__constant__ uint64_t header[10];
-__constant__ uint32_t pTarget[8];
-__constant__ uint2 c_PaddedMessage80[10];
 __constant__ const uint32_t __sha256_init[] = {
 	0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
 	0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
@@ -53,15 +48,11 @@ uint32_t *device_target[20];
 uint32_t *device_is_winning[20];
 uint8_t *device_out[20];
 uint8_t *device_input[20];
-uint8_t *device_sbufs[20];
 
 uint8_t balloon_inited[20] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
 uint8_t syncmode_set[20] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
 
 void fill_prebuf(struct hash_state *s, int gpuid) {
-#ifdef DEBUG
-	printf("DEBUG GPU %d: entering fill_prebuf\n", gpuid);
-#endif
 	uint8_t host_prebuf[PREBUF_LEN];
 	if (!host_prebuf_filled[gpuid]) {
 		bitstream_fill_buffer(&s->bstream, host_prebuf, PREBUF_LEN);
@@ -78,9 +69,6 @@ void fill_prebuf(struct hash_state *s, int gpuid) {
 		update_device_data(gpuid);
 		//printf("Filled prebuf for GPU %d\n", gpuid);
 	}
-#ifdef DEBUG
-	printf("DEBUG GPU %d: leaving fill_prebuf\n", gpuid);
-#endif
 }
 
 uint32_t balloon_cpu_hash(int thr_id, unsigned char *input, uint32_t threads, uint32_t startNounce, uint32_t *h_nounce, uint32_t max_nonce)
@@ -112,13 +100,12 @@ uint32_t balloon_cpu_hash(int thr_id, unsigned char *input, uint32_t threads, ui
 	uint32_t host_winning_nonce = 0;
 	uint32_t host_is_winning = 0;
 
-	// device_target is uploaded once per work unit by balloon_setBlock_80();
-	// do NOT copy from the __constant__ pTarget symbol here (it is a device
-	// symbol and reads as garbage when used as a host source pointer).
+	// device_target is uploaded per work unit by balloon_setBlock_80(); never source
+	// it from a device symbol (reads as garbage on the host).
 
 	CUDA_SAFE_CALL(cudaMemcpy((void**)device_winning_nonce[thr_id], (void**)&host_winning_nonce, sizeof(uint32_t), cudaMemcpyHostToDevice));
 	CUDA_SAFE_CALL(cudaMemcpy((void**)device_is_winning[thr_id], (void**)&host_is_winning, sizeof(uint32_t), cudaMemcpyHostToDevice));
-	cudaized_multi << <num_blocks, num_threads >> > (device_s[thr_id], device_prebuf_le[thr_id], device_input[thr_id], 80, device_out[thr_id], max_nonce, thr_id, device_winning_nonce[thr_id], num_threads, device_target[thr_id], device_is_winning[thr_id], num_blocks, device_sbufs[thr_id]);
+	cudaized_multi << <num_blocks, num_threads >> > (device_s[thr_id], device_prebuf_le[thr_id], device_input[thr_id], 80, device_out[thr_id], max_nonce, thr_id, device_winning_nonce[thr_id], num_threads, device_target[thr_id], device_is_winning[thr_id], num_blocks);
 	
 	//<<<num_blocks, num_threads>>> 
 	CUDA_SAFE_CALL(cudaPeekAtLastError());
@@ -132,9 +119,9 @@ uint32_t balloon_cpu_hash(int thr_id, unsigned char *input, uint32_t threads, ui
 	hash_state_free(&s);
 
 	
-	if (host_is_winning == 0) {
-		host_winning_nonce = first_nonce + num_threads*num_blocks - 1;
-	}
+	// UINT32_MAX = no candidate (distinct from "found one that fails to re-verify")
+	if (host_is_winning == 0)
+		return UINT32_MAX;
 
 	return host_winning_nonce;
 }
@@ -160,32 +147,18 @@ void balloon_gpu_init(int thr_id)
 	CUDA_SAFE_CALL(cudaMalloc((void**)&device_out[thr_id], BLOCK_SIZE * sizeof(uint8_t)));
 	CUDA_SAFE_CALL(cudaMalloc((void**)&device_input[thr_id], /*len*/80));
 
-	//CUDA_SAFE_CALL(cudaMalloc((void**)&device_sbufs[thr_id], num_threads*num_blocks * 4096 * BLOCK_SIZE));
 }
 
 __host__ void balloon_setBlock_80(int thr_id, void *pdata, const void *pTargetIn)
 {
-	unsigned char PaddedMessage[80];
-	memcpy(PaddedMessage, pdata, 80);
 
-	//CUDA_SAFE_CALL(cudaMemcpy(pTarget[thr_id], pTargetIn, 8 * sizeof(uint32_t), cudaMemcpyHostToDevice));
-	CUDA_SAFE_CALL(cudaMemcpyToSymbol(pTarget, pTargetIn, 8 * sizeof(uint32_t), 0, cudaMemcpyHostToDevice));
 	// The kernel compares against the device_target buffer (not the __constant__
 	// pTarget symbol), so upload the real host target here.
 	CUDA_SAFE_CALL(cudaMemcpy(device_target[thr_id], pTargetIn, 8 * sizeof(uint32_t), cudaMemcpyHostToDevice));
 
-	//CUDA_SAFE_CALL(cudaMemcpy(c_PaddedMessage80[thr_id], PaddedMessage, 10 * sizeof(uint64_t), cudaMemcpyHostToDevice));
-	CUDA_SAFE_CALL(cudaMemcpyToSymbol(c_PaddedMessage80, PaddedMessage, 10 * sizeof(uint64_t), 0, cudaMemcpyHostToDevice));
 	if (opt_debug)
 		CUDA_SAFE_CALL(cudaDeviceSynchronize());
 }
-/*__global__	__launch_bounds__(512)
-void balloon_gpu_hash_80(uint32_t threads, uint32_t startNounce, uint32_t *const __restrict__ resNounce)
-{
-
-
-
-}*/
 
 void update_device_data(int thr_id) {
 
@@ -194,8 +167,7 @@ void update_device_data(int thr_id) {
 
 }
 
-//#define CUDA_OUTPUT
-__global__ void cudaized_multi(struct hash_state *hs, uint64_t *prebuf_le, uint8_t *input, uint32_t len, uint8_t *output, uint32_t max_nonce, int gpuid, uint32_t *winning_nonce, uint32_t num_threads, uint32_t *device_target, uint32_t *is_winning, uint32_t num_blocks, uint8_t *sbufs) {
+__global__ void cudaized_multi(struct hash_state *hs, uint64_t *prebuf_le, uint8_t *input, uint32_t len, uint8_t *output, uint32_t max_nonce, int gpuid, uint32_t *winning_nonce, uint32_t num_threads, uint32_t *device_target, uint32_t *is_winning, uint32_t num_blocks) {
 
 	int64_t s_cost = (int64_t)128;
 	int32_t mixrounds = (int32_t)4;
@@ -207,18 +179,11 @@ __global__ void cudaized_multi(struct hash_state *hs, uint64_t *prebuf_le, uint8
 		asm("exit;");
 	}
 	uint8_t local_input[80];
-#ifdef CUDA_OUTPUT
-	uint8_t local_output[32];
-#endif
 	struct hash_state local_s;
 	memcpy(local_input, input, len);
 	memcpy(&local_s, hs, sizeof(struct hash_state));
 
-#ifdef LOWMEM
-	uint8_t *local_sbuf = sbufs + id * 4096 * BLOCK_SIZE;
-#else
 	uint8_t local_sbuf[4096 * BLOCK_SIZE];
-#endif
 
 	// No need to seed local_sbuf from hs->buffer: cuda_hash_state_fill() below
 	// rewrites every block (block 0 via SHA-256, blocks 1..n via cuda_expand)
@@ -230,27 +195,13 @@ __global__ void cudaized_multi(struct hash_state *hs, uint64_t *prebuf_le, uint8
 	local_s.counter = 0;
 	cuda_hash_state_fill(&local_s, local_input, len, mixrounds, s_cost);
 	cuda_hash_state_mix(&local_s, mixrounds, prebuf_le);
-#ifdef CUDA_OUTPUT
-	cuda_hash_state_extract(&local_s, local_output);
-	if (((uint32_t*)local_output)[7] < device_target[7]) {
-#else
 	if (((uint32_t*)(local_sbuf + (4095 << 5)))[7] < device_target[7]) {
-#endif
 		// Assume winning nonce
-#ifdef DEBUG
-		printf("[Device %d] Winning nonce: %u\n", gpuid, nonce);
-#endif
 		*winning_nonce = nonce;
 		*is_winning = 1;
-#ifdef CUDA_OUTPUT
-		memcpy(output, local_output, 32);
-#endif
 		__threadfence();
 		asm("exit;");
 	}
-#ifdef DEBUG_CUDA
-	printf("[Device %d] leaving cuda\n", gpuid);
-#endif
 	}
 
 __device__ void cuda_expand(uint64_t *counter, uint8_t *buf, size_t blocks_in_buf) {
@@ -364,9 +315,6 @@ __device__ void cuda_hash_state_mix(struct hash_state *s, int32_t mixrounds, uin
 		}
 		//s->has_mixed = true;
 	}
-#ifdef DEBUG_CUDA
-	if (buf - prebuf_le > 49152) printf("prebuf_le max used: %d, mixrounds = %d, n_blocks = %d\n", buf - prebuf_le, mixrounds, n_blocks);
-#endif
 }
 
 __device__ void device_sha256_168byte(uint8_t *data, uint8_t *outhash) {
