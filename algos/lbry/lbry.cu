@@ -96,6 +96,8 @@ extern "C" int scanhash_lbry(int thr_id, struct work *work, uint32_t max_nonce, 
 	if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
 	if (opt_benchmark) {
+		// screened as a 64-bit compare over ptarget[6..7] (benchmark target is all
+		// zero), so ~1 candidate per 2.9e8 hashes — the CPU re-verify is a real gate
 		ptarget[7] = 0xf;
 	}
 
@@ -112,11 +114,6 @@ extern "C" int scanhash_lbry(int thr_id, struct work *work, uint32_t max_nonce, 
 
 		cuda_get_arch(thr_id);
 
-		if (CUDART_VERSION == 6050) {
-			applog(LOG_ERR, "This lbry kernel is not compatible with CUDA 6.5!");
-			proper_exit(EXIT_FAILURE);
-		}
-
 		CUDA_SAFE_CALL(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)));
 		CUDA_LOG_ERROR();
 
@@ -129,10 +126,13 @@ extern "C" int scanhash_lbry(int thr_id, struct work *work, uint32_t max_nonce, 
 
 	lbry_sha256_setBlock_112_merged(endiandata);
 
-	cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
-
 	do {
 		uint32_t resNonces[2] = { UINT32_MAX, UINT32_MAX };
+
+		// arm the slots every launch: the kernel only writes a found nonce, so a
+		// candidate that passed the screen but failed fulltest would otherwise be
+		// re-reported against the next startNonce as a phantom "does not validate"
+		cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
 
 		// Hash with CUDA (single fused kernel)
 		lbry_merged(thr_id, pdata[LBC_NONCE_OFT32], throughput, d_resNonce[thr_id], AS_U64(&ptarget[6]));
@@ -184,7 +184,6 @@ extern "C" int scanhash_lbry(int thr_id, struct work *work, uint32_t max_nonce, 
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
 				gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", resNonces[0]);
-				cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
 			}
 		}
 

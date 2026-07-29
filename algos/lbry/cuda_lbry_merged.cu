@@ -871,7 +871,9 @@ uint32_t F5(const uint32_t x, const uint32_t y, const uint32_t z) {
 // END OF RIPEMD MACROS----------------------------------------------------------------------
 
 __global__
-__launch_bounds__(768,1) /* will force 64 regs max on SM 3+ */
+/* Occupancy is not this kernel's limit — it is latency-bound, so shapes that raise
+ * residency (more blocks/SM, tighter register caps) do not help. */
+__launch_bounds__(768,1)
 void gpu_lbry_merged(const uint32_t threads, const uint32_t startNonce, uint32_t *resNonces, const uint64_t target64)
 {
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);

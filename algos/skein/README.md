@@ -33,7 +33,32 @@ Per-file CUDA settings preserved: `skein.cu` `MaxRegCount=64`,
 `--maxrregcount=64` rule was repointed to `algos/skein/`. All three files were
 already in both build systems.
 
+## Dead pre-sm_50 path removed
+
+`skein.cu` carried a second, self-contained SHA-256 implementation plus a `d_hash`
+buffer and `cuda_check_cpu_*` wiring, selected by `sm5 = (device_sm >= 500)`. The
+build floor is sm_61, so that branch was unreachable and was deleted along with
+the `sm5`/`checkSecnonce` plumbing.
+
+That also fixed a dropped share: `skeincoin_hash_sm5` reports a *second* candidate
+per batch, but its only consumer sat behind
+`checkSecnonce = (have_stratum || have_longpoll) && !sm5`, never true on a
+supported card. The driver now CPU-re-verifies that nonce and submits it when it
+passes; `work->nonces[1]` is armed before each launch, since the kernel only
+writes a slot on a find.
+
+## Constants
+
+SHA-256's round constants and IV come from `cuda/sha256_device.cuh`. Kept local:
+`sha256_endingTable`, which folds K+W for the fully constant second block and so
+is strictly less work than a generic transform.
+
+`TPB` was swept: the kernel needs 40 registers with no spills, so every size up to
+768 already runs at full occupancy and they all measure alike. Only 1024 is worse,
+being the one shape that both drops occupancy and raises the register count.
+
 ## Validation
 
-Rebuild + benchmark re-validation owed (relocation = rename; correctness follows
-from the unchanged diff). Both algos CPU-re-verify candidates before submit.
+Full rebuild, then benchmark and live pool: accepted, 0 rejects, 0 "does not
+validate", and the benchmark CPU-re-verify fires with 0 failures. Both algos
+CPU-re-verify candidates before submit.

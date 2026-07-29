@@ -22,7 +22,33 @@ project include path. Includes are project-include-dir (`miner.h`,
 `cuda_helper.h`, `sph/sph_groestl.h`, `openssl/sha.h`) with no parent-relative
 (`../`) includes, so the move is source-transparent.
 
+## Bug fixed: the candidate screen was not a 64-bit compare
+
+`myriadgroestl_gpu_hash_sha` screened with
+`out_state[7] <= pTarget[1] && out_state[6] <= pTarget[0]`, which also demands the
+low word be under target when the high word is already *strictly* below it. That
+discards a `t1*(2^32-t0)/(t1*2^32+t0)` share of valid nonces: nil at difficulty
+>= 1, where the target's top word is zero and the two forms coincide, but
+substantial at the sub-1 difficulties pools hand out. Under `--benchmark` it
+additionally demanded `out_state[6] == 0`, leaving the host re-verify unreachable —
+so this algo's "0 failures" benchmark result had never meant anything. Now a proper
+64-bit compare; the host re-verifies every candidate, so a loose screen is safe by
+construction.
+
+## Constants
+
+SHA-256's round constants come from `cuda/sha256_device.cuh`.
+`myr_sha256_gpu_constantTable2` stays local: it is the algo-specific K+W fold for
+the fully constant second block, expanded at init.
+
+## Profile
+
+Groestl dominates; the SHA-256 kernel is a small remainder, so optimizing that side
+cannot pay off. Groestl-512 has no host midstate to exploit either — its block is
+1024 bits, so an 80-byte header pads to exactly one block with the nonce inside it.
+
 ## Validation
 
-Rebuild + benchmark re-validation owed (relocation = rename; correctness follows
-from the unchanged diff). The host reference re-verifies GPU candidates.
+Full rebuild, then benchmark and live pool across a stratum difficulty change:
+accepted, 0 rejects, 0 "does not validate", and the benchmark CPU-re-verify now
+fires with 0 failures. The host reference re-verifies GPU candidates.
