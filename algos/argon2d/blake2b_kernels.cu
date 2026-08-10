@@ -188,7 +188,7 @@ __device__ void blake2b_compress_4w(
 __device__ void computeInitialHash(
     const uint32_t* input, uint32_t* buffer,
     uint32_t nonce, uint32_t mcost, uint32_t lanes, uint32_t passes,
-    uint32_t version)
+    uint32_t version, uint32_t type)
 {
 
     uint64x8 state;
@@ -206,11 +206,15 @@ __device__ void computeInitialHash(
     state.s6 = blake2b_Init[6];
     state.s7 = blake2b_Init[7];
 
+    /* H0 pre-hash input, in argon2ref/core.c initial_hash() order:
+     * lanes, outlen, m_cost, t_cost, version, type, pwdlen, pwd,
+     * saltlen, salt, secretlen(0), adlen(0). */
     buffer[0] = lanes;
     buffer[1] = ALGO_OUTLEN;
     buffer[2] = mcost;
     buffer[3] = passes;
     buffer[4] = version;
+    buffer[5] = type;
     buffer[6] = 80;
 
 #pragma unroll
@@ -331,21 +335,23 @@ __device__ void fillFirstBlock(struct block* memory, uint32_t* buffer,
 
 __global__ void argon2_initialize(struct block* memory, uint32_t startNonce,
     uint32_t mcost, uint32_t lanes, uint32_t passes, uint32_t version,
-    uint32_t total_blocks)
+    uint32_t type, uint32_t total_blocks)
 {
 
     uint32_t buffer[32];
     const uint32_t nonce = (blockIdx.x*blockDim.y+threadIdx.y) + startNonce;
 
-    computeInitialHash(d_data, buffer, nonce, mcost, lanes, passes, version);
+    computeInitialHash(d_data, buffer, nonce, mcost, lanes, passes, version, type);
     fillFirstBlock(memory, buffer, lanes, total_blocks);
 
 }
 
+/* digests: optional 32-byte-per-job output, NULL in normal mining; used by
+ * argon2d_gpu_differential() to compare the GPU against the CPU reference. */
 __global__ void argon2_finalize(
     block* memory, uint32_t startNonce,
     uint32_t target, uint32_t* resNonces,
-    uint32_t total_blocks)
+    uint32_t total_blocks, uint32_t* digests)
 {
 
     extern __shared__ uint32_t input_t[];
@@ -381,6 +387,9 @@ __global__ void argon2_finalize(
     blake2b_compress_4w(&state, &input_64[0], 9, idx, true, 4);
 
     input_64[idx] = state.a;
+
+    if (digests != NULL)
+        ((uint64_t*)digests)[jobId * 4 + idx] = state.a;
 
     __syncthreads();
 

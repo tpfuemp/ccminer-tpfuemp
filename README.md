@@ -42,6 +42,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `argon2d1000` | Zero Dynamics Cash |
 | `argon2d4096` | Argentum / Myriad (XMY) |
 | `argon2d16000` | Alterdot (ADOT) |
+| `argon2id1024` | Bitweb (BTW) |
 | `balloon` | Balloon hash |
 | `bastion` | Hefty bastion |
 | `bitcore` (`timetravel10`) | Timetravel-10 |

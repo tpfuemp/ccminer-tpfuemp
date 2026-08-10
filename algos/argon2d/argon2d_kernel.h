@@ -25,6 +25,10 @@
 enum algo_constants {
     ARGON2_BLOCK_SIZE = 1024,
     ARGON2_QWORDS_IN_BLOCK = ARGON2_BLOCK_SIZE / 8,
+    /* blocks covered by one next_addresses() call.
+     * ARGON2_SYNC_POINTS must NOT be added here: it is a macro in
+     * argon2ref/argon2.h, which argon2d.cu includes. */
+    ARGON2_ADDRESSES_IN_BLOCK = 128,
     ARGON2_PREHASH_DIGEST_LENGTH = 64,
     ARGON2_PREHASH_SEED_LENGTH = 72,
     BLAKE_BLOCKBYTES = 128,
@@ -39,23 +43,29 @@ enum algo_params {
     ALGO_OUTLEN = 32
 };
 
-/* Per-coin Argon2d geometry. All supported coins share OUTLEN=32; m_cost /
- * lanes / t_cost / version vary, so the kernels take the geometry as runtime
- * arguments (the heavy argon2_fill kernel always did). Note the Argon2
- * version is hashed into H0 by argon2_initialize; the v1.0-vs-v1.3 overwrite
- * rule in the fill core only differs on passes after the first, so the fill
- * kernel is version-correct for any t_cost=1 variant and for v0x10 ones. */
+/* Argon2 type. Same numbering as argon2ref's Argon2_d/_i/_id, renamed because
+ * the device files do not include argon2ref/argon2.h. */
+enum argon2_kernel_type {
+    ARGON2_D  = 0,
+    ARGON2_I  = 1,
+    ARGON2_ID = 2
+};
+
+/* Per-coin Argon2 geometry, passed to the kernels as runtime arguments so all
+ * variants are GPU-correct in one binary. version and type each select a
+ * branch in argon2_fill; both are warp-uniform, so they cost nothing. */
 struct argon2d_variant {
     uint32_t mcost;          /* m_cost in KiB */
     uint32_t lanes;          /* degree of parallelism */
     uint32_t passes;         /* t_cost */
-    uint32_t version;        /* 0x10 or 0x13 (t_cost=1 only) */
+    uint32_t version;        /* 0x10 or 0x13 */
+    uint32_t type;           /* ARGON2_D or ARGON2_ID */
     uint32_t total_blocks;   /* (mcost / (4*lanes)) * 4*lanes */
     uint32_t segment_blocks; /* total_blocks / (4*lanes) */
 };
 
-#define ARGON2D_VARIANT_INIT(mcost, lanes, passes, version) \
-    { (mcost), (lanes), (passes), (version), \
+#define ARGON2D_VARIANT_INIT(mcost, lanes, passes, version, type) \
+    { (mcost), (lanes), (passes), (version), (type), \
       ((mcost) / (4 * (lanes))) * 4 * (lanes), (mcost) / (4 * (lanes)) }
 
 struct partialState {
@@ -166,16 +176,16 @@ void g_shuffle(
 __global__ void argon2_initialize(
         struct block* memory, uint32_t startNonce,
         uint32_t mcost, uint32_t lanes, uint32_t passes,
-        uint32_t version, uint32_t total_blocks);
+        uint32_t version, uint32_t type, uint32_t total_blocks);
 
 __global__ void argon2_fill(
         struct block_g *memory, uint32_t passes, uint32_t lanes,
-        uint32_t segment_blocks);
+        uint32_t segment_blocks, uint32_t version, uint32_t type);
 
 __global__ void argon2_finalize(
         block* memory, uint32_t startNonce,
         uint32_t target, uint32_t* resNonces,
-        uint32_t total_blocks);
+        uint32_t total_blocks, uint32_t* digests);
 
 
 __host__ void set_data(const void* data);

@@ -11,15 +11,12 @@
 #include <iostream>
 #endif
 
-#define ARGON2_D  0
-#define ARGON2_I  1
-#define ARGON2_ID 2
-
+/* The other ARGON2_* constants come from argon2d_kernel.h. These three cannot:
+ * argon2ref/argon2.h, which argon2d.cu includes, declares the versions as an
+ * enum and ARGON2_SYNC_POINTS as a macro, so moving either to the shared
+ * header breaks that translation unit. */
 #define ARGON2_VERSION_10 0x10
 #define ARGON2_VERSION_13 0x13
-
-#define ARGON2_BLOCK_SIZE 1024
-#define ARGON2_QWORDS_IN_BLOCK (ARGON2_BLOCK_SIZE / 8)
 #define ARGON2_SYNC_POINTS 4
 
 #define THREADS_PER_LANE 32
@@ -361,18 +358,38 @@ struct ref {
 __device__ void argon2_core(
         struct block_g *memory, struct block_g *mem_curr,
         struct block_th *prev, struct block_th *tmp,struct block_g *c,
-        uint32_t lanes, uint32_t thread, uint32_t pass,
+        uint32_t lanes, uint32_t thread, uint32_t pass, uint32_t version,
         uint32_t ref_index, uint32_t ref_lane,uint32_t curr_index,uint32_t lane)
 {
     struct block_g *mem_ref = memory + ref_index * lanes + ref_lane;
 
-    if (ref_index<8 && ref_index > 1){
-        shared_load_block_xor(prev, &c[ref_lane * ARGON2_SHARED_BLOCKS_PER_LANE + ref_index-2], thread);
-    }else{
-        load_block_xor(prev, mem_ref, thread);
-    }
+    /* v1.3 on passes after the first: B[i] = B[i] XOR G(B[i-1], B[ref]),
+     * where v1.0 overwrites. Dead for every t_cost=1 or v0x10 variant.
+     * The old B[i] must be read the way the store side below writes it -
+     * columns 2..7 live only in the shared cache, and their global slots
+     * hold garbage from argon2_initialize (16 first-blocks at lanes=1). */
+    if (version != ARGON2_VERSION_10 && pass != 0) {
+        if (curr_index < 8 && curr_index > 1)
+            shared_load_block(tmp, &c[lane * ARGON2_SHARED_BLOCKS_PER_LANE + curr_index-2], thread);
+        else
+            load_block(tmp, mem_curr, thread);
 
-    move_block(tmp, prev);
+        if (ref_index<8 && ref_index > 1){
+            shared_load_block_xor(prev, &c[ref_lane * ARGON2_SHARED_BLOCKS_PER_LANE + ref_index-2], thread);
+        }else{
+            load_block_xor(prev, mem_ref, thread);
+        }
+
+        xor_block(tmp, prev);
+    } else {
+        if (ref_index<8 && ref_index > 1){
+            shared_load_block_xor(prev, &c[ref_lane * ARGON2_SHARED_BLOCKS_PER_LANE + ref_index-2], thread);
+        }else{
+            load_block_xor(prev, mem_ref, thread);
+        }
+
+        move_block(tmp, prev);
+    }
 
     shuffle_block(prev, thread);
 
@@ -395,30 +412,50 @@ __device__ void argon2_core(
 
 __device__ void argon2_step(
         struct block_g *memory, struct block_g *mem_curr,
-        struct block_th *prev, struct block_th *tmp, struct block_g *c,
+        struct block_th *prev, struct block_th *tmp, struct block_th *addr,
+        struct block_g *c,
         uint32_t lanes, uint32_t segment_blocks, uint32_t thread,
         uint32_t *thread_input, uint32_t lane, uint32_t pass, uint32_t slice,
-        uint32_t offset)
+        uint32_t offset, uint32_t version, uint32_t type)
 {
     uint32_t ref_index, ref_lane;
 
+    if (type == ARGON2_I || (type == ARGON2_ID && pass == 0 &&
+            slice < ARGON2_SYNC_POINTS / 2)) {
+        /* Data-independent addressing: J1/J2 come from a generated address
+         * block, not from the previous block. Segments longer than
+         * ARGON2_ADDRESSES_IN_BLOCK regenerate mid-segment. */
+        uint32_t addr_index = offset % ARGON2_ADDRESSES_IN_BLOCK;
+        if (addr_index == 0) {
+            if (thread == 6) {
+                ++*thread_input;
+            }
+            next_addresses(addr, tmp, *thread_input, thread);
+        }
 
+        uint32_t thr = addr_index % THREADS_PER_LANE;
+        uint32_t idx = addr_index / THREADS_PER_LANE;
 
-    uint64_t v = u64_shuffle(prev->a, 0);
-    ref_index = u64_lo(v);
-    ref_lane  = u64_hi(v);
-
+        uint64_t v = block_th_get(addr, idx);
+        v = u64_shuffle(v, thr);
+        ref_index = u64_lo(v);
+        ref_lane  = u64_hi(v);
+    } else {
+        uint64_t v = u64_shuffle(prev->a, 0);
+        ref_index = u64_lo(v);
+        ref_lane  = u64_hi(v);
+    }
 
     compute_ref_pos(lanes, segment_blocks, pass, lane, slice, offset, &ref_lane, &ref_index);
 
-    argon2_core(memory, mem_curr, prev, tmp,c, lanes, thread, pass, ref_index, ref_lane,slice*segment_blocks+offset,lane);
+    argon2_core(memory, mem_curr, prev, tmp,c, lanes, thread, pass, version, ref_index, ref_lane,slice*segment_blocks+offset,lane);
 }
 
 
 
 __global__ void argon2_fill(
         struct block_g *memory, uint32_t passes, uint32_t lanes,
-        uint32_t segment_blocks)
+        uint32_t segment_blocks, uint32_t version, uint32_t type)
 {
     uint32_t job_id = blockIdx.z * blockDim.z + threadIdx.z;
     uint32_t lane   = threadIdx.y;
@@ -428,12 +465,44 @@ __global__ void argon2_fill(
 
     memory += (size_t)job_id * lanes * lane_blocks;
 
-    struct block_th prev, tmp;
+    struct block_th prev, addr, tmp;
 
     /* lanes * ARGON2_SHARED_BLOCKS_PER_LANE blocks, sized at launch. */
     extern __shared__ block_g c[];
 
+    /* Address-generator seed, one word per lane-thread: 0=pass, 1=lane,
+     * 2=slice, 3=memory blocks, 4=passes, 5=type, 6=address-block counter.
+     * pass and slice are 0 here, so threads 0 and 2 take the default. */
     uint32_t thread_input;
+
+    if (type == ARGON2_I || type == ARGON2_ID) {
+        switch (thread) {
+        case 1:
+            thread_input = lane;
+            break;
+        case 3:
+            thread_input = lanes * lane_blocks;
+            break;
+        case 4:
+            thread_input = passes;
+            break;
+        case 5:
+            thread_input = type;
+            break;
+        default:
+            thread_input = 0;
+            break;
+        }
+
+        /* Offsets 0 and 1 are already filled, so argon2_step's
+         * addr_index==0 path never runs for them: seed the first block. */
+        if (segment_blocks > 2) {
+            if (thread == 6) {
+                ++thread_input;
+            }
+            next_addresses(&addr, &tmp, thread_input, thread);
+        }
+    }
 
     struct block_g *mem_lane = memory + lane;
 
@@ -454,15 +523,34 @@ __global__ void argon2_fill(
                 }
 
                 argon2_step(
-                            memory, mem_curr, &prev, &tmp,c,lanes,
+                            memory, mem_curr, &prev, &tmp, &addr, c, lanes,
                             segment_blocks, thread, &thread_input, lane, pass,
-                            slice, offset);
+                            slice, offset, version, type);
 
                 mem_curr += lanes;
             }
 
             __syncthreads();
 
+            if (type == ARGON2_I || type == ARGON2_ID) {
+                if (thread == 2) {
+                    ++thread_input;   /* next slice */
+                }
+                if (thread == 6) {
+                    thread_input = 0; /* restart the address-block counter */
+                }
+            }
+        }
+
+        /* Argon2id stops using addresses after pass 0, so only Argon2i
+         * advances the pass counter. */
+        if (type == ARGON2_I) {
+            if (thread == 0) {
+                ++thread_input;
+            }
+            if (thread == 2) {
+                thread_input = 0;
+            }
         }
 
         mem_curr = mem_lane;

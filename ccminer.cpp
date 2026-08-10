@@ -265,6 +265,7 @@ Options:\n\
 			argon2d1000	Zero Dynamics Cash\n\
 			argon2d4096	Argentum / Myriad (XMY)\n\
 			argon2d16000	Alterdot\n\
+			argon2id1024	Bitweb (BTW)\n\
 			balloon		Balloon hash\n\
 			evohash		EvoAI\n\
 			rinhash		RinHash (Blake3+Argon2d+SHA3-256)\n\
@@ -1950,6 +1951,7 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_ARGON2D1000:
 		case ALGO_ARGON2D4096:
 		case ALGO_ARGON2D16000:
+		case ALGO_ARGON2ID1024:
 		case ALGO_HMQ1725:
 		case ALGO_JACKPOT:
 		case ALGO_JHA:
@@ -2586,6 +2588,7 @@ static void *miner_thread(void *userdata)
 			case ALGO_ARGON2D1000:
 			case ALGO_ARGON2D4096:
 			case ALGO_ARGON2D16000:
+			case ALGO_ARGON2ID1024:
 			case ALGO_NEOSCRYPT:
 			case ALGO_XAYA:
 			case ALGO_SIB:
@@ -2776,6 +2779,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_ARGON2D16000:
 			rc = scanhash_argon2d16000(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_ARGON2ID1024:
+			rc = scanhash_argon2id1024(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_BALLOON:
 			rc = scanhash_balloon(thr_id, &work, max_nonce, &hashes_done);
