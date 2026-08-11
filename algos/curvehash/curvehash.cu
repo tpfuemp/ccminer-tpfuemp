@@ -28,10 +28,9 @@ extern "C" int  curvehash_host_reverify(int thr_id, const uint32_t *pdata, uint3
                                         const uint32_t *ptarget, uint32_t *hash);
 extern "C" void curvehash_host_free(int thr_id);
 
-/* tpb=512 with a 128-register cap (__launch_bounds__(512,1)) lifts occupancy
- * ~23%->~33% on sm_86, which best hides the per-round field inversion (the
- * kernel is register/occupancy-bound, not inversion-count-bound — a warp
- * Montgomery batch inversion was measured slower). Worth ~+8-10% vs tpb 64. */
+/* 128 regs, 512 threads/SM, ~33% occupancy on sm_86. Measured optimal against
+ * 384/448/640: occupancy pays up to ~512 threads/SM and then saturates, and the
+ * 32 B spill it costs is cheaper than the residency any wider shape gives up. */
 #define CURVE_TPB 512
 
 __global__ void __launch_bounds__(CURVE_TPB, 1)
@@ -61,11 +60,98 @@ curvehash_scan_kernel(uint32_t threads, uint32_t startNonce,
     if (w7 <= target7) atomicMin(resNonce, nonce);
 }
 
-__global__ void curvehash_selftest_kernel(const uint8_t *gtable, uint8_t *out)
+/* Hash n headers (80 B each) into n digests (32 B each), so the host can run
+ * several self-test vectors in one launch. */
+__global__ void curvehash_selftest_kernel(const uint8_t *gtable, const uint8_t * __restrict__ hdrs,
+                                          int n, uint8_t *out)
 {
-    uint8_t hdr[80];
-    for (int i = 0; i < 80; i++) hdr[i] = (uint8_t)i;
-    curvehash_full(out, hdr, gtable);
+    int t = blockIdx.x * blockDim.x + threadIdx.x;
+    if (t >= n) return;
+    curvehash_full(out + t * 32, hdrs + t * 80, gtable);
+}
+
+/*
+ * One-time device self-test, fail-closed: a GPU that cannot reproduce the
+ * consensus hash can only produce local rejects, so refuse to start. Four legs,
+ * reported separately so a failure points at the right layer:
+ *   tblbuild - sha256d of the host-built G-table vs a known constant (all 8192
+ *              entries, not a sample; a corrupt entry causes only RARE wrong
+ *              hashes, which no digest KAT can detect)
+ *   tblup    - the table read back from device memory vs the host buffer
+ *   kat      - three header/digest vectors from an independent reference
+ *              implementation: the consensus vector plus all-00 and all-ff
+ *   neg      - a flipped header bit must change the digest, computed on the
+ *              device, so the comparison cannot be vacuous
+ */
+static bool curvehash_selftest_gpu(int thr_id, const uint8_t *d_gtable,
+                                  const unsigned char *h_gtable)
+{
+    /* Digests from an independent reference implementation of curvehash. */
+    static const uint8_t kat[3][32] = {
+      { 0xb2,0x64,0x54,0x16,0xce,0x97,0xcf,0x39,0x35,0x59,0x2d,0x82,0xea,0xeb,0xf2,0x52,
+        0x12,0x00,0x8e,0xbf,0x04,0xf6,0x23,0x73,0x20,0x3a,0x71,0x53,0xfa,0x1e,0x14,0x66 },
+      { 0x6d,0xbb,0x54,0x4b,0x3f,0xb5,0x12,0x83,0x78,0x82,0x79,0xb1,0xbf,0x37,0x01,0xf2,
+        0x5d,0x19,0x9d,0x63,0x73,0x2f,0x08,0x42,0x03,0xdf,0x04,0xb7,0x20,0xa4,0xe0,0x3d },
+      { 0x07,0x3f,0x04,0xc8,0xbd,0x37,0x98,0x77,0x84,0xd4,0x8c,0x99,0x9c,0xea,0x20,0x5e,
+        0x5b,0x3d,0xb4,0x0e,0xfc,0x02,0x3c,0xbd,0x8d,0xb5,0x25,0x5d,0x27,0xc0,0x05,0xe5 }
+    };
+    /* sha256d of the whole 512 KB table, from an independent implementation of
+     * the same table (so this also cross-checks libsecp256k1's build of it). */
+    static const uint8_t tbl_sha256d[32] = {
+        0x05,0xee,0x91,0x6f,0x8e,0xc8,0xb4,0xf1,0x4d,0x7c,0xd3,0xa3,0x71,0x0b,0xb5,0xff,
+        0xc6,0x55,0x3c,0x10,0xc0,0x1c,0x11,0x2d,0xcb,0xb6,0x5c,0x06,0xe6,0xb1,0x6d,0x91
+    };
+    const int NV = 4;                     /* 3 KAT vectors + 1 negative vector */
+    uint8_t h_hdr[NV * 80], h_out[NV * 32];
+    uint8_t *d_hdr = NULL, *d_out = NULL;
+
+    /* v0 = 0x00..0x4f, v1 = all zero, v2 = all ff, v3 = v0 with one bit flipped. */
+    for (int i = 0; i < 80; i++) {
+        h_hdr[i]        = (uint8_t)i;
+        h_hdr[80 + i]   = 0x00;
+        h_hdr[160 + i]  = 0xff;
+        h_hdr[240 + i]  = (uint8_t)i;
+    }
+    h_hdr[240 + 40] ^= 0x01;
+
+    CUDA_SAFE_CALL(cudaMalloc(&d_hdr, sizeof(h_hdr)));
+    CUDA_SAFE_CALL(cudaMalloc(&d_out, sizeof(h_out)));
+    CUDA_SAFE_CALL(cudaMemcpy(d_hdr, h_hdr, sizeof(h_hdr), cudaMemcpyHostToDevice));
+    CUDA_SAFE_CALL(cudaMemset(d_out, 0, sizeof(h_out)));
+
+    curvehash_selftest_kernel <<< 1, NV >>> (d_gtable, d_hdr, NV, d_out);
+
+    CUDA_SAFE_CALL(cudaMemcpy(h_out, d_out, sizeof(h_out), cudaMemcpyDeviceToHost));
+    cudaFree(d_hdr);
+    cudaFree(d_out);
+
+    /* tbl leg: the host build (all 8192 entries, via sha256d) and the upload
+     * (byte-for-byte readback of the full 512 KB). */
+    unsigned char dig[32];
+    unsigned char *rb = (unsigned char *)malloc(CURVE_GTABLE_BYTES);
+    sha256d(dig, h_gtable, CURVE_GTABLE_BYTES);
+    const bool tbl_build_ok = (memcmp(dig, tbl_sha256d, 32) == 0);
+    CUDA_SAFE_CALL(cudaMemcpy(rb, d_gtable, CURVE_GTABLE_BYTES, cudaMemcpyDeviceToHost));
+    const bool tbl_upload_ok = (memcmp(rb, h_gtable, CURVE_GTABLE_BYTES) == 0);
+    free(rb);
+    const bool tbl_ok = tbl_build_ok && tbl_upload_ok;
+    const bool kat0_ok = (memcmp(h_out,       kat[0], 32) == 0);
+    const bool kat1_ok = (memcmp(h_out + 32,  kat[1], 32) == 0);
+    const bool kat2_ok = (memcmp(h_out + 64,  kat[2], 32) == 0);
+    const bool neg_ok  = (memcmp(h_out + 96,  kat[0], 32) != 0);
+
+    if (!(tbl_ok && kat0_ok && kat1_ok && kat2_ok && neg_ok)) {
+        if (!tbl_build_ok)
+            gpulog(LOG_ERR, thr_id, "curvehash self-test: host-built G-table checksum mismatch "
+                                    "- libsecp256k1 table build is broken, not the kernel");
+        if (!tbl_upload_ok)
+            gpulog(LOG_ERR, thr_id, "curvehash self-test: device G-table != host G-table "
+                                    "- the 512 KB upload is broken, not the kernel");
+        gpulog(LOG_ERR, thr_id, "curvehash GPU self-test FAILED (tblbuild %d tblup %d kat %d%d%d neg %d)",
+               (int)tbl_build_ok, (int)tbl_upload_ok, (int)kat0_ok, (int)kat1_ok, (int)kat2_ok, (int)neg_ok);
+        return false;
+    }
+    return true;
 }
 
 static void curvehash_init(int thr_id)
@@ -79,18 +165,14 @@ static void curvehash_init(int thr_id)
     unsigned char *tbl = (unsigned char *)malloc(CURVE_GTABLE_BYTES);
     curvehash_build_gtable(tbl);
     CUDA_SAFE_CALL(cudaMemcpy(d_gtable[thr_id], tbl, CURVE_GTABLE_BYTES, cudaMemcpyHostToDevice));
-    free(tbl);
 
-    /* one-time device self-test vs the known KAT digest (logs on failure) */
-    {
-        uint8_t *d_out, h_out[32];
-        CUDA_SAFE_CALL(cudaMalloc(&d_out, 32));
-        curvehash_selftest_kernel <<< 1, 32 >>> (d_gtable[thr_id], d_out);
-        CUDA_SAFE_CALL(cudaMemcpy(h_out, d_out, 32, cudaMemcpyDeviceToHost));
-        cudaFree(d_out);
-        if (memcmp(h_out, "\xb2\x64\x54\x16\xce\x97\xcf\x39\x35\x59\x2d\x82\xea\xeb\xf2\x52"
-                          "\x12\x00\x8e\xbf\x04\xf6\x23\x73\x20\x3a\x71\x53\xfa\x1e\x14\x66", 32) != 0)
-            gpulog(LOG_ERR, thr_id, "curvehash GPU self-test FAILED");
+    /* One-time device self-test, FAIL-CLOSED: a GPU that cannot reproduce the
+     * consensus hash can only produce local rejects, so do not start. */
+    const bool st_ok = curvehash_selftest_gpu(thr_id, d_gtable[thr_id], tbl);
+    free(tbl);
+    if (!st_ok) {
+        gpulog(LOG_ERR, thr_id, "curvehash: refusing to start after a failed self-test");
+        proper_exit(EXIT_CODE_SW_INIT_ERROR);
     }
 
     init_done[thr_id] = true;
@@ -111,7 +193,10 @@ extern "C" int scanhash_curvehash(int thr_id, struct work *work, uint32_t max_no
     if (!init_done[thr_id])
         curvehash_init(thr_id);
 
-    /* 76-byte base header = be32enc(pdata[0..18]); kernel appends the nonce */
+    /* 76-byte base header = be32enc(pdata[0..18]); the kernel appends the nonce
+     * and consumes this as BYTES. If it is ever changed to read uint32 words,
+     * upload pdata verbatim instead: reading be32enc'd bytes back as a word on a
+     * little-endian device byte-swaps them a second time. */
     uint32_t _ALIGN(64) endiandata[19];
     for (int i = 0; i < 19; i++)
         be32enc(&endiandata[i], pdata[i]);
@@ -138,7 +223,10 @@ extern "C" int scanhash_curvehash(int thr_id, struct work *work, uint32_t max_no
                 work_set_target_ratio(work, vhash);
                 work->nonces[0] = win;
                 work->valid_nonces = 1;
-                pdata[19] = win;
+                /* Resume PAST the winner: the caller restores this cursor after
+                 * submitting, so `= win` would re-find and re-submit the same
+                 * nonce and never advance. */
+                pdata[19] = win + 1;
                 return 1;
             }
             gpu_increment_reject(thr_id);

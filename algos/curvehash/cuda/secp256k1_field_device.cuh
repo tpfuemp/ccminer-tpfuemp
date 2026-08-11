@@ -1057,7 +1057,7 @@ __device__ static __forceinline__ int secp256k1_fe_equal_var(const secp256k1_fe 
     return secp256k1_fe_normalizes_to_zero_var(&na);
 }
 
-__device__ static void secp256k1_fe_inv(secp256k1_fe *r, const secp256k1_fe *a) {
+__device__ static void secp256k1_fe_inv_addchain(secp256k1_fe *r, const secp256k1_fe *a) {
     secp256k1_fe x2, x3, x6, x9, x11, x22, x44, x88, x176, x220, x223, t1;
     int j;
 
@@ -1145,6 +1145,19 @@ __device__ static void secp256k1_fe_inv(secp256k1_fe *r, const secp256k1_fe *a) 
         secp256k1_fe_sqr(&t1, &t1);
     }
     secp256k1_fe_mul(r, a, &t1);
+}
+
+/* Modular inverse: safegcd by default (~1.4x on the full hash vs the p-2
+ * addition chain above). -DCURVEHASH_INV_ADDCHAIN restores the chain; only the
+ * selected one is emitted. */
+#include "secp256k1_modinv32_device.cuh"
+
+__device__ static void secp256k1_fe_inv(secp256k1_fe *r, const secp256k1_fe *a) {
+#if defined(CURVEHASH_INV_ADDCHAIN)
+    secp256k1_fe_inv_addchain(r, a);
+#else
+    secp256k1_fe_inv_safegcd(r, a);
+#endif
 }
 
 #endif /* SECP256K1_FIELD_DEVICE_CUH */

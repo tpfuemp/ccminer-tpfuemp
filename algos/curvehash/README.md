@@ -63,13 +63,24 @@ Build wiring: `curvehash.cpp` + `secp256k1_unity.c` are registered in
 - `scanhash_curvehash` re-hashes every candidate with the same authoritative
   `curvehash_80` and runs `fulltest` before returning — a hashing bug can only
   cause a local reject, never a bad share.
-- Init-time self-test (logs only on failure): full curvehash over the fixed
-  80-byte header `00 01 .. 4f` must equal the reference digest
-  `b2645416ce97cf3935592d82eaebf25212008ebf04f62373203a7153fa1e1466`, plus a
-  one-bit header flip must change the digest (proves the KAT isn't vacuous).
-  Reference digest was computed by an independent textbook-secp256k1 + hashlib
-  oracle and verified against the build (corrupting the expected value made the
-  self-test log `FAILED (kat 0 neg 1)`).
+- Init-time self-test, **fail-closed**: a GPU that cannot reproduce the consensus
+  hash can only produce local rejects, so a failure logs each leg and exits
+  instead of mining. Four legs:
+  - `tblbuild` — sha256d of the host-built 512 KB G-table against a known
+    constant, so every one of its 8192 entries is checked. A single corrupt entry
+    would cause only rare wrong hashes, which a digest KAT cannot detect.
+  - `tblup` — the table read back from device memory against the host buffer.
+  - `kat` — three header/digest vectors: the fixed 80-byte header `00 01 .. 4f`
+    must give `b2645416ce97cf3935592d82eaebf25212008ebf04f62373203a7153fa1e1466`,
+    plus the all-`00` and all-`ff` edges. Digests come from an independent
+    textbook-secp256k1 + hashlib oracle.
+  - `neg` — a one-bit header flip must change the digest, computed on the device,
+    so the comparison cannot be vacuous.
+
+  Each leg was confirmed to fire by deliberately breaking the build it guards
+  (a corrupted table byte, a corrupted SHA-256 round constant): the miner logs
+  e.g. `self-test FAILED (tblbuild 0 tblup 1 kat 111 neg 1)` and refuses to
+  start.
 
 ## GPU implementation
 
@@ -97,8 +108,14 @@ The kernel is compute-bound (elliptic-curve, tiny per-thread state) and
 register/occupancy-limited on sm_86. It launches at `tpb 512` under
 `__launch_bounds__(512, 1)` (a 128-register cap) to raise occupancy, with a
 default throughput of `1<<16` to fill the GPU at that block size (`-i` to tune).
-Cross-thread batching of the per-round field inversion was evaluated and found
-slower at this occupancy, so the straightforward per-lane inversion is used.
+The per-round field inversion uses **safegcd** (Bernstein-Yang divsteps, a device
+port of modern libsecp256k1's `modinv32`) rather than the `p-2` addition chain the
+vendored 2015 tree ships; that is worth ~1.4x on the full hash. Only the
+constant-time variant is ported — the `_var` variants are faster on a CPU but
+their data-dependent trip counts become warp divergence on a GPU.
+`-DCURVEHASH_INV_ADDCHAIN` restores the addition chain. Cross-thread batching of
+the inversion was evaluated and found slower at this occupancy, so each lane
+inverts on its own.
 
 ## Testing
 
@@ -119,3 +136,4 @@ zpool `curve.na.mine.zpool.ca:4633` (accepted, 0 rejects).
 | 2026-07-17 | ~1.09 MH/s (GPU) | first GPU kernel (4-bit window); accepted 1/1. |
 | 2026-07-18 | ~1.65 MH/s (GPU) | 8-bit window (512 KB table), half the point-adds; accepted 11/11. Warm 69 °C / 144 W / 11.4 kH/W. |
 | 2026-07-18 | ~1.85 MH/s (GPU) | occupancy tuning (`__launch_bounds__(512,1)`, tpb 512, throughput 1<<16); accepted 6/6, ~1846–1857 kH/s. Warm 80 °C / 158 W / 11.6 kH/W. |
+| 2026-08-11 | ~2.70 MH/s (GPU) | safegcd inversion replaces the `p-2` addition chain (~1.4x, measured interleaved in both orders); accepted 26/26, ~2662–2719 kH/s. 69 °C / 155 W / 17.3 kH/W. Launch shape re-checked against tpb 384/448/640 and kept. |
