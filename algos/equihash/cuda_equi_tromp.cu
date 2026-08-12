@@ -86,19 +86,22 @@ static int ctx_solve(solver_ctx *c, const char *headernonce, const char *persona
 	checkCudaErrors(cudaMemset((void*)c->heq.nslots, 0, 2 * NBUCKETS * sizeof(u32)));
 	checkCudaErrors(cudaMemcpy(c->device_eq, &c->heq, sizeof(equi), cudaMemcpyHostToDevice));
 
+	// heq holds the same device pointers as the uploaded struct; passing them as
+	// kernel args keeps them in the global address space (see equi_miner_tromp.cuh).
+	//
 	// digitH uses a grid-stride loop, so its grid can exceed eq->nthreads;
 	// at nt/tpb=64 blocks the GPU runs ~19% occupied (profiled 2026-07-02).
-	digitH<<<8 * (nt/tpb), tpb>>>(c->device_eq);
+	digitH<<<8 * (nt/tpb), tpb>>>(c->device_eq, c->heq.hta, c->heq.nslots);
 #if WN == 144 && WK == 5 && BUCKBITS == 20 && RESTBITS == 4 && !defined(XINTREE)
 	// warp-per-bucket collision kernels (see equi_miner_tromp.cuh): one warp
 	// stages one bucket coalesced and processes its pairs in parallel via
 	// ballot masks. Grid swept: 128 blocks best (64: -5%, 256: -1%, 512: -2%);
 	// 512 warps = 512 buckets in flight (~0.7MB staged, fits L2 easily).
 	// digitOT/ET kept above as reference.
-	digitWB<1><<<128, EQ_WB_TPB>>>(c->device_eq);
-	digitWB<2><<<128, EQ_WB_TPB>>>(c->device_eq);
-	digitWB<3><<<128, EQ_WB_TPB>>>(c->device_eq);
-	digitWB<4><<<128, EQ_WB_TPB>>>(c->device_eq);
+	digitWB<1><<<128, EQ_WB_TPB>>>(c->heq.hta, c->heq.nslots);
+	digitWB<2><<<128, EQ_WB_TPB>>>(c->heq.hta, c->heq.nslots);
+	digitWB<3><<<128, EQ_WB_TPB>>>(c->heq.hta, c->heq.nslots);
+	digitWB<4><<<128, EQ_WB_TPB>>>(c->heq.hta, c->heq.nslots);
 #else
 	for (u32 r = 1; r < WK; r++)
 		r & 1 ? digitO<<<nt/tpb, tpb>>>(c->device_eq, r)

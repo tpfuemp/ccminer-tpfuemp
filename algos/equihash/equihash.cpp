@@ -67,6 +67,14 @@ static int   eq_wn = 200, eq_wk = 9;
 static char  eq_personal[16] = "ZcashPoW";
 static void* tromp_ctx[MAX_GPUS] = { NULL };
 
+// Throughput meter for the 144/5 path: scanhash only returns on a target hit, so
+// without this the rate is unobservable. sol/nonce (expect ~2) is reported too --
+// an overfull bucket drops valid pairs silently, which Sol/s alone cannot show.
+static uint32_t eq_m_sols[MAX_GPUS]   = { 0 };
+static uint32_t eq_m_nonces[MAX_GPUS] = { 0 };
+static uint32_t eq_m_bad[MAX_GPUS]    = { 0 };  // solutions that failed the host re-verify
+static time_t   eq_m_since[MAX_GPUS]  = { 0 };
+
 static inline int eq_cbitlen()   { return eq_wn / (eq_wk + 1); }               // 20 / 24
 static inline int eq_proofsize() { return 1 << eq_wk; }                        // 512 / 32
 static inline int eq_solsize()   { return eq_proofsize() * (eq_cbitlen() + 1) / 8; } // 1344 / 100
@@ -267,6 +275,7 @@ static int scanhash_equihash_144_5(int thr_id, struct work *work, uint32_t max_n
 		int nsol = tromp144_solve(tromp_ctx[thr_id], (const char*) endiandata,
 		                          eq_personal, tromp_emit, &thr_id);
 		soluce_count += (nsol > 0 ? nsol : 0);
+		eq_m_sols[thr_id] += (uint32_t) (nsol > 0 ? nsol : 0); // every solver solution, not just submitted ones
 		*hashes_done = soluce_count;
 
 		if (tromp_ns[thr_id] > 0) {
@@ -287,7 +296,12 @@ static int scanhash_equihash_144_5(int thr_id, struct work *work, uint32_t max_n
 				if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
 					int rc = tromp144_verify((const char*) endiandata, eq_personal,
 					                         tromp_idx[thr_id][s]);
-					if (rc == 0 && work->valid_nonces < MAX_NONCES) {
+					if (rc != 0) {
+						// never drop silently: the only signal of a wrong GPU hash
+						eq_m_bad[thr_id]++;
+						gpulog(LOG_WARNING, thr_id, "solution failed host re-verify (rc=%d), %u so far",
+						       rc, eq_m_bad[thr_id]);
+					} else if (work->valid_nonces < MAX_NONCES) {
 						work->valid_nonces++;
 						memcpy(work->data, endiandata, 140);
 						equi_store_work_solution(work, vhash, sol_data);
@@ -302,6 +316,24 @@ static int scanhash_equihash_144_5(int thr_id, struct work *work, uint32_t max_n
 		}
 
 		endiandata[NONCE_OFT] += nonce_increment;
+
+		// rate-limited: per-solve I/O would skew the measurement
+		eq_m_nonces[thr_id]++;
+		{
+			const time_t now = time(NULL);
+			if (!eq_m_since[thr_id]) {
+				eq_m_since[thr_id] = now;
+			} else if (now - eq_m_since[thr_id] >= 5) {
+				const double el = (double) (now - eq_m_since[thr_id]);
+				gpulog(LOG_INFO, thr_id, "equihash%d/%d: %.2f Sol/s, %.2f sol/nonce (%u nonces/%.0fs)%s",
+				       eq_wn, eq_wk, eq_m_sols[thr_id] / el,
+				       eq_m_nonces[thr_id] ? (double) eq_m_sols[thr_id] / eq_m_nonces[thr_id] : 0.0,
+				       eq_m_nonces[thr_id], el,
+				       eq_m_bad[thr_id] ? " *** re-verify failures, see above ***" : "");
+				eq_m_sols[thr_id] = eq_m_nonces[thr_id] = 0;
+				eq_m_since[thr_id] = now;
+			}
+		}
 
 	} while (!work_restart[thr_id].restart);
 

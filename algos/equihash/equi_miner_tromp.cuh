@@ -454,7 +454,10 @@ struct equi {
 // ~90 regs; capping at 64 spills v[16] to local memory, recreating the
 // LG-throttle bottleneck this path exists to remove (occupancy was measured
 // irrelevant for this kernel: 18.9% -> 60.7% gave -2%).
-__global__ void digitH(equi *eq) {
+//
+// hta/nslots are parameters, not read from `eq`: a pointer loaded from memory
+// stays generic, so the slot writes would be ST.E/ATOM.E instead of STG/ATOMG.
+__global__ void digitH(equi *eq, htalloc hta, bsizes *nslots) {
   const u32 id = blockIdx.x * blockDim.x + threadIdx.x;
 #if WN == 144 && BUCKBITS == 20 && RESTBITS == 4 && !defined(XINTREE)
   // Register-resident fast path: header+nonce is always 140 bytes over
@@ -476,10 +479,10 @@ __global__ void digitH(equi *eq) {
       for (u32 i = 0; i < HASHESPERBLAKE; i++) {
         const int b = 18 * i; // WN/8 bytes per hash in the blake output
         const u32 bucketid = (EQ_BYTE(hh, b) << 12) | (EQ_BYTE(hh, b+1) << 4) | (EQ_BYTE(hh, b+2) >> 4);
-        const u32 slot = atomicAdd(&eq->nslots[0][bucketid], 1);
+        const u32 slot = atomicAdd(&nslots[0][bucketid], 1);
         if (slot >= NSLOTS)
           continue;
-        slot0 &s = eq->hta.trees0[0][bucketid][slot];
+        slot0 &s = hta.trees0[0][bucketid][slot];
         s.attr = tree(block*HASHESPERBLAKE+i);
         s.hash[0].word = EQ_WORD32(hh, b+2);
         s.hash[1].word = EQ_WORD32(hh, b+6);
@@ -521,10 +524,10 @@ __global__ void digitH(equi *eq) {
 #else
 #error not implemented
 #endif
-      const u32 slot = atomicAdd(&eq->nslots[0][bucketid], 1);
+      const u32 slot = atomicAdd(&nslots[0][bucketid], 1);
       if (slot >= NSLOTS)
         continue;
-      slot0 &s = eq->hta.trees0[0][bucketid][slot];
+      slot0 &s = hta.trees0[0][bucketid][slot];
 #ifdef XINTREE
       s.attr = tree(block*HASHESPERBLAKE+i, xhash);
 #else
@@ -739,38 +742,46 @@ __global__ void digitET(equi *eq) { // even R: trees1[(R-1)/2] -> trees0[R/2]
 // per-bucket slot loop that left the pair dependency chain exposed
 // (digitOT/ET measured ~93% long-scoreboard stalls at 19% occupancy).
 
-// per-round bucket/type routing
+// per-round bucket/type routing; bases passed in, see digitH.
+// eq_take is equi::getnslots{0,1}: cap at NSLOTS, reset for the next round.
+__device__ __forceinline__ u32 eq_take(u32 *pn) {
+  const u32 n = min(*pn, NSLOTS);
+  *pn = 0;
+  return n;
+}
 template <u32 R> struct eqrt;
 template <> struct eqrt<1> {
   typedef slot0 prev; typedef slot1 next;
-  static __device__ __forceinline__ slot0 *pbuck(equi *eq, u32 b) { return eq->hta.trees0[0][b]; }
-  static __device__ __forceinline__ slot1 *nbuck(equi *eq, u32 b) { return eq->hta.trees1[0][b]; }
-  static __device__ __forceinline__ u32 pnslots(equi *eq, u32 b) { return eq->getnslots0(b); }
+  static __device__ __forceinline__ slot0 *pbuck(const htalloc &hta, u32 b) { return hta.trees0[0][b]; }
+  static __device__ __forceinline__ slot1 *nbuck(const htalloc &hta, u32 b) { return hta.trees1[0][b]; }
+  static __device__ __forceinline__ u32 pnslots(bsizes *ns, u32 b) { return eq_take(&ns[0][b]); }
 };
 template <> struct eqrt<2> {
   typedef slot1 prev; typedef slot0 next;
-  static __device__ __forceinline__ slot1 *pbuck(equi *eq, u32 b) { return eq->hta.trees1[0][b]; }
-  static __device__ __forceinline__ slot0 *nbuck(equi *eq, u32 b) { return eq->hta.trees0[1][b]; }
-  static __device__ __forceinline__ u32 pnslots(equi *eq, u32 b) { return eq->getnslots1(b); }
+  static __device__ __forceinline__ slot1 *pbuck(const htalloc &hta, u32 b) { return hta.trees1[0][b]; }
+  static __device__ __forceinline__ slot0 *nbuck(const htalloc &hta, u32 b) { return hta.trees0[1][b]; }
+  static __device__ __forceinline__ u32 pnslots(bsizes *ns, u32 b) { return eq_take(&ns[1][b]); }
 };
 template <> struct eqrt<3> {
   typedef slot0 prev; typedef slot1 next;
-  static __device__ __forceinline__ slot0 *pbuck(equi *eq, u32 b) { return eq->hta.trees0[1][b]; }
-  static __device__ __forceinline__ slot1 *nbuck(equi *eq, u32 b) { return eq->hta.trees1[1][b]; }
-  static __device__ __forceinline__ u32 pnslots(equi *eq, u32 b) { return eq->getnslots0(b); }
+  static __device__ __forceinline__ slot0 *pbuck(const htalloc &hta, u32 b) { return hta.trees0[1][b]; }
+  static __device__ __forceinline__ slot1 *nbuck(const htalloc &hta, u32 b) { return hta.trees1[1][b]; }
+  static __device__ __forceinline__ u32 pnslots(bsizes *ns, u32 b) { return eq_take(&ns[0][b]); }
 };
 template <> struct eqrt<4> {
   typedef slot1 prev; typedef slot0 next;
-  static __device__ __forceinline__ slot1 *pbuck(equi *eq, u32 b) { return eq->hta.trees1[1][b]; }
-  static __device__ __forceinline__ slot0 *nbuck(equi *eq, u32 b) { return eq->hta.trees0[2][b]; }
-  static __device__ __forceinline__ u32 pnslots(equi *eq, u32 b) { return eq->getnslots1(b); }
+  static __device__ __forceinline__ slot1 *pbuck(const htalloc &hta, u32 b) { return hta.trees1[1][b]; }
+  static __device__ __forceinline__ slot0 *nbuck(const htalloc &hta, u32 b) { return hta.trees0[2][b]; }
+  static __device__ __forceinline__ u32 pnslots(bsizes *ns, u32 b) { return eq_take(&ns[1][b]); }
 };
 
 #define EQ_WB_TPB 128
 #define EQ_WB_WPB (EQ_WB_TPB/32)
 
+// no `eq` parameter: the bases were the only thing this kernel read from it,
+// and as parameters they stay global-space (see digitH).
 template <u32 R>
-__global__ void digitWB(equi *eq) {
+__global__ void digitWB(htalloc hta, bsizes *nslots) {
   const u32 PREVU  = EQ_UNITS(R-1);
   const u32 DUN    = PREVU - EQ_UNITS(R);
   const u32 PREVBO = PREVU * 4 - EQ_HASHSIZE(R-1);
@@ -780,9 +791,9 @@ __global__ void digitWB(equi *eq) {
   u32 (*sw)[5] = shw[threadIdx.x >> 5];
   const u32 nwarps = (gridDim.x * blockDim.x) >> 5;
   for (u32 bucketid = (blockIdx.x * blockDim.x + threadIdx.x) >> 5; bucketid < NBUCKETS; bucketid += nwarps) {
-    u32 bsize = lane ? 0 : eqrt<R>::pnslots(eq, bucketid); // caps at NSLOTS + resets counter
+    u32 bsize = lane ? 0 : eqrt<R>::pnslots(nslots, bucketid); // caps at NSLOTS + resets counter
     bsize = __shfl_sync(0xffffffff, bsize, 0);
-    typename eqrt<R>::prev *buck = eqrt<R>::pbuck(eq, bucketid);
+    typename eqrt<R>::prev *buck = eqrt<R>::pbuck(hta, bucketid);
     // stage slots `lane` and `lane+32`: words into registers + shared
     u32 w0[PREVU], w1[PREVU];
     const bool v0 = lane < bsize, v1 = lane + 32 < bsize;
@@ -824,10 +835,10 @@ __global__ void digitWB(equi *eq) {
           continue;
         const u32 xorbucketid = (((EQ_BYTE32(xw, PREVBO+1) << 8) | EQ_BYTE32(xw, PREVBO+2)) << 4)
                               | (EQ_BYTE32(xw, PREVBO+3) >> 4);
-        const u32 xorslot = atomicAdd(&eq->nslots[R&1][xorbucketid], 1);
+        const u32 xorslot = atomicAdd(&nslots[R&1][xorbucketid], 1);
         if (xorslot >= NSLOTS)
           continue;
-        typename eqrt<R>::next &xs = eqrt<R>::nbuck(eq, xorbucketid)[xorslot];
+        typename eqrt<R>::next &xs = eqrt<R>::nbuck(hta, xorbucketid)[xorslot];
         xs.attr = tree(bucketid, i, lane);
 #pragma unroll
         for (u32 k = DUN; k < PREVU; k++)
@@ -848,10 +859,10 @@ __global__ void digitWB(equi *eq) {
             continue;
           const u32 xorbucketid = (((EQ_BYTE32(xw, PREVBO+1) << 8) | EQ_BYTE32(xw, PREVBO+2)) << 4)
                                 | (EQ_BYTE32(xw, PREVBO+3) >> 4);
-          const u32 xorslot = atomicAdd(&eq->nslots[R&1][xorbucketid], 1);
+          const u32 xorslot = atomicAdd(&nslots[R&1][xorbucketid], 1);
           if (xorslot >= NSLOTS)
             continue;
-          typename eqrt<R>::next &xs = eqrt<R>::nbuck(eq, xorbucketid)[xorslot];
+          typename eqrt<R>::next &xs = eqrt<R>::nbuck(hta, xorbucketid)[xorslot];
           xs.attr = tree(bucketid, i, lane + 32);
 #pragma unroll
           for (u32 k = DUN; k < PREVU; k++)
