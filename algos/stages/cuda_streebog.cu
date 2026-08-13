@@ -25,6 +25,8 @@
 #include <cuda_vectors.h>
 #include <cuda_vector_uint2x4.h>
 
+#include "cuda/selftest_gate.cuh"
+
 extern "C" {
 #include "sph/sph_streebog.h"
 }
@@ -489,8 +491,8 @@ void streebog_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, 
  * the kernel has no if(thread<threads) tail guard, so the buffer must cover the
  * whole block — and compares GPU output against the vendored sph_gost512 CPU
  * reference, itself anchored to the GOST R 34.11-2012 / RFC 6986 H_512(M1)
- * vector. A flipped-input-bit negative test proves the harness isn't vacuous.
- * The scanhash CPU-verify path remains the per-share safety net.
+ * vector. A flipped-input-bit negative test proves the test isn't vacuous.
+ * FAIL-CLOSED via cuda/selftest_gate.cuh.
  */
 #define STREEBOG_ST_ALLOC 256   /* full block (no tail guard in the kernel) */
 #define STREEBOG_ST_VEC   4     /* leading vectors actually verified */
@@ -524,13 +526,13 @@ static bool streebog_selftest_run(uint8_t (*io)[64] /* [STREEBOG_ST_ALLOC] */)
 {
 	uint32_t *d_hash = NULL;
 	if (cudaMalloc(&d_hash, (size_t) STREEBOG_ST_ALLOC * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 	bool ok = (cudaMemcpy(d_hash, io, (size_t) STREEBOG_ST_ALLOC * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	streebog_cpu_hash_64(0, STREEBOG_ST_ALLOC, d_hash);
 	ok = ok && (cudaDeviceSynchronize() == cudaSuccess);
 	ok = ok && (cudaMemcpy(io, d_hash, (size_t) STREEBOG_ST_ALLOC * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_hash);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -582,9 +584,9 @@ bool streebog_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "streebog device self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "streebog device self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "streebog device self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "streebog", passed);
 }

@@ -5,9 +5,8 @@
  * CPU references and two known-answer vectors anchored outside this codebase
  * (the NIST SHA3-256 and Keccak-256 empty-string digests). Includes a
  * negative test (single flipped input bit must change the digest) so the
- * check can never pass vacuously. Runs once per process at algo init; logs a
- * warning and returns false on mismatch (the scanhash CPU-verify path
- * remains the per-share safety net).
+ * check can never pass vacuously. Runs once per process at algo init and is
+ * FAIL-CLOSED via cuda/selftest_gate.cuh.
  */
 
 #include <string.h>
@@ -25,6 +24,7 @@ void sph_sha3d256(void *cc, const void *data, size_t len);
 void sph_sha3d256_close(void *cc, void *dst);
 }
 
+#include "cuda/selftest_gate.cuh"
 #include "cuda/keccak_device.cuh"
 
 /* NIST FIPS 202: SHA3-256("") */
@@ -156,13 +156,18 @@ static bool keccak_selftest_vector(const uint8_t m[80], bool check_empty_kats, u
 	uint64_t out[SELFTEST_OUT_LANES] = { 0 };
 	uint2 *d_buf = NULL;
 	bool gpu_ok = false;
-	if (cudaMalloc(&d_buf, 10 * sizeof(uint2) + sizeof(out)) == cudaSuccess) {
+	if (cudaMalloc(&d_buf, 10 * sizeof(uint2) + sizeof(out)) != cudaSuccess) {
+		selftest_cuda_fault(); // could not run != produced a wrong digest
+	} else {
 		uint2 *d_out = d_buf + 10;
 		gpu_ok = (cudaMemcpy(d_buf, m, 80, cudaMemcpyHostToDevice) == cudaSuccess);
 		keccak_selftest_gpu <<<1, 32>>> (d_buf, d_out);
 		gpu_ok = gpu_ok && (cudaMemcpy(out, d_out, sizeof(out), cudaMemcpyDeviceToHost) == cudaSuccess);
 		cudaFree(d_buf);
 	}
+
+	if (!gpu_ok)
+		selftest_cuda_fault(); // a failed copy is not a wrong digest either
 
 	bool ok = gpu_ok;
 	ok = ok && (memcmp(out + 0, ref_keccak, 32) == 0);   /* keccak256 vs sph */
@@ -198,6 +203,6 @@ bool keccak_device_selftest(int thr_id)
 
 	passed = pos_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "Keccak device-library self-test FAILED (kat %d negative %d)", (int) pos_ok, (int) neg_ok);
-	return passed;
+		gpulog(LOG_ERR, thr_id, "Keccak device-library self-test FAILED (kat %d negative %d)", (int) pos_ok, (int) neg_ok);
+	return selftest_gate(thr_id, "Keccak", passed);
 }

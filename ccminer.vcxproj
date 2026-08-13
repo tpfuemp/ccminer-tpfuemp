@@ -264,6 +264,7 @@
     <ClInclude Include="cuda\shabal512_device.cuh" />
     <ClInclude Include="cuda\sha512_device.cuh" />
     <ClInclude Include="cuda\skein512_device.cuh" />
+    <ClInclude Include="cuda\selftest_gate.cuh" />
     <ClInclude Include="compat\pthreads\pthread.h" />
     <ClCompile Include="compat\winansi.c" />
     <ClCompile Include="ccminer.cpp">

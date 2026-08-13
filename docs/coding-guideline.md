@@ -27,13 +27,16 @@ algos/                     # ALL algo-related files live here
     README.md              # optional: algo notes, tuning table, benchmark log
 sph/                       # vendored SPH reference hashes (sph_*) — LEAVE AS-IS
 cuda/                      # shared DEVICE headers (the device library)
-  sha256_device.cuh
-  blake2s_device.cuh
-  salsa_chacha_device.cuh
-  scratchpad_utils.cuh
-  dispatch.cuh             # selector-gate helpers (device_sm, variant tables)
+  <primitive>_device.cuh   # one per primitive: sha256_device.cuh, sha512_device.cuh,
+                           # blake512_device.cuh, keccak_device.cuh, groestl512_device.cuh,
+                           # aes_device.cuh, lyra2_device.cuh, … (23 headers, 2026-08-13)
+  selftest_gate.cuh        # shared fail-closed gate for init-time device self-tests
 compat/, util/, api/, ...  # unchanged infrastructure
 ```
+
+⚠️ **The `cuda/` listing is descriptive; the directory is the authoritative list.** An earlier
+revision named five headers of which only `sha256_device.cuh` existed, and the other four were
+planned against as if they did. **Do not name a file here until it exists.**
 
 Rules:
 - **Everything algo-specific moves under `algos/`.** No new `.cu` files in the repo root. Root-level algo files (`cuda_skeincoin.cu`, `heavy/`, `x21/`, `sha256/`, `sha256dv/`, …) are relocated the moment their algo is migrated.
@@ -78,7 +81,9 @@ Error handling:
 The three-level gate from the plan family applies unchanged. It selects between kernel variants (including still-working legacy variants on sm_61+); only code failing the CUDA 11.8 removal criterion (§6) drops out of the gate entirely.
 
 1. **Compile time:** `__CUDA_ARCH__` guards for genuinely arch-specific instructions (e.g., `cp.async` ≥ sm_80) and, where the plans specify it, a build option (e.g., `--enable-legacy-sm`) for retained legacy variants. No branches for arches below the sm_61 build floor.
-2. **Runtime:** one shared dispatcher helper set in `cuda/dispatch.cuh` (generalizing the existing `device_sm` pattern and the scrypt autotune scaffolding) maps compute capability + card properties → kernel variant + launch config. Per-card tuning tables (e.g., the NeoScrypt card detection) live in the algo folder and feed this dispatcher. A debug CLI option can force a variant.
+2. **Runtime:** the selector reads the globals declared in `cuda_helper.h` — `device_sm[]` (compute capability × 100), `device_mpcount[]`, and `cuda_arch[]` via `cuda_get_arch(thr_id)` — directly in the algo's host code, to pick a kernel variant, a default intensity or an allocation size. Per-card tuning tables (e.g. the NeoScrypt card detection) live in the algo folder. Throughput is a runtime knob (`-i/--intensity`, through `cuda_default_throughput()`); block size is not — it is a compile-time `TPB` constant with a matching `__launch_bounds__`.
+
+   ⚠️ **There is no `cuda/dispatch.cuh`, and there never has been** — an earlier revision of this section required routing launch configuration through one, and it was planned against for a year. The mechanism is real (`device_sm[]` in ~50 files, `cuda_arch[]` in ~34); only that header was fictional. The paragraph above is the rule. Consolidating these globals behind one header is possible future work, not a requirement in force.
 3. **API level:** `scanhash_<algo>`, `<algo>_setBlock_*`, and init/free entry points remain **signature-stable**. Renames or signature changes require touching `ccminer.cpp`/`algos.h` in the same commit and a changelog entry.
 
 **`algos.h` stays hand-edited — never auto-generated.** The `enum` ↔ `algo_names[]` lockstep is **consensus-critical**: the enum index is used on the wire and aliases can't be derived from filenames. File moves and renames do **not** touch it, the enum is **never renumbered**, and there is no generated registry. Removing an algo removes its `scanhash_*` and stubs the dispatch case, but leaves the enum slot intact.

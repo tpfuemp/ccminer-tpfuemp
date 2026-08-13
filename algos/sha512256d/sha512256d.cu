@@ -17,6 +17,12 @@ extern void sha512256d_init(int thr_id);
 extern void sha512256d_free(int thr_id);
 extern void sha512256d_setBlock_80(const uint32_t *pdata);
 extern void sha512256d_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, uint64_t targ_q3, uint32_t *resNonces);
+extern void sha512256d_differential(int thr_id, uint32_t threads, uint32_t startNonce, uint64_t *acc);
+
+/* Nonce count for the -D differential. NOT a multiple of the 256-thread block,
+ * so a truncating grid cannot hide in the tail. */
+#define SHA512256D_DIFF_NONCES ((1U << 12) + 37)
+static uint32_t diff_slice[MAX_GPUS] = { 0 };
 
 static const uint64_t H512_256[8] = {
 	0x22312194FC2BF72CULL, 0x9F555FA3C84C64C2ULL,
@@ -43,6 +49,44 @@ extern "C" void sha512256d_hash(void *output, const void *input)
 	sph_sha512_close(&ctx, hash);
 
 	memcpy(output, hash, 32);
+}
+
+/* GPU-vs-CPU differential over a nonce RANGE, not over reported candidates: the
+ * re-verify below only sees nonces the GPU chose to report, so it cannot catch
+ * one the kernel never hashed. Both sides accumulate, over the same range:
+ *   acc[0] = XOR of every share qword    -> wrong, missing or duplicate digest
+ *   acc[1] = XOR of (qword * (nonce|1))  -> binds each digest to its own nonce
+ * acc[1] is not redundant: a plain XOR sum is permutation-blind. */
+static bool sha512256d_check_range(int thr_id, const uint32_t *endiandata, uint32_t startNonce, uint32_t count)
+{
+	uint32_t _ALIGN(64) vhash[8], td[20];
+	uint64_t gpu[2] = { 0, 0 }, cpu[2] = { 0, 0 };
+
+	sha512256d_differential(thr_id, count, startNonce, gpu);
+
+	memcpy(td, endiandata, sizeof(td));
+	for (uint32_t i = 0; i < count; i++) {
+		const uint32_t nonce = startNonce + i;
+		be32enc(&td[19], nonce);
+		sha512256d_hash(vhash, td);
+		const uint64_t q3 = ((uint64_t*)vhash)[3];
+		cpu[0] ^= q3;
+		cpu[1] ^= q3 * (uint64_t)(nonce | 1u);
+	}
+
+	if (gpu[0] == cpu[0] && gpu[1] == cpu[1]) {
+		gpulog(LOG_BLUE, thr_id, "differential OK: %u nonces from %08x (xor %016llx)",
+			count, startNonce, (unsigned long long) cpu[0]);
+		return true;
+	}
+
+	gpulog(LOG_ERR, thr_id, "DIFFERENTIAL FAILED over %u nonces from %08x — the GPU is not "
+		"hashing this range as the CPU does", count, startNonce);
+	gpulog(LOG_ERR, thr_id, "  gpu %016llx / %016llx", (unsigned long long) gpu[0], (unsigned long long) gpu[1]);
+	gpulog(LOG_ERR, thr_id, "  cpu %016llx / %016llx", (unsigned long long) cpu[0], (unsigned long long) cpu[1]);
+	if (gpu[0] == cpu[0])
+		gpulog(LOG_ERR, thr_id, "  digests agree but their nonces do not: an index/permutation bug");
+	return false;
 }
 
 extern "C" int scanhash_sha512256d(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done)
@@ -78,6 +122,14 @@ extern "C" int scanhash_sha512256d(int thr_id, struct work* work, uint32_t max_n
 
 	sha512256d_setBlock_80(pdata);
 	const uint64_t targ_q3 = ((uint64_t*)ptarget)[3];
+
+	// -D only, after the symbol upload so it covers c_header/c_pre too; a few ms
+	// of CPU per job. The window advances every call because --benchmark resets
+	// pdata[19], which would otherwise re-check one range forever.
+	if (opt_debug)
+		sha512256d_check_range(thr_id, endiandata,
+			pdata[19] + diff_slice[thr_id]++ * SHA512256D_DIFF_NONCES,
+			SHA512256D_DIFF_NONCES);
 
 	do {
 		// Hash with CUDA (GPU screens on the target's high qword; the host

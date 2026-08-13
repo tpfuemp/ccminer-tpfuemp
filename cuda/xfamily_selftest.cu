@@ -7,14 +7,14 @@
  * vendored sph_* CPU references (independent implementations), the sph
  * reference itself is anchored against an official spec vector, and a
  * one-time negative test (flipped input bit must change the digest)
- * proves the harness isn't vacuous. Logs a warning and returns false on
- * mismatch; the scanhash CPU-verify path remains the per-share safety
- * net.
+ * proves the test isn't vacuous. FAIL-CLOSED via cuda/selftest_gate.cuh.
  */
 
 #include <string.h>
 
 #include <miner.h>
+
+#include "cuda/selftest_gate.cuh"
 
 extern "C" {
 #include "sph/sph_blake.h"
@@ -100,7 +100,7 @@ static bool blake512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64],
 {
 	uint8_t *d_base = NULL;
 	if (cudaMalloc(&d_base, (size_t) count * (64 + 8)) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 	uint2 *d_io = (uint2*) d_base;
 	uint64_t *d_w3 = (uint64_t*)(d_base + (size_t) count * 64);
 
@@ -109,7 +109,7 @@ static bool blake512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64],
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	ok = ok && (cudaMemcpy(w3, d_w3, (size_t) count * 8, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_base);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -171,11 +171,11 @@ bool blake512_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && w3_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "blake512 device-library self-test FAILED (sph %d kat %d gpu %d w3 %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "blake512 device-library self-test FAILED (sph %d kat %d gpu %d w3 %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) w3_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "blake512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "blake512", passed);
 }
 
 /* --------------------------------------------------------------- keccak512 */
@@ -223,7 +223,7 @@ static bool keccak512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64],
 {
 	uint8_t *d_base = NULL;
 	if (cudaMalloc(&d_base, (size_t) count * (64 + 8)) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 	uint2 *d_io = (uint2*) d_base;
 	uint64_t *d_w3 = (uint64_t*)(d_base + (size_t) count * 64);
 
@@ -232,7 +232,7 @@ static bool keccak512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64],
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	ok = ok && (cudaMemcpy(w3, d_w3, (size_t) count * 8, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_base);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -293,11 +293,11 @@ bool keccak512_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && w3_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "keccak512 device-library self-test FAILED (sph %d kat %d gpu %d w3 %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "keccak512 device-library self-test FAILED (sph %d kat %d gpu %d w3 %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) w3_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "keccak512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "keccak512", passed);
 }
 
 /* ------------------------------------------------------------------- jh512 */
@@ -342,13 +342,13 @@ static bool jh512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64], int
 {
 	uint32_t *d_io = NULL;
 	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	jh512_selftest_gpu <<<1, 1>>> (d_io, count);
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -399,11 +399,11 @@ bool jh512_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "jh512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "jh512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "jh512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "jh512", passed);
 }
 
 /* ------------------------------------------------------------------ bmw512 */
@@ -453,7 +453,7 @@ static bool bmw512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64],
 {
 	uint8_t *d_base = NULL;
 	if (cudaMalloc(&d_base, (size_t) count * (64 + 8)) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 	uint64_t *d_io = (uint64_t*) d_base;
 	uint64_t *d_w3 = (uint64_t*)(d_base + (size_t) count * 64);
 
@@ -462,7 +462,7 @@ static bool bmw512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64],
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	ok = ok && (cudaMemcpy(w3, d_w3, (size_t) count * 8, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_base);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -523,11 +523,11 @@ bool bmw512_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && w3_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "bmw512 device-library self-test FAILED (sph %d kat %d gpu %d w3 %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "bmw512 device-library self-test FAILED (sph %d kat %d gpu %d w3 %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) w3_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "bmw512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "bmw512", passed);
 }
 
 /* ---------------------------------------------------------------- skein512 */
@@ -572,13 +572,13 @@ static bool skein512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64], 
 {
 	uint2 *d_io = NULL;
 	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	skein512_selftest_gpu <<<1, 1>>> (d_io, count);
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -629,11 +629,11 @@ bool skein512_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "skein512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "skein512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "skein512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "skein512", passed);
 }
 
 /* -------------------------------------------------------- sha512 (x17) ---- */
@@ -670,13 +670,13 @@ static bool sha512x_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64], i
 {
 	uint64_t *d_io = NULL;
 	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	sha512x_selftest_gpu <<<1, 1>>> (d_io, count);
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -727,11 +727,11 @@ bool sha512x_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "sha512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "sha512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "sha512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "sha512", passed);
 }
 
 /* ---------------------------------------------------------------- luffa512 */
@@ -768,13 +768,13 @@ static bool luffa512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64], 
 {
 	uint32_t *d_io = NULL;
 	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	luffa512_selftest_gpu <<<1, 1>>> (d_io, count);
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -825,11 +825,11 @@ bool luffa512_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "luffa512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "luffa512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "luffa512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "luffa512", passed);
 }
 
 /* --------------------------------------------------------------- shabal512 */
@@ -866,13 +866,13 @@ static bool shabal512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64],
 {
 	uint32_t *d_io = NULL;
 	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	shabal512_selftest_gpu <<<1, 1>>> (d_io, count);
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -923,11 +923,11 @@ bool shabal512_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "shabal512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "shabal512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "shabal512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "shabal512", passed);
 }
 
 /* ------------------------------------------------------------- cubehash512 */
@@ -964,13 +964,13 @@ static bool cubehash512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64
 {
 	uint32_t *d_io = NULL;
 	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	cubehash512_selftest_gpu <<<1, 1>>> (d_io, count);
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -1021,11 +1021,11 @@ bool cubehash512_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "cubehash512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "cubehash512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "cubehash512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "cubehash512", passed);
 }
 
 /* ---------------------------------------------------------------- hamsi512 */
@@ -1062,13 +1062,13 @@ static bool hamsi512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64], 
 {
 	uint32_t *d_io = NULL;
 	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	hamsi512_selftest_gpu <<<1, 1>>> (d_io, count);
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -1119,11 +1119,11 @@ bool hamsi512_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "hamsi512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "hamsi512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "hamsi512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "hamsi512", passed);
 }
 
 /* ---------------------------------------------------------------- fugue512 */
@@ -1166,13 +1166,13 @@ static bool fugue512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64], 
 {
 	uint32_t *d_io = NULL;
 	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	fugue512_selftest_gpu <<<1, 256>>> (d_io, count);
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -1223,11 +1223,11 @@ bool fugue512_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "fugue512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "fugue512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "fugue512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "fugue512", passed);
 }
 
 /* -------------------------------------------------------------- groestl512 */
@@ -1284,13 +1284,13 @@ static bool groestl512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64]
 {
 	uint32_t *d_io = NULL;
 	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	groestl512_selftest_gpu <<<1, 32>>> (d_io, count);
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -1341,11 +1341,11 @@ bool groestl512_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "groestl512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "groestl512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "groestl512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "groestl512", passed);
 }
 
 /* ----------------------------------------------------------------- echo512 */
@@ -1388,13 +1388,13 @@ static bool echo512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64], i
 {
 	uint32_t *d_io = NULL;
 	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	echo512_selftest_gpu <<<1, 128>>> (d_io, count);
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -1445,11 +1445,11 @@ bool echo512_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "echo512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "echo512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "echo512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "echo512", passed);
 }
 
 /* ---------------------------------------------------- echo512 (alexis x16) */
@@ -1482,13 +1482,13 @@ static bool echo512_alexis_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)
 {
 	uint32_t *d_io = NULL;
 	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	echo512_alexis_selftest_gpu <<<1, 128>>> (d_io, count);
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -1539,11 +1539,11 @@ bool echo512_alexis_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "echo512-alexis device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "echo512-alexis device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "echo512-alexis device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "echo512-alexis", passed);
 }
 
 /* -------------------------------------------------------------- shavite512 */
@@ -1618,13 +1618,13 @@ static bool shavite512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64]
 {
 	uint32_t *d_io = NULL;
 	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	shavite512_selftest_gpu <<<1, 128>>> (d_io, count);
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -1675,11 +1675,11 @@ bool shavite512_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "shavite512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "shavite512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "shavite512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "shavite512", passed);
 }
 
 /* ------------------------------------------------------------ whirlpool512 */
@@ -1737,13 +1737,13 @@ static bool whirlpool512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[6
 {
 	uint32_t *d_io = NULL;
 	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	whirlpool512_selftest_gpu <<<1, 256>>> (d_io, count);
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -1797,11 +1797,11 @@ bool whirlpool512_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "whirlpool512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "whirlpool512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "whirlpool512 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "whirlpool512", passed);
 }
 
 /* -------------------------------------------------------- x-fused chain */
@@ -1839,7 +1839,7 @@ static bool x_fused_selftest_run(const uint8_t *ids, int nids, int has_tiger,
 {
 	uint32_t *d_io = NULL;
 	if (cudaMalloc(&d_io, 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	x_fused_setOrder(ids, nids);
 	bool ok = (cudaMemcpy(d_io, msg, 64, cudaMemcpyHostToDevice) == cudaSuccess);
@@ -1851,7 +1851,7 @@ static bool x_fused_selftest_run(const uint8_t *ids, int nids, int has_tiger,
 			nids, ids[0], has_tiger, (int)e, cudaGetErrorString(e));
 	ok = ok && (cudaMemcpy(dig, d_io, 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -1917,11 +1917,11 @@ bool x_fused_device_selftest(int thr_id)
 
 	passed = single_ok && chain_ok && adj_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "x-fused device self-test FAILED (single %d chain %d)",
+		gpulog(LOG_ERR, thr_id, "x-fused device self-test FAILED (single %d chain %d)",
 			(int) single_ok, (int) chain_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "x-fused device self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "x-fused", passed);
 }
 
 /* ---------------------------------------------------------------- tiger192 */
@@ -1973,13 +1973,13 @@ static bool tiger192_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64], 
 {
 	uint32_t *d_io = NULL;
 	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
-		return false;
+		return selftest_cuda_fault();
 
 	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
 	tiger192_selftest_gpu <<<1, 256>>> (d_io, count);
 	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
-	return ok;
+	return ok ? true : selftest_cuda_fault();
 }
 
 __host__
@@ -2031,9 +2031,9 @@ bool tiger192_device_selftest(int thr_id)
 
 	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "tiger192 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
+		gpulog(LOG_ERR, thr_id, "tiger192 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
 			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "tiger192 device-library self-test passed");
-	return passed;
+	return selftest_gate(thr_id, "tiger192", passed);
 }

@@ -110,7 +110,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/blake2b/blake2b.cu \
 			  algos/keccak/keccak256.cu algos/keccak/cuda_keccak256.cu \
 			  algos/keccak/cuda_keccak_selftest.cu cuda/keccak_device.cuh \
-			  cuda/xfamily_selftest.cu cuda/blake512_device.cuh \
+			  cuda/xfamily_selftest.cu cuda/selftest_gate.cuh cuda/blake512_device.cuh \
 			  cuda/jh512_device.cuh cuda/bmw512_device.cuh cuda/skein512_device.cuh \
 			  cuda/luffa512_device.cuh cuda/shabal512_device.cuh cuda/cubehash512_device.cuh \
 			  cuda/hamsi512_device.cuh cuda/fugue512_device.cuh cuda/groestl512_device.cuh cuda/echo512_device.cuh cuda/shavite512_device.cuh cuda/whirlpool512_device.cuh cuda/tiger192_device.cuh \

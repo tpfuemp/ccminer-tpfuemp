@@ -5,9 +5,8 @@
  * "abc" known-answer vector (anchored outside this codebase), cross-checks
  * the header double-hash against the independent sph_sha512-based CPU
  * reference, and runs a one-time negative test (bit flip must change the
- * digest — proves the harness isn't vacuous). Runs once per process at algo
- * init; logs a warning and returns false on mismatch (the scanhash
- * CPU-verify path remains the per-share safety net).
+ * digest — proves the test isn't vacuous). Runs once per device at algo init
+ * and is FAIL-CLOSED via cuda/selftest_gate.cuh.
  */
 
 #include <string.h>
@@ -15,6 +14,7 @@
 #include <miner.h>
 #include <cuda_helper.h>
 
+#include "cuda/selftest_gate.cuh"
 #include "cuda/sha512_device.cuh"
 
 /* FIPS 180-4 SHA-512/256("abc") = 53048E26...07E7AF23, as state words. */
@@ -118,9 +118,11 @@ static void sha512256d_host_hash80(const uint8_t m[80], uint64_t q[4], uint64_t 
 __host__
 bool sha512256d_device_selftest(int thr_id)
 {
-	static bool tested = false, passed = false;
-	if (tested) return passed;
-	tested = true;
+	/* Per-device, not per-process: the GPU legs below only prove the device
+	 * that ran them, so a second card must be tested on its own. */
+	static bool tested[MAX_GPUS] = { 0 }, passed[MAX_GPUS] = { 0 };
+	if (tested[thr_id]) return passed[thr_id];
+	tested[thr_id] = true;
 
 	// --- "abc" KAT, host path ---
 	uint64_t w[16], st[8];
@@ -180,21 +182,25 @@ bool sha512256d_device_selftest(int thr_id)
 
 	uint64_t *d_buf = NULL;
 	bool gpu_ok = false;
-	if (cudaMalloc(&d_buf, sizeof(inbuf) + sizeof(out)) == cudaSuccess) {
+	if (cudaMalloc(&d_buf, sizeof(inbuf) + sizeof(out)) != cudaSuccess) {
+		selftest_cuda_fault(); // could not run != produced a wrong digest
+	} else {
 		uint64_t *d_out = d_buf + SELFTEST_IN_WORDS;
 		gpu_ok = (cudaMemcpy(d_buf, inbuf, sizeof(inbuf), cudaMemcpyHostToDevice) == cudaSuccess);
 		sha512256d_selftest_gpu <<<1, 1>>> (d_buf, d_out);
 		gpu_ok = gpu_ok && (cudaMemcpy(out, d_out, sizeof(out), cudaMemcpyDeviceToHost) == cudaSuccess);
 		cudaFree(d_buf);
 	}
+	if (!gpu_ok)
+		selftest_cuda_fault(); // a failed copy is not a wrong digest either
 	gpu_ok = gpu_ok && (memcmp(out, kat_abc_digest, sizeof(kat_abc_digest)) == 0)
 	                && (memcmp(out + 4, q1, sizeof(q1)) == 0)
 	                && (memcmp(out + 12, q, sizeof(q)) == 0)
 	                && (memcmp(out + 16, q1, sizeof(q1)) == 0);
 
-	passed = abc_ok && neg_ok && sph_ok && pre_ok && gpu_ok;
-	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "SHA512/256 device-library self-test FAILED (abc %d neg %d sph %d pre %d gpu %d)",
+	passed[thr_id] = abc_ok && neg_ok && sph_ok && pre_ok && gpu_ok;
+	if (!passed[thr_id])
+		gpulog(LOG_ERR, thr_id, "SHA512/256 device-library self-test FAILED (abc %d neg %d sph %d pre %d gpu %d)",
 			(int) abc_ok, (int) neg_ok, (int) sph_ok, (int) pre_ok, (int) gpu_ok);
-	return passed;
+	return selftest_gate(thr_id, "SHA512/256", passed[thr_id]);
 }

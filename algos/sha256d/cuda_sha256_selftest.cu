@@ -4,8 +4,7 @@
  * exercises each header building block against the OpenSSL CPU reference and
  * a known-answer vector (a real Bitcoin mainnet block header, so the expected
  * digest is anchored outside this codebase). Runs once per process at algo
- * init; logs a warning and returns false on mismatch (the scanhash CPU-verify
- * path remains the per-share safety net).
+ * init and is FAIL-CLOSED via cuda/selftest_gate.cuh.
  */
 
 #include <string.h>
@@ -14,6 +13,7 @@
 #include <cuda_helper.h>
 #include <openssl/sha.h>
 
+#include "cuda/selftest_gate.cuh"
 #include "cuda/sha256_device.cuh"
 
 /* Bitcoin block 957533 (2026-07, empty block): 80-byte header and its
@@ -161,13 +161,17 @@ static bool sha256_selftest_vector(const uint8_t m[80], const uint32_t *expected
 	uint32_t out[SELFTEST_OUT_WORDS] = { 0 };
 	uint32_t *d_buf = NULL;
 	bool gpu_ok = false;
-	if (cudaMalloc(&d_buf, sizeof(inbuf) + sizeof(out)) == cudaSuccess) {
+	if (cudaMalloc(&d_buf, sizeof(inbuf) + sizeof(out)) != cudaSuccess) {
+		selftest_cuda_fault(); // could not run != produced a wrong digest
+	} else {
 		uint32_t *d_out = d_buf + SELFTEST_IN_WORDS;
 		gpu_ok = (cudaMemcpy(d_buf, inbuf, sizeof(inbuf), cudaMemcpyHostToDevice) == cudaSuccess);
 		sha256_selftest_gpu <<<1, 1>>> (d_buf, d_out);
 		gpu_ok = gpu_ok && (cudaMemcpy(out, d_out, sizeof(out), cudaMemcpyDeviceToHost) == cudaSuccess);
 		cudaFree(d_buf);
 	}
+	if (!gpu_ok)
+		selftest_cuda_fault(); // a failed copy is not a wrong digest either
 	gpu_ok = gpu_ok && (memcmp(out, st2, 32) == 0)
 	                && out[8] == st2[6] && out[9] == st2[7]
 	                && (memcmp(out + 10, st, 32) == 0);
@@ -190,6 +194,6 @@ bool sha256_device_selftest(int thr_id)
 
 	passed = synth_ok && kat_ok;
 	if (!passed)
-		gpulog(LOG_WARNING, thr_id, "SHA256 device-library self-test FAILED (synthetic %d kat %d)", (int) synth_ok, (int) kat_ok);
-	return passed;
+		gpulog(LOG_ERR, thr_id, "SHA256 device-library self-test FAILED (synthetic %d kat %d)", (int) synth_ok, (int) kat_ok);
+	return selftest_gate(thr_id, "SHA256", passed);
 }
