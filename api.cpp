@@ -8,7 +8,6 @@
  * Software Foundation; either version 2 of the License, or (at your option)
  * any later version.  See COPYING for more details.
  */
-#define APIVERSION "1.9"
 
 #ifdef WIN32
 # define  _WINSOCK_DEPRECATED_NO_WARNINGS
@@ -34,6 +33,15 @@
 #include "miner.h"
 #include "nvml.h"
 #include "algos.h"
+#include "api_http.h"
+#include "api_routes.h"
+#include "api_model.h"
+
+/* Declared here rather than in miner.h: that header is one big extern "C"
+ * block, and this lock is a C++-linkage global. util.cpp, pools.cpp and
+ * algos/equihash/equi-stratum.cpp declare it the same way.
+ * Guards stratum.job — job_id is freed and replaced on every mining.notify. */
+extern pthread_mutex_t stratum_work_lock;
 
 #ifndef WIN32
 # include <errno.h>
@@ -115,7 +123,8 @@ static void buffer_append(const char *s)
 	if (used < MYBUFSIZ)
 		snprintf(buffer + used, MYBUFSIZ - used, "%s", s);
 }
-static time_t startup = 0;
+time_t api_startup_time = 0;
+#define startup api_startup_time
 static int bye = 0;
 
 extern char *opt_api_bind;
@@ -123,6 +132,10 @@ extern int opt_api_port;
 extern char *opt_api_allow;
 extern char *opt_api_groups;
 extern bool opt_api_mcast;
+extern int opt_api_mode;
+extern char *opt_api_token;
+extern char *opt_api_cors;
+extern int opt_api_http_port;
 extern char *opt_api_mcast_addr;
 extern char *opt_api_mcast_code;
 extern char *opt_api_mcast_des;
@@ -138,57 +151,79 @@ extern uint32_t cpu_clock(int);
 
 char driver_version[32] = { 0 };
 
+/* ---- REST dispatch (docs/api-rest.md) ---------------------------------- */
+
+static bool api_mode_serves_http(void)
+{
+	return opt_api_mode == API_MODE_HTTP || opt_api_mode == API_MODE_BOTH;
+}
+
+/* A request line starting with a known method. Deliberately a superset of the
+ * old `GET /` sniff, so `both` mode cannot misroute a POST. */
+static bool api_request_is_http(const char *buf, int len)
+{
+	static const char *verbs[] = { "GET ", "POST ", "HEAD ", "OPTIONS ", "PUT ", "DELETE " };
+	for (size_t i = 0; i < ARRAY_SIZE(verbs); i++) {
+		int l = (int) strlen(verbs[i]);
+		if (len >= l && strncmp(buf, verbs[i], l) == 0)
+			return true;
+	}
+	return false;
+}
+
+/* The WebSocket upgrade keeps going to the legacy handler in every mode, so
+ * api/websocket.htm is not broken by enabling REST. */
+static bool api_request_is_ws_upgrade(const char *buf, int len)
+{
+	char tmp[SOCK_REC_BUFSZ + 1];
+	int n = len < SOCK_REC_BUFSZ ? len : SOCK_REC_BUFSZ;
+	memcpy(tmp, buf, (size_t) n);
+	tmp[n] = '\0';
+	return strstr(tmp, "Sec-WebSocket-Key") != NULL;
+}
+
+static void api_serve_http(SOCKETTYPE c, char group, const char *prefix, size_t prefixlen)
+{
+	api_http_config cfg;
+	api_ctx ctx;
+	size_t nroutes = 0;
+	const api_route *routes = api_routes_get(&nroutes);
+	char *miner_json = api_routes_miner_json_str();
+
+	memset(&cfg, 0, sizeof(cfg));
+	memset(&ctx, 0, sizeof(ctx));
+	cfg.token = opt_api_token;
+	cfg.cors = opt_api_cors != NULL;
+	/* The connection already passed check_connect(); group W means write. */
+	cfg.granted = ISPRIVGROUP(group) ? API_PRIV_WRITE : API_PRIV_READ;
+	cfg.control_enabled = false;   /* no /control/* endpoints in this build */
+	cfg.miner_json = miner_json;
+
+	api_http_serve_prefixed((int) c, prefix, prefixlen, routes, nroutes, &ctx, &cfg);
+
+	free(miner_json);
+
+	/* Ordering matters: /quit only sets the flag, so the 200 is already on the
+	 * wire by the time the miner is told to stop. */
+	if (ctx.quit_requested)
+		bye = 1;
+}
+
+
 /***************************************************************/
 
 static void gpustatus(int thr_id)
 {
-	struct pool_infos *p = &pools[cur_pooln];
+	struct api_thread_snapshot snap;
+	char buf[512];
 
-	if (thr_id >= 0 && thr_id < opt_n_threads) {
-		struct cgpu_info *cgpu = &thr_info[thr_id].gpu;
-		double khashes_per_watt = 0;
-		int gpuid = cgpu->gpu_id;
-		char buf[512]; *buf = '\0';
-		char* card;
+	api_collect_thread(thr_id, &snap);
+	if (!snap.valid)
+		return;
 
-		cuda_gpu_info(cgpu);
-		cgpu->gpu_plimit = device_plimit[cgpu->gpu_id];
-
-#ifdef USE_WRAPNVML
-		cgpu->has_monitoring = true;
-		cgpu->gpu_bus = gpu_busid(cgpu);
-		cgpu->gpu_temp = gpu_temp(cgpu);
-		cgpu->gpu_fan = (uint16_t) gpu_fanpercent(cgpu);
-		cgpu->gpu_fan_rpm = (uint16_t) gpu_fanrpm(cgpu);
-		cgpu->gpu_power = gpu_power(cgpu); // mWatts
-		cgpu->gpu_plimit = gpu_plimit(cgpu); // mW or %
-#endif
-		cgpu->khashes = stats_get_speed(thr_id, 0.0) / 1000.0;
-		if (cgpu->monitor.gpu_power) {
-			cgpu->gpu_power = cgpu->monitor.gpu_power;
-			khashes_per_watt = (double)cgpu->khashes / cgpu->monitor.gpu_power;
-			khashes_per_watt *= 1000; // power in mW
-			//gpulog(LOG_BLUE, thr_id, "KHW: %g", khashes_per_watt);
-		}
-
-		card = device_name[gpuid];
-
-		snprintf(buf, sizeof(buf), "GPU=%d;BUS=%hd;CARD=%s;TEMP=%.1f;"
-			"POWER=%u;FAN=%hu;RPM=%hu;"
-			"FREQ=%u;MEMFREQ=%u;GPUF=%u;MEMF=%u;"
-			"KHS=%.2f;KHW=%.5f;PLIM=%u;"
-			"ACC=%u;REJ=%u;HWF=%u;I=%.1f;THR=%u|",
-			gpuid, cgpu->gpu_bus, card, cgpu->gpu_temp,
-			cgpu->gpu_power, cgpu->gpu_fan, cgpu->gpu_fan_rpm,
-			cgpu->gpu_clock/1000, cgpu->gpu_memclock/1000, // base freqs in MHz
-			cgpu->monitor.gpu_clock, cgpu->monitor.gpu_memclock, // current
-			cgpu->khashes, khashes_per_watt, cgpu->gpu_plimit,
-			cgpu->accepted, (unsigned) cgpu->rejected, (unsigned) cgpu->hw_errors,
-			cgpu->intensity, cgpu->throughput);
-
-		// append to buffer for multi gpus
-		buffer_append(buf);
-	}
+	api_format_thread_binary(&snap, buf, sizeof(buf));
+	// append to buffer for multi gpus
+	buffer_append(buf);
 }
 
 /**
@@ -209,31 +244,11 @@ static char *getthreads(char *params)
 */
 static char *getsummary(char *params)
 {
-	char algo[64] = { 0 };
-	time_t ts = time(NULL);
-	double accps, uptime = difftime(ts, startup);
-	uint32_t wait_time = 0, solved_count = 0;
-	uint32_t accepted_count = 0, rejected_count = 0;
-	for (int p = 0; p < num_pools; p++) {
-		wait_time += pools[p].wait_time;
-		accepted_count += pools[p].accepted_count;
-		rejected_count += pools[p].rejected_count;
-		solved_count += pools[p].solved_count;
-	}
-	accps = (60.0 * accepted_count) / (uptime ? uptime : 1.0);
+	struct api_summary_snapshot snap;
 
-	get_currentalgo(algo, sizeof(algo));
-
+	api_collect_summary(&snap);
 	*buffer = '\0';
-	sprintf(buffer, "NAME=%s;VER=%s;API=%s;"
-		"ALGO=%s;GPUS=%d;KHS=%.2f;SOLV=%d;ACC=%d;REJ=%d;"
-		"ACCMN=%.3f;DIFF=%.6f;NETKHS=%.0f;"
-		"POOLS=%u;WAIT=%u;UPTIME=%.0f;TS=%u|",
-		PACKAGE_NAME, PACKAGE_VERSION, APIVERSION,
-		algo, active_gpus, (double)global_hashrate / 1000.,
-		solved_count, accepted_count, rejected_count,
-		accps, net_diff > 1e-6 ? net_diff : stratum_diff, (double)net_hashrate / 1000.,
-		num_pools, wait_time, uptime, (uint32_t) ts);
+	api_format_summary_binary(&snap, buffer, MYBUFSIZ);
 	return buffer;
 }
 
@@ -242,149 +257,37 @@ static char *getsummary(char *params)
  */
 static char *getpoolnfo(char *params)
 {
-	char *s = buffer;
-	char jobid[128] = { 0 };
-	char extra[96] = { 0 };
+	struct api_pool_snapshot snap;
 	int pooln = params ? atoi(params) % num_pools : cur_pooln;
-	struct pool_infos *p = &pools[pooln];
-	uint32_t last_share = 0;
-	if (p->last_share_time)
-		last_share = (uint32_t) (time(NULL) - p->last_share_time);
 
-	*s = '\0';
-
-	if (stratum.job.job_id)
-		strncpy(jobid, stratum.job.job_id, sizeof(stratum.job.job_id));
-	if (stratum.job.xnonce2) {
-		/* used temporary to be sure all is ok */
-		sprintf(extra, "0x");
-		if (p->algo == ALGO_DECRED) {
-			char compat[32] = { 0 };
-			cbin2hex(&extra[2], (const char*) stratum.xnonce1, min(36, stratum.xnonce2_size));
-			cbin2hex(compat, (const char*) stratum.job.xnonce2, 4);
-			memcpy(&extra[2], compat, 8); // compat extranonce
-		} else {
-			cbin2hex(&extra[2], (const char*) stratum.job.xnonce2, stratum.xnonce2_size);
-		}
-	}
-
-	snprintf(s, MYBUFSIZ, "POOL=%s;ALGO=%s;URL=%s;USER=%s;SOLV=%d;ACC=%d;REJ=%d;STALE=%u;H=%u;JOB=%s;DIFF=%.6f;"
-		"BEST=%.6f;N2SZ=%d;N2=%s;PING=%u;DISCO=%u;WAIT=%u;UPTIME=%u;LAST=%u|",
-		strlen(p->name) ? p->name : p->short_url, algo_names[p->algo],
-		p->url, p->type & POOL_STRATUM ? p->user : "",
-		p->solved_count, p->accepted_count, p->rejected_count, p->stales_count,
-		stratum.job.height, jobid, stratum_diff, p->best_share,
-		(int) stratum.xnonce2_size, extra, stratum.answer_msec,
-		p->disconnects, p->wait_time, p->work_time, last_share);
-
-	return s;
-}
-
-/*****************************************************************************/
-
-static void gpuhwinfos(int gpu_id)
-{
-	char buf[256];
-	char pstate[8];
-	char* card;
-	struct cgpu_info *cgpu = NULL;
-
-	for (int g = 0; g < opt_n_threads; g++) {
-		if (device_map[g] == gpu_id) {
-			cgpu = &thr_info[g].gpu;
-			break;
-		}
-	}
-
-	if (cgpu == NULL)
-		return;
-
-	cuda_gpu_info(cgpu);
-	cgpu->gpu_plimit = device_plimit[cgpu->gpu_id];
-
-#ifdef USE_WRAPNVML
-	cgpu->has_monitoring = true;
-	cgpu->gpu_bus = gpu_busid(cgpu);
-	cgpu->gpu_temp = gpu_temp(cgpu);
-	cgpu->gpu_fan = (uint16_t) gpu_fanpercent(cgpu);
-	cgpu->gpu_fan_rpm = (uint16_t) gpu_fanrpm(cgpu);
-	cgpu->gpu_pstate = (int16_t) gpu_pstate(cgpu);
-	cgpu->gpu_power = gpu_power(cgpu);
-	cgpu->gpu_plimit = gpu_plimit(cgpu);
-	gpu_info(cgpu);
-#ifdef WIN32
-	if (opt_debug) nvapi_pstateinfo(cgpu->gpu_id);
-#endif
-#endif
-
-	memset(pstate, 0, sizeof(pstate));
-	if (cgpu->gpu_pstate != -1)
-		snprintf(pstate, sizeof(pstate), "P%d", (int) cgpu->gpu_pstate);
-
-	card = device_name[gpu_id];
-
-	snprintf(buf, sizeof(buf), "GPU=%d;BUS=%hd;CARD=%s;SM=%hu;MEM=%u;"
-		"TEMP=%.1f;FAN=%hu;RPM=%hu;FREQ=%u;MEMFREQ=%u;GPUF=%u;MEMF=%u;"
-		"PST=%s;POWER=%u;PLIM=%u;"
-		"VID=%hx;PID=%hx;NVML=%d;NVAPI=%d;SN=%s;BIOS=%s|",
-		gpu_id, cgpu->gpu_bus, card, cgpu->gpu_arch, (uint32_t) cgpu->gpu_mem,
-		cgpu->gpu_temp, cgpu->gpu_fan, cgpu->gpu_fan_rpm,
-		cgpu->gpu_clock/1000U, cgpu->gpu_memclock/1000U, // base clocks
-		cgpu->monitor.gpu_clock, cgpu->monitor.gpu_memclock, // current
-		pstate, cgpu->gpu_power, cgpu->gpu_plimit,
-		cgpu->gpu_vid, cgpu->gpu_pid, cgpu->nvml_id, cgpu->nvapi_id,
-		cgpu->gpu_sn, cgpu->gpu_desc);
-
-	buffer_append(buf);
-}
-
-#ifndef WIN32
-static char os_version[64] = "linux ";
-#endif
-
-static const char* os_name()
-{
-#ifdef WIN32
-	return "windows";
-#else
-	FILE *fd = fopen("/proc/version", "r");
-	if (!fd)
-		return "linux";
-	if (!fscanf(fd, "Linux version %48s", &os_version[6])) {
-		fclose(fd);
-		return "linux";
-	}
-	fclose(fd);
-	os_version[48] = '\0';
-	return (const char*) os_version;
-#endif
+	api_collect_pool(pooln, &snap);
+	*buffer = '\0';
+	api_format_pool_binary(&snap, buffer, MYBUFSIZ);
+	return buffer;
 }
 
 /**
- * System and CPU Infos
- */
-static void syshwinfos()
-{
-	char buf[256];
-
-	int cputc = (int) cpu_temp(0);
-	uint32_t cpuclk = cpu_clock(0);
-
-	memset(buf, 0, sizeof(buf));
-	snprintf(buf, sizeof(buf), "OS=%s;NVDRIVER=%s;CPUS=%d;CPUTEMP=%d;CPUFREQ=%d|",
-		os_name(), driver_version, num_cpus, cputc, cpuclk/1000);
-	buffer_append(buf);
-}
-
-/**
- * Returns gpu and system (todo) informations
+ * Returns gpu and system informations
  */
 static char *gethwinfos(char *params)
 {
+	char buf[256];
+
 	*buffer = '\0';
-	for (int i = 0; i < cuda_num_devices(); i++)
-		gpuhwinfos(i);
-	syshwinfos();
+	for (int i = 0; i < cuda_num_devices(); i++) {
+		struct api_gpuhw_snapshot snap;
+		api_collect_gpuhw(i, &snap);
+		if (!snap.valid)
+			continue;
+		api_format_gpuhw_binary(&snap, buf, sizeof(buf));
+		buffer_append(buf);
+	}
+	{
+		struct api_system_snapshot sys;
+		api_collect_system(&sys);
+		api_format_system_binary(&sys, buf, sizeof(buf));
+		buffer_append(buf);
+	}
 	return buffer;
 }
 
@@ -1255,6 +1158,18 @@ static void api()
 	else if (strcmp(opt_api_bind, "127.0.0.1") != 0)
 		applog(LOG_INFO, "API open to the network in read-only mode on port %d", opt_api_port);
 
+	if (api_mode_serves_http()) {
+		applog(LOG_INFO, "REST API on http://%s:%d/api/v1/ (%s)",
+			opt_api_bind, opt_api_port, opt_api_token ? "token" : "no token");
+		/* Writes reachable from off-box without a token is worth saying out
+		 * loud: the token is the only thing standing in front of /quit. */
+		if (!opt_api_token && opt_api_allow && strcmp(opt_api_bind, "127.0.0.1") != 0)
+			applog(LOG_WARNING, "REST API write access is reachable from the network "
+				"without --api-token");
+	} else if (opt_api_token || opt_api_cors) {
+		applog(LOG_WARNING, "--api-token/--api-cors ignored: --api-mode is binary");
+	}
+
 	if (opt_api_mcast)
 		mcast_init();
 
@@ -1289,6 +1204,19 @@ static void api()
 			n = recv(c, &buf[0], SOCK_REC_BUFSZ, 0);
 
 			fail = SOCKETFAIL(n);
+
+			/* HTTP dispatch, on the RAW bytes: the telnet trimming below
+			 * strips a trailing \n and \r, which would destroy the CRLFCRLF
+			 * that terminates an HTTP header block. The WebSocket upgrade is
+			 * left to the legacy handler below so api/websocket.htm keeps
+			 * working in every mode. */
+			if (!fail && n > 0 && api_mode_serves_http() &&
+			    api_request_is_http(buf, n) && !api_request_is_ws_upgrade(buf, n)) {
+				api_serve_http(c, group, buf, (size_t) n);
+				CLOSESOCKET(c);
+				continue;
+			}
+
 			if (fail)
 				n = 0; // recv returned -1; buf[n] below would write buf[-1]
 			else if (n > 0 && buf[n-1] == '\n') {

@@ -20,7 +20,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  compat/sys/time.h compat/getopt/getopt.h \
 			  crc32.c algos/heavy/hefty1.c \
 			  ccminer.cpp pools.cpp util.cpp bench.cpp bignum.cpp \
-			  api.cpp hashlog.cpp nvml.cpp stats.cpp sysinfos.cpp cuda.cpp \
+			  api.cpp api_model.cpp api_model.h api_http.c api_http.h api_routes.cpp api_routes.h hashlog.cpp nvml.cpp stats.cpp sysinfos.cpp cuda.cpp \
 			  nvsettings.cpp \
 			  algos/equihash/equi-stratum.cpp algos/equihash/equi.cpp algos/equihash/blake2/blake2bx.cpp \
 			  algos/equihash/equihash.cpp algos/equihash/cuda_equi.cu algos/equihash/cuda_equi_tromp.cu \

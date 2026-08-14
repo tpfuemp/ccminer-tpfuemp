@@ -630,6 +630,10 @@ extern bool use_syslog;
 extern bool use_colors;
 extern int use_pok;
 extern pthread_mutex_t applog_lock;
+/* --api-mode: what the API port speaks. binary is today's behaviour exactly. */
+#define API_MODE_BINARY 0
+#define API_MODE_HTTP   1
+#define API_MODE_BOTH   2
 extern struct thr_info *thr_info;
 extern int longpoll_thr_id;
 extern int stratum_thr_id;

@@ -288,6 +288,15 @@
     <ClCompile Include="api.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="api_model.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="api_http.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="api_routes.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="nvml.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -487,6 +496,15 @@
       <Filter>Header Files\compat</Filter>
     </ClInclude>
     <ClInclude Include="elist.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="api_model.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="api_http.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="api_routes.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="miner.h">

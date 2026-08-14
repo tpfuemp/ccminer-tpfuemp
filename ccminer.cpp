@@ -235,6 +235,11 @@ char *opt_user_agent = NULL; /* overrides the default USER_AGENT sent to the poo
 int opt_api_port = 4068; /* 0 to disable */
 char *opt_api_allow = NULL;
 char *opt_api_groups = NULL;
+/* REST API (docs/api-rest.md). Defaults keep today's behaviour exactly. */
+int opt_api_mode = API_MODE_BINARY;
+char *opt_api_token = NULL;
+char *opt_api_cors = NULL;
+int opt_api_http_port = 0;
 bool opt_api_mcast = false;
 char *opt_api_mcast_addr = strdup(API_MCAST_ADDR);
 char *opt_api_mcast_code = strdup(API_MCAST_CODE);
@@ -417,6 +422,10 @@ Options:\n\
       --cpu-affinity    set process affinity to cpu core(s), mask 0x3 for cores 0 and 1\n\
       --cpu-priority    set process priority (default: 3) 0 idle, 2 normal to 5 highest\n\
   -b, --api-bind=port   IP:port for the miner API (default: 127.0.0.1:4068), 0 disabled\n\
+      --api-mode=MODE   API protocol: binary (default), http, or both\n\
+      --api-token=TOK   require 'Authorization: Bearer TOK' on every HTTP route\n\
+      --api-cors=ORIG   value for Access-Control-Allow-Origin, enables OPTIONS\n\
+      --api-http-port=P serve HTTP on its own port instead of sniffing one port\n\
       --user-agent=NAME override the miner name sent to the pool (default: " USER_AGENT ")\n\
       --api-remote      Allow remote control, like pool switching, imply --api-allow=0/0\n\
       --api-allow=...   IP/mask of the allowed api client(s), 0/0 for all\n\
@@ -472,6 +481,10 @@ struct option options[] = {
 	{ "api-mcast-code", 1, NULL, 1035 },
 	{ "api-mcast-port", 1, NULL, 1036 },
 	{ "api-mcast-des", 1, NULL, 1037 },
+	{ "api-mode", 1, NULL, 1211 },
+	{ "api-token", 1, NULL, 1212 },
+	{ "api-cors", 1, NULL, 1213 },
+	{ "api-http-port", 1, NULL, 1214 },
 	{ "background", 0, NULL, 'B' },
 	{ "benchmark", 0, NULL, 1005 },
 	{ "cert", 1, NULL, 1001 },
@@ -716,6 +729,8 @@ void proper_exit(int reason)
 	free(opt_api_bind);
 	if (opt_api_allow) free(opt_api_allow);
 	if (opt_api_groups) free(opt_api_groups);
+	if (opt_api_token) free(opt_api_token);
+	if (opt_api_cors) free(opt_api_cors);
 	free(opt_api_mcast_addr);
 	free(opt_api_mcast_code);
 	free(opt_api_mcast_des);
@@ -3641,6 +3656,29 @@ void parse_arg(int key, char *arg)
 	case 1037: /* --api-mcast-des */
 		free(opt_api_mcast_des);
 		opt_api_mcast_des = strdup(arg);
+		break;
+	case 1211: /* --api-mode */
+		if (!strcasecmp(arg, "binary"))    opt_api_mode = API_MODE_BINARY;
+		else if (!strcasecmp(arg, "http")) opt_api_mode = API_MODE_HTTP;
+		else if (!strcasecmp(arg, "both")) opt_api_mode = API_MODE_BOTH;
+		else {
+			fprintf(stderr, "unknown api mode -- '%s' (binary|http|both)\n", arg);
+			show_usage_and_exit(1);
+		}
+		break;
+	case 1212: /* --api-token */
+		free(opt_api_token);
+		opt_api_token = strdup(arg);
+		break;
+	case 1213: /* --api-cors */
+		free(opt_api_cors);
+		opt_api_cors = strdup(arg);
+		break;
+	case 1214: /* --api-http-port */
+		v = atoi(arg);
+		if (v < 0 || v > 65535)
+			show_usage_and_exit(1);
+		opt_api_http_port = v;
 		break;
 	case 'B':
 		opt_background = true;

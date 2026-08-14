@@ -326,6 +326,9 @@
     <ClCompile Include="stats.cpp" />
     <ClCompile Include="nvml.cpp" />
     <ClCompile Include="api.cpp" />
+    <ClCompile Include="api_model.cpp" />
+    <ClCompile Include="api_http.c" />
+    <ClCompile Include="api_routes.cpp" />
     <ClCompile Include="sysinfos.cpp" />
     <ClCompile Include="crc32.c" />
     <ClCompile Include="algos\heavy\hefty1.c" />
@@ -468,6 +471,9 @@
     <ClInclude Include="algos\heavy\heavy.h" />
     <ClInclude Include="algos\heavy\hefty1.h" />
     <ClInclude Include="algos.h" />
+    <ClInclude Include="api_model.h" />
+    <ClInclude Include="api_http.h" />
+    <ClInclude Include="api_routes.h" />
     <ClInclude Include="miner.h" />
     <ClInclude Include="nvml.h" />
     <ClInclude Include="res\resource.h" />
