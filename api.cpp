@@ -57,6 +57,23 @@
 # define in_addr_t uint32_t
 #endif
 
+/* Receive/send timeout on an accepted client socket, in seconds. Bounds how
+ * long one unresponsive client can hold the single-threaded accept loop. */
+#define API_SOCK_TIMEOUT_S 5
+
+static void set_socket_timeouts(SOCKETTYPE sock, int seconds)
+{
+#ifdef WIN32
+	DWORD tmo = (DWORD) seconds * 1000; // milliseconds
+	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*) &tmo, sizeof(tmo));
+	setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*) &tmo, sizeof(tmo));
+#else
+	struct timeval tmo = { seconds, 0 };
+	setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const void*) &tmo, sizeof(tmo));
+	setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const void*) &tmo, sizeof(tmo));
+#endif
+}
+
 #define GROUP(g) (toupper(g))
 #define PRIVGROUP GROUP('W')
 #define NOPRIVGROUP GROUP('R')
@@ -88,6 +105,16 @@ static const char *localaddr = "127.0.0.1";
 static const char *UNAVAILABLE = " - API will not be available";
 static const char *MUNAVAILABLE = " - API multicast listener will not be available";
 static char *buffer = NULL;
+
+/* Bounded append into the shared MYBUFSIZ output buffer. The per-GPU records
+ * are ~512 B and MAX_GPUS is 16, so the old strcat() could not overflow today —
+ * but nothing enforced that, and one MAX_GPUS bump would have. */
+static void buffer_append(const char *s)
+{
+	size_t used = strlen(buffer);
+	if (used < MYBUFSIZ)
+		snprintf(buffer + used, MYBUFSIZ - used, "%s", s);
+}
 static time_t startup = 0;
 static int bye = 0;
 
@@ -160,7 +187,7 @@ static void gpustatus(int thr_id)
 			cgpu->intensity, cgpu->throughput);
 
 		// append to buffer for multi gpus
-		strcat(buffer, buf);
+		buffer_append(buf);
 	}
 }
 
@@ -308,7 +335,7 @@ static void gpuhwinfos(int gpu_id)
 		cgpu->gpu_vid, cgpu->gpu_pid, cgpu->nvml_id, cgpu->nvapi_id,
 		cgpu->gpu_sn, cgpu->gpu_desc);
 
-	strcat(buffer, buf);
+	buffer_append(buf);
 }
 
 #ifndef WIN32
@@ -346,7 +373,7 @@ static void syshwinfos()
 	memset(buf, 0, sizeof(buf));
 	snprintf(buf, sizeof(buf), "OS=%s;NVDRIVER=%s;CPUS=%d;CPUTEMP=%d;CPUFREQ=%d|",
 		os_name(), driver_version, num_cpus, cputc, cpuclk/1000);
-	strcat(buffer, buf);
+	buffer_append(buf);
 }
 
 /**
@@ -588,10 +615,10 @@ static size_t base64_encode(const uchar *indata, size_t insize, char *outptr, si
 			break;
 		output += 4; len += 4;
 	}
-	len = snprintf(outptr, len, "%s", outbuf);
-	// todo: seems to be missing on linux
-	if (strlen(outptr) == 27)
-		strcat(outptr, "=");
+	/* `len` is the encoded length, not the buffer size: passing it as the
+	 * snprintf limit truncated the final character, which the padding hack
+	 * below then papered over for 20-byte (SHA-1) input only. */
+	len = snprintf(outptr, outlen, "%s", outbuf);
 	free(outbuf);
 
 	return len;
@@ -667,7 +694,8 @@ static int websocket_handshake(SOCKETTYPE c, char *result, char *clientkey)
 		// WebSocket Frame - Header + Data
 		memcpy(p, hd, frames);
 		memcpy(p + frames, result, (size_t)datalen);
-		send(c, (const char*)data, (int) (strlen(answer) + frames + datalen + 1), 0);
+		// no +1: that sent a stray NUL past the end of the frame payload
+		send(c, (const char*)data, (int) (handlen + frames + datalen), 0);
 		free(data);
 	}
 	return 0;
@@ -908,11 +936,14 @@ popipo:
 	free(buf);
 }
 
-static bool check_connect(struct sockaddr_in *cli, char **connectaddr, char *group)
+static bool check_connect(struct sockaddr_in *cli, char *connectaddr, size_t addrlen, char *group)
 {
 	bool addrok = false;
 
-	*connectaddr = inet_ntoa(cli->sin_addr);
+	/* inet_ntoa() returns a shared static buffer and this runs on both the
+	 * API thread and the multicast thread. */
+	if (!inet_ntop(AF_INET, &cli->sin_addr, connectaddr, (socklen_t) addrlen))
+		snprintf(connectaddr, addrlen, "?");
 
 	*group = NOPRIVGROUP;
 	if (opt_api_allow) {
@@ -928,7 +959,7 @@ static bool check_connect(struct sockaddr_in *cli, char **connectaddr, char *gro
 	else if (strcmp(opt_api_bind, ALLIP4) == 0)
 		addrok = true;
 	else
-		addrok = (strcmp(*connectaddr, localaddr) == 0);
+		addrok = (strcmp(connectaddr, localaddr) == 0);
 
 	return addrok;
 }
@@ -943,7 +974,7 @@ static void mcast()
 	SOCKETTYPE mcast_sock;
 	SOCKETTYPE reply_sock;
 	socklen_t came_from_siz;
-	char *connectaddr;
+	char connectaddr[INET_ADDRSTRLEN] = { 0 };
 	ssize_t rep;
 	int bound;
 	int count;
@@ -1020,7 +1051,7 @@ static void mcast()
 			continue;
 		}
 
-		addrok = check_connect(&came_from, &connectaddr, &group);
+		addrok = check_connect(&came_from, connectaddr, sizeof(connectaddr), &group);
 		applog(LOG_DEBUG, "API mcast from %s - %s",
 			connectaddr, addrok ? "Accepted" : "Ignored");
 		if (!addrok) {
@@ -1105,7 +1136,7 @@ static void api()
 	unsigned short port = (unsigned short) opt_api_port; // 4068
 	char buf[MYBUFSIZ];
 	int n, bound;
-	char *connectaddr;
+	char connectaddr[INET_ADDRSTRLEN] = { 0 };
 	char *binderror;
 	char group;
 	time_t bindstart;
@@ -1150,7 +1181,8 @@ static void api()
 	serv.sin_addr.s_addr = inet_addr(addr); // TODO: allow bind to ip/interface
 	if (serv.sin_addr.s_addr == (in_addr_t)INVINETADDR) {
 		applog(LOG_ERR, "API initialisation 2 failed (%s)%s", strerror(errno), UNAVAILABLE);
-		// free(apisock); FIXME!!
+		CLOSESOCKET(*apisock);
+		free(apisock);
 		return;
 	}
 
@@ -1242,7 +1274,11 @@ static void api()
 			return;
 		}
 
-		addrok = check_connect(&cli, &connectaddr, &group);
+		/* Without these, a client that connects and sends nothing blocks the
+		 * single-threaded accept loop forever — the whole API stalls. */
+		set_socket_timeouts(c, API_SOCK_TIMEOUT_S);
+
+		addrok = check_connect(&cli, connectaddr, sizeof(connectaddr), &group);
 		if (opt_debug && opt_protocol)
 			applog(LOG_DEBUG, "API: connection from %s - %s",
 				connectaddr, addrok ? "Accepted" : "Ignored");
@@ -1254,7 +1290,7 @@ static void api()
 
 			fail = SOCKETFAIL(n);
 			if (fail)
-				buf[0] = '\0';
+				n = 0; // recv returned -1; buf[n] below would write buf[-1]
 			else if (n > 0 && buf[n-1] == '\n') {
 				/* telnet compat \r\n */
 				buf[n-1] = '\0'; n--;
@@ -1293,9 +1329,12 @@ static void api()
 				if (params != NULL)
 					*(params++) = '\0';
 
+				/* params are not logged: a write command carries the pool
+				 * password, and this line is on by default under -D. */
 				if (opt_debug && opt_protocol && n > 0)
-					applog(LOG_DEBUG, "API: exec command %s(%s)", buf, params ? params : "");
+					applog(LOG_DEBUG, "API: exec command %s()", buf);
 
+				bool matched = false;
 				for (i = 0; i < CMDMAX; i++) {
 					if (strcmp(buf, cmds[i].name) == 0 && strlen(buf)) {
 						if (params && strlen(params)) {
@@ -1303,6 +1342,7 @@ static void api()
 							if (params[strlen(params)-1] == '|')
 								params[strlen(params)-1] = '\0';
 						}
+						matched = true;
 						result = (cmds[i].func)(params);
 						if (wskey) {
 							websocket_handshake(c, result, wskey);
@@ -1312,6 +1352,10 @@ static void api()
 						break;
 					}
 				}
+				/* An unknown command used to close the socket in silence,
+				 * which a client cannot tell from a network stall. */
+				if (!matched && !wskey)
+					send_result(c, (char*) "ERR=unknown command|");
 			}
 			CLOSESOCKET(c);
 		}

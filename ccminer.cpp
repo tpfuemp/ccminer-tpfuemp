@@ -3627,19 +3627,21 @@ void parse_arg(int key, char *arg)
 	case 1034: /* --api-mcast-addr */
 		free(opt_api_mcast_addr);
 		opt_api_mcast_addr = strdup(arg);
+		break;
 	case 1035: /* --api-mcast-code */
 		free(opt_api_mcast_code);
 		opt_api_mcast_code = strdup(arg);
 		break;
-	case 1036: /* --api-mcast-des */
-		free(opt_api_mcast_des);
-		opt_api_mcast_des = strdup(arg);
-		break;
-	case 1037: /* --api-mcast-port */
+	case 1036: /* --api-mcast-port */
 		v = atoi(arg);
 		if (v < 1 || v > 65535) // sanity check
 			show_usage_and_exit(1);
 		opt_api_mcast_port = v;
+		break;
+	case 1037: /* --api-mcast-des */
+		free(opt_api_mcast_des);
+		opt_api_mcast_des = strdup(arg);
+		break;
 	case 'B':
 		opt_background = true;
 		break;
