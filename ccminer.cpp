@@ -2447,8 +2447,11 @@ static void *miner_thread(void *userdata)
 			cuda_clear_lasterror();
 
 			/* Resources are released, so park here; returns as soon as the
-			 * pause lifts, which is why a resume skips the 5 s below. */
+			 * pause lifts, which is why a resume skips the 5 s below. The
+			 * hashrate is zeroed for the same reason the pool_on_hold branch
+			 * below zeroes it. */
 			if (api_ctl_wants_pause()) {
+				global_hashrate = 0;
 				api_ctl_park(thr_id);
 				continue;
 			}

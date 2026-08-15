@@ -99,8 +99,10 @@ size_t api_metrics_render(const api_metrics_input *in, char *buf, size_t buflen)
 	num(v, sizeof(v), in->uptime_s);
 	emit(&s, "miner_uptime_seconds %s\n", v);
 
+	/* Phrased to avoid "name value" in the HELP text itself, which a naive
+	 * grep over the exposition matches instead of the sample. */
 	family(&s, "miner_mining_active", "gauge",
-		"1 when the miner is hashing, 0 when it is not.");
+		"Whether the miner is currently hashing.");
 	emit(&s, "miner_mining_active %d\n", in->mining_active ? 1 : 0);
 
 	/* One series per state, exactly one set to 1, so a query selects by label.
@@ -195,7 +197,7 @@ size_t api_metrics_render(const api_metrics_input *in, char *buf, size_t buflen)
 		/* Absent, not 0, for getwork/GBT: no connection to report on, and
 		 * "disconnected" would be a different claim. */
 		family(&s, "miner_pool_connected", "gauge",
-			"1 when the stratum connection is up. Absent for getwork/GBT pools.");
+			"Whether the stratum connection is up. Absent for getwork/GBT pools.");
 		for (int i = 0; i < in->npools; i++) {
 			const api_metrics_pool *p = &in->pools[i];
 			if (!p->stratum) continue;

@@ -48,6 +48,16 @@ static void copy_str(char *dst, size_t dstlen, const char *src)
 
 /* ------------------------------------------------------------------ summary */
 
+/* A parked miner is not hashing, so every rate reads 0 rather than its last
+ * value. Past rates stay in the stats table, which /history serves. */
+static bool mining_is_parked(void)
+{
+	if (!api_ctl_enabled())
+		return false;
+	const ctl_state_t st = api_ctl_get_state();
+	return st == CTL_PAUSED || st == CTL_STOPPED;
+}
+
 void api_collect_summary(struct api_summary_snapshot *s)
 {
 	time_t ts = time(NULL);
@@ -69,7 +79,7 @@ void api_collect_summary(struct api_summary_snapshot *s)
 	s->api_version = APIVERSION;
 	get_currentalgo(s->algo, sizeof(s->algo));
 	s->gpus = active_gpus;
-	s->khs = (double) global_hashrate / 1000.;
+	s->khs = mining_is_parked() ? 0. : (double) global_hashrate / 1000.;
 	s->solved = solved_count;
 	s->accepted = accepted_count;
 	s->rejected = rejected_count;
@@ -142,7 +152,7 @@ void api_collect_thread(int thr_id, struct api_thread_snapshot *s)
 	s->memfreq = cgpu->gpu_memclock / 1000;
 	s->gpuf = cgpu->monitor.gpu_clock;       // current
 	s->memf = cgpu->monitor.gpu_memclock;
-	s->khs = cgpu->khashes;
+	s->khs = mining_is_parked() ? 0. : cgpu->khashes;
 	s->khw = khashes_per_watt;
 	s->plim = cgpu->gpu_plimit;
 	s->acc = cgpu->accepted;
@@ -557,7 +567,7 @@ void api_collect_metrics(api_metrics_input *in)
 	in->kind = "gpu";
 	in->algo = algo_buf;
 	in->uptime_s = difftime(time(NULL), api_startup_time);
-	in->hashrate_hs = (double) global_hashrate;
+	in->hashrate_hs = mining_is_parked() ? 0. : (double) global_hashrate;
 	in->net_difficulty = net_diff;
 	in->pool_difficulty = stratum_diff;
 
@@ -596,7 +606,7 @@ void api_collect_metrics(api_metrics_input *in)
 		d->device = cgpu->gpu_id;
 		snprintf(d->type, sizeof(d->type), "gpu");
 		snprintf(d->algo, sizeof(d->algo), "%s", algo_buf);
-		d->hashrate_hs = stats_get_speed(i, 0.0);
+		d->hashrate_hs = mining_is_parked() ? 0.0 : stats_get_speed(i, 0.0);
 
 		/* Only what the monitor thread sampled; it does not run under --quiet,
 		 * so "no temperature" is normal and a fabricated 0 would poison every

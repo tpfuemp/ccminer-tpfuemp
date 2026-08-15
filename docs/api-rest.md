@@ -1,8 +1,8 @@
 # Miner REST API — contract v1
 
-**Status: implemented in part.** The GPU miner serves the read and write routes below and answers
-`501` for the rest; the CPU miner does not implement it yet. Call `GET /api/v1/` and read the
-capability list rather than assuming — that is what it is for, and section 10 lists the differences.
+**Status: implemented.** The GPU miner serves every route below; the CPU miner does not implement
+it yet. Call `GET /api/v1/` and read the capability list rather than assuming — that is what it is
+for, and section 10 lists the differences.
 
 This document is the contract both implementations are built against, and it was written before
 either grew handlers: it is the interface an external manager, dashboard or monitoring agent codes
@@ -50,7 +50,7 @@ anything bumps to `/api/v2`, and both versions would then be served during a dep
 | `--api-http-port=PORT` | `"api-http-port"` | int | `0` | with `both`: serve HTTP on a second port instead of sniffing one |
 | `--api-control` | `"api-control"` | flag | off | enable `/api/v1/control/*`; without it those routes answer `403` |
 | `--api-control-min-interval=S` | `"api-control-min-interval"` | int | `15` | minimum seconds between accepted control mutations |
-| `--api-control-park-timeout=MS` | `"api-control-park-timeout"` | int | `10000` | how long a control call waits for mining threads to idle |
+| `--api-control-park-timeout=MS` | `"api-control-park-timeout"` | int | `30000` | how long a control call waits for mining threads to idle |
 
 Modes:
 
@@ -212,6 +212,12 @@ Query parameters: `/threads?id=N` · `/history?thread=N&limit=50` (capped at 50)
 convention doing its job: the value is unavailable, not zero.
 
 `devices` is the GPU count when `kind` is `gpu`, the CPU count when it is `cpu`. Errors: `401`, `403`, `500`.
+
+⚠️ **A hashrate is a measurement, so a miner that is not hashing reports `0`, not its last value.**
+That covers `/summary`, `/threads`, `/devices` and the metrics gauges, and it applies while the
+control API holds the miner `paused` or `stopped`. Past rates remain available from `/history`.
+`0` therefore means "not hashing now" and never "broken" — read `/control/state` or
+`miner_control_state` to learn which.
 
 ### 6.2 `GET /api/v1/threads`
 
@@ -483,7 +489,7 @@ One alphabetical table so a name cannot mean two things in two places. `n` = nul
 | `fan_pct` / `fan_rpm` | int | % / rpm | ✔ | fan speed |
 | `features` | array | — | ✔ | CPU instruction-set features |
 | `hashrate_avg_hs` | float | H/s | | session-average hashrate |
-| `hashrate_hs` | float | H/s | | current hashrate |
+| `hashrate_hs` | float | H/s | | current hashrate; **`0` whenever the miner is not hashing**, including while paused or stopped by the control API |
 | `hashrate_per_watt_khs` | float | kH/s/W | ✔ | efficiency |
 | `health.status` | string | — | | `ok` \| `degraded` |
 | `height` | int | — | ✔ | block height of the current job |
