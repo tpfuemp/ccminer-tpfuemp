@@ -459,8 +459,24 @@ int api_http_serve_prefixed(int sock, const char *prefix, size_t prefixlen,
 			return send_error(sock, 403, "insufficient privilege", cfg);
 	}
 
-	json_t *out = NULL;
 	char errmsg[256] = { 0 };
+
+	if (r->text_handler) {
+		char *text = NULL;
+		status = r->text_handler(&req, ctx, &text, errmsg, sizeof(errmsg));
+		if (status >= 400 || !text) {
+			free(text);
+			return send_error(sock, status >= 400 ? status : 500,
+			                  errmsg[0] ? errmsg : NULL, cfg);
+		}
+		const size_t tlen = strlen(text);
+		int rc = api_http_send(sock, status, r->content_type,
+		                       req.method == API_M_HEAD ? NULL : text, tlen, cfg);
+		free(text);
+		return rc == 0 ? status : -1;
+	}
+
+	json_t *out = NULL;
 	status = r->handler(&req, ctx, &out, errmsg, sizeof(errmsg));
 
 	if (status >= 400) {

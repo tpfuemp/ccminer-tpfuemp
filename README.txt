@@ -174,6 +174,13 @@ its command line interface and options.
   -b, --api-bind=port   IP:port for the miner API (default: 127.0.0.1:4068), 0 disabled
       --api-remote      Allow remote control, like pool switching, imply --api-allow=0/0
       --api-allow=...   IP/mask of the allowed api client(s), 0/0 for all
+      --api-mode=MODE   API protocol: binary (default), http, or both
+      --api-token=TOK   require 'Authorization: Bearer TOK' on every HTTP route
+      --api-cors=ORIG   value for Access-Control-Allow-Origin, enables OPTIONS
+      --api-http-port=P serve HTTP on its own port instead of sniffing one port
+      --api-control     Allow the API to pause/resume/stop mining at runtime
+      --api-control-min-interval=N  Seconds between accepted state changes (default: 15)
+      --api-control-park-timeout=N  Milliseconds to wait for threads to idle (default: 30000)
       --max-temp=N      Only mine if gpu temp is less than specified value
       --max-rate=N[KMG] Only mine if net hashrate is less than specified value
       --max-diff=N      Only mine if net difficulty is less than specified value

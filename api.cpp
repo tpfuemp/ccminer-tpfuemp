@@ -36,6 +36,7 @@
 #include "api_http.h"
 #include "api_routes.h"
 #include "api_model.h"
+#include "api_control.h"
 
 /* Declared here rather than in miner.h: that header is one big extern "C"
  * block, and this lock is a C++-linkage global. util.cpp, pools.cpp and
@@ -194,9 +195,12 @@ static void api_serve_http(SOCKETTYPE c, char group, const char *prefix, size_t 
 	memset(&ctx, 0, sizeof(ctx));
 	cfg.token = opt_api_token;
 	cfg.cors = opt_api_cors != NULL;
-	/* The connection already passed check_connect(); group W means write. */
-	cfg.granted = ISPRIVGROUP(group) ? API_PRIV_WRITE : API_PRIV_READ;
-	cfg.control_enabled = false;   /* no /control/* endpoints in this build */
+	/* The connection already passed check_connect(); group W means write.
+	 * --api-control promotes write access to control access. */
+	cfg.granted = ISPRIVGROUP(group)
+		? (api_ctl_enabled() ? API_PRIV_CONTROL : API_PRIV_WRITE)
+		: API_PRIV_READ;
+	cfg.control_enabled = api_ctl_enabled();
 	cfg.miner_json = miner_json;
 
 	api_http_serve_prefixed((int) c, prefix, prefixlen, routes, nroutes, &ctx, &cfg);
@@ -410,6 +414,51 @@ static char *remote_quit(char *params)
 /*****************************************************************************/
 
 static char *gethelp(char *params);
+/**
+ * Runtime control over the legacy protocol: ctl|state|pause|resume|stop.
+ * A driver for the park mechanism; the REST contract is the real interface.
+ * Write privilege, inert unless --api-control is given.
+ */
+static char *remote_control(char *params)
+{
+	ctl_result_t rc = CTL_OK;
+	*buffer = '\0';
+
+	if (!api_ctl_enabled()) {
+		sprintf(buffer, "ERR=control API disabled (--api-control)|");
+		return buffer;
+	}
+
+	if (!params || !strlen(params) || !strcasecmp(params, "state")) {
+		const char *err = api_ctl_last_error();
+		snprintf(buffer, MYBUFSIZ,
+			"STATE=%s;EPOCH=%u;PARKED=%d;THREADS=%d;SWITCHES=%u;SINCE=%u;READY=%d;ERR=%s|",
+			api_ctl_state_name(api_ctl_get_state()), api_ctl_epoch(),
+			api_ctl_parked(), api_ctl_threads_total(), api_ctl_switch_count(),
+			(uint32_t) api_ctl_state_since(), api_ctl_ready_for_switch() ? 1 : 0,
+			err ? err : "");
+		return buffer;
+	}
+
+	/* Post and return; the caller polls ctl|state. The accept loop is single
+	 * threaded, so any wait here is a wait for every other client too. */
+	const int wait_ms = 0;
+
+	if (!strcasecmp(params, "pause"))       rc = api_ctl_set_state(CTL_PAUSED, wait_ms);
+	else if (!strcasecmp(params, "resume")) rc = api_ctl_set_state(CTL_RUNNING, wait_ms);
+	else if (!strcasecmp(params, "start"))  rc = api_ctl_set_state(CTL_RUNNING, wait_ms);
+	else if (!strcasecmp(params, "stop"))   rc = api_ctl_set_state(CTL_STOPPED, wait_ms);
+	else {
+		sprintf(buffer, "ERR=unknown control verb|");
+		return buffer;
+	}
+
+	snprintf(buffer, MYBUFSIZ, "RC=%d;STATE=%s;EPOCH=%u;PARKED=%d|",
+		(int) rc, api_ctl_state_name(api_ctl_get_state()),
+		api_ctl_epoch(), api_ctl_parked());
+	return buffer;
+}
+
 struct CMDS {
 	const char *name;
 	char *(*func)(char *);
@@ -427,6 +476,7 @@ struct CMDS {
 	{ "seturl",  remote_seturl, true }, /* prefer switchpool, deprecated */
 	{ "switchpool", remote_switchpool, true },
 	{ "quit", remote_quit, true },
+	{ "ctl", remote_control, true },
 
 	/* keep it the last */
 	{ "help",    gethelp, false },

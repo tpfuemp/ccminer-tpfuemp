@@ -918,6 +918,7 @@ void pool_init_defaults(void);
 void pool_set_creds(int pooln);
 void pool_set_attr(int pooln, const char* key, char* arg);
 bool pool_switch_url(char *params);
+bool pool_switch_url_algo(char *params, int algo);
 bool pool_switch(int thr_id, int pooln);
 bool pool_switch_next(int thr_id);
 int pool_get_first_valid(int startfrom);
@@ -934,6 +935,9 @@ bool stratum_send_line(struct stratum_ctx *sctx, char *s);
 char *stratum_recv_line(struct stratum_ctx *sctx);
 bool stratum_connect(struct stratum_ctx *sctx, const char *url);
 void stratum_disconnect(struct stratum_ctx *sctx);
+/* As above, but not counted as a pool failure: the control API drops the
+ * socket on purpose, and pools[i].disconnects must stay a health signal. */
+void stratum_disconnect_intentional(struct stratum_ctx *sctx);
 bool stratum_subscribe(struct stratum_ctx *sctx);
 bool stratum_authorize(struct stratum_ctx *sctx, const char *user, const char *pass);
 bool stratum_handle_method(struct stratum_ctx *sctx, const char *s);

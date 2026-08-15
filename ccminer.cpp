@@ -42,6 +42,7 @@
 
 #include "miner.h"
 #include "algos.h"
+#include "api_control.h"
 #include "algos/sia/sia-rpc.h"
 #include "algos/cryptonight/xmr-rpc.h"
 #include "sph/sph_sha3d.h"
@@ -240,6 +241,9 @@ int opt_api_mode = API_MODE_BINARY;
 char *opt_api_token = NULL;
 char *opt_api_cors = NULL;
 int opt_api_http_port = 0;
+bool opt_api_control = false;
+int opt_api_control_min_interval = 15;
+int opt_api_control_park_timeout = 30000;
 bool opt_api_mcast = false;
 char *opt_api_mcast_addr = strdup(API_MCAST_ADDR);
 char *opt_api_mcast_code = strdup(API_MCAST_CODE);
@@ -429,6 +433,9 @@ Options:\n\
       --user-agent=NAME override the miner name sent to the pool (default: " USER_AGENT ")\n\
       --api-remote      Allow remote control, like pool switching, imply --api-allow=0/0\n\
       --api-allow=...   IP/mask of the allowed api client(s), 0/0 for all\n\
+      --api-control     Allow the API to pause/resume/stop mining at runtime\n\
+      --api-control-min-interval=N  Seconds between accepted state changes (default: 15)\n\
+      --api-control-park-timeout=N  Milliseconds to wait for threads to idle (default: 30000)\n\
       --max-temp=N      Only mine if gpu temp is less than specified value\n\
       --max-rate=N[KMG] Only mine if net hashrate is less than specified value\n\
       --max-diff=N      Only mine if net difficulty is less than specified value\n\
@@ -485,6 +492,9 @@ struct option options[] = {
 	{ "api-token", 1, NULL, 1212 },
 	{ "api-cors", 1, NULL, 1213 },
 	{ "api-http-port", 1, NULL, 1214 },
+	{ "api-control", 0, NULL, 1215 },
+	{ "api-control-min-interval", 1, NULL, 1216 },
+	{ "api-control-park-timeout", 1, NULL, 1217 },
 	{ "background", 0, NULL, 'B' },
 	{ "benchmark", 0, NULL, 1005 },
 	{ "cert", 1, NULL, 1001 },
@@ -694,6 +704,9 @@ void proper_exit(int reason)
 		return;
 
 	abort_flag = true;
+	/* Release parked threads before CUDA teardown and join the control
+	 * worker while its wait can still see abort_flag. */
+	api_ctl_shutdown();
 	usleep(200 * 1000);
 	cuda_shutdown();
 
@@ -2070,6 +2083,11 @@ static bool wanna_mine(int thr_id)
 	bool state = true;
 	bool allow_pool_rotate = (thr_id == 0 && num_pools > 1 && !pool_is_switching);
 
+	/* Runtime control (docs/api-rest.md section 7): first and unconditional, so
+	 * a paused miner idles regardless of every other condition. */
+	if (api_ctl_wants_pause())
+		return false;
+
 	if (opt_max_temp > 0.0) {
 #ifdef USE_WRAPNVML
 		struct cgpu_info * cgpu = &thr_info[thr_id].gpu;
@@ -2427,6 +2445,13 @@ static void *miner_thread(void *userdata)
 			algo_free_all(thr_id);
 			// clear any free error (algo switch)
 			cuda_clear_lasterror();
+
+			/* Resources are released, so park here; returns as soon as the
+			 * pause lifts, which is why a resume skips the 5 s below. */
+			if (api_ctl_wants_pause()) {
+				api_ctl_park(thr_id);
+				continue;
+			}
 
 			// conditional pool switch
 			if (num_pools > 1 && conditional_pool_rotate) {
@@ -3423,6 +3448,14 @@ wait_stratum_url:
 		}
 
 		while (!stratum.curl && !abort_flag) {
+			/* A stopped miner must not reconnect. Checked before any connect
+			 * attempt and without touching `failures`: the escalation below
+			 * calls proper_exit(), which would turn a stop into a kill. */
+			if (api_ctl_hold_connection()) {
+				usleep(200 * 1000);
+				continue;
+			}
+
 			pthread_mutex_lock(&g_work_lock);
 			g_work_time = 0;
 			g_work.data[0] = 0;
@@ -3434,7 +3467,12 @@ wait_stratum_url:
 			    !stratum_authorize(&stratum, pool->user, pool->pass))
 			{
 				stratum_disconnect(&stratum);
-				if (opt_retries >= 0 && ++failures > opt_retries) {
+					/* A control-requested pool switch owns the choice of pool while
+				 * it is in flight: failing over here would move the rig to a
+				 * pool the manager did not ask for, and pool_switch() changes
+				 * algo with no barrier while the miner threads are live. */
+				if (opt_retries >= 0 && ++failures > opt_retries &&
+				    !api_ctl_switch_in_flight()) {
 					if (num_pools > 1 && opt_pool_failover) {
 						applog(LOG_WARNING, "Stratum connect timeout, failover...");
 						pool_switch_next(-1);
@@ -3490,12 +3528,44 @@ wait_stratum_url:
 		// check we are on the right pool
 		if (switchn != pool_switch_count) goto pool_switched;
 
-		if (!stratum_socket_full(&stratum, opt_timeout)) {
-			if (opt_debug)
-				applog(LOG_WARNING, "Stratum connection timed out");
-			s = NULL;
-		} else
-			s = stratum_recv_line(&stratum);
+		/* A requested pool switch runs here, on the thread that owns the
+		 * stratum struct: pool_switch() replaces it wholesale while
+		 * stratum_recv_line() reads it under no lock. */
+		{
+			char ctl_url[1024];
+			int ctl_idx = -1, ctl_algo = -1;
+			if (api_ctl_pool_request_take(ctl_url, sizeof(ctl_url), &ctl_idx, &ctl_algo)) {
+				api_ctl_pool_request_done(ctl_idx >= 0
+					? pool_switch(-1, ctl_idx)
+					: pool_switch_url_algo(ctl_url, ctl_algo));
+				if (switchn != pool_switch_count) goto pool_switched;
+			}
+		}
+
+		/* One-second slices rather than one long select: same total timeout,
+		 * but the handover above stays reachable while the pool is quiet. */
+		{
+			bool ready = false;
+			int waited = 0;
+			while (!(ready = stratum_socket_full(&stratum, 1))) {
+				if (abort_flag || api_ctl_pool_request_pending() ||
+				    switchn != pool_switch_count)
+					break;
+				if (++waited >= opt_timeout)
+					break;
+			}
+			if (ready) {
+				s = stratum_recv_line(&stratum);
+			} else if (abort_flag) {
+				break;
+			} else if (api_ctl_pool_request_pending() || switchn != pool_switch_count) {
+				continue;             /* re-run the checks at the top */
+			} else {
+				if (opt_debug)
+					applog(LOG_WARNING, "Stratum connection timed out");
+				s = NULL;
+			}
+		}
 
 		// double check we are on the right pool
 		if (switchn != pool_switch_count) goto pool_switched;
@@ -3679,6 +3749,19 @@ void parse_arg(int key, char *arg)
 		if (v < 0 || v > 65535)
 			show_usage_and_exit(1);
 		opt_api_http_port = v;
+		break;
+	case 1215: /* --api-control */
+		opt_api_control = true;
+		break;
+	case 1216: /* --api-control-min-interval */
+		v = atoi(arg);
+		if (v < 0) show_usage_and_exit(1);
+		opt_api_control_min_interval = v;
+		break;
+	case 1217: /* --api-control-park-timeout */
+		v = atoi(arg);
+		if (v < 100) show_usage_and_exit(1);
+		opt_api_control_park_timeout = v;
 		break;
 	case 'B':
 		opt_background = true;
@@ -3960,6 +4043,28 @@ void parse_arg(int key, char *arg)
 			while (n < MAX_GPUS)
 				device_texturecache[n++] = last;
 		}
+		break;
+	case 1084: /* --yescrypt-param N[,r[,p]] */
+		{
+			/* Only -a yescrypt reads these; r8/r16/r24/r32 carry their own
+			 * constants. 0 leaves the algo default. */
+			char *pch = strtok(arg, ",");
+			uint32_t vals[3] = { 0, 0, 0 };
+			int n = 0;
+			while (pch != NULL && n < 3) {
+				vals[n++] = (uint32_t) atoi(pch);
+				pch = strtok(NULL, ",");
+			}
+			if (!n) show_usage_and_exit(1);
+			yescrypt_param_N = vals[0];
+			if (n > 1) yescrypt_param_r = vals[1];
+			if (n > 2) yescrypt_param_p = vals[2];
+		}
+		break;
+	case 1085: /* --yescrypt-key */
+		free(yescrypt_key);
+		yescrypt_key = strdup(arg);
+		yescrypt_key_len = strlen(arg);
 		break;
 	case 1055: /* cryptonight --bfactor */
 		{
@@ -4754,6 +4859,10 @@ int main(int argc, char *argv[])
 		}
 	}
 #endif
+
+	/* Control core. Initialised before the API thread so a request arriving
+	 * on the first accept already sees a consistent state block. */
+	api_ctl_init(opt_api_control, opt_api_control_min_interval, opt_api_control_park_timeout);
 
 	if (opt_api_port) {
 		/* api thread */

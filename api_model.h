@@ -25,6 +25,8 @@
 
 #include <jansson.h>
 
+#include "api_metrics.h"
+
 /* Version of the binary API contract reported as API= in the summary record. */
 #ifndef APIVERSION
 #define APIVERSION "1.9"
@@ -90,6 +92,8 @@ struct api_pool_snapshot {
 	uint32_t wait_time;
 	uint32_t work_time;
 	uint32_t last_share_age;
+	bool stratum;             /* false for getwork/GBT */
+	bool connected;
 };
 
 /* ---------------------------------------------------------- GPU hardware */
@@ -122,6 +126,7 @@ struct api_system_snapshot {
 	int cpus;
 	int cpu_temp_c;
 	uint32_t cpu_clock_mhz;
+	int cpu_fan_pct;          /* -1 = no sensor on this platform */
 };
 
 /* -------------------------------------------------------------- collectors */
@@ -151,5 +156,11 @@ json_t *api_build_pool_json(int index, bool active, const struct api_pool_snapsh
 json_t *api_build_device_json(const struct api_gpuhw_snapshot *hw,
                               const struct api_thread_snapshot *th);
 json_t *api_build_system_json(const struct api_system_snapshot *s);
+
+/* ------------------------------------------------------------- metrics */
+
+/* Fills the Prometheus input struct from cached state only — no vendor
+ * telemetry calls, because a scraper polls this every 15-60 s. */
+void api_collect_metrics(api_metrics_input *in);
 
 #endif /* API_MODEL_H */

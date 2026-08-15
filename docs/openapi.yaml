@@ -5,7 +5,9 @@ openapi: 3.1.0
 # byte-identical in the GPU and CPU miner repositories and are covered by
 # docs/api-rest.sha256 (see api/tests/check-docs-sync.sh).
 #
-# Status: specification. No miner implements this yet.
+# Status: specification. Read the capability list from `GET /api/v1/` to learn
+# what a given miner and configuration actually serve — implementations are
+# expected to answer `501` for the rest rather than hide the route.
 #
 # `/metrics` is Prometheus text exposition, so only its media type is described
 # here; the metric names, types and labels live in the Markdown reference
@@ -302,7 +304,9 @@ paths:
                   - type: object
                     required: [history]
                     properties:
-                      history: { type: array, items: { type: object } }
+                      history:
+                        type: array
+                        items: { $ref: '#/components/schemas/HistoryRecord' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '501': { $ref: '#/components/responses/NotImplemented' }
@@ -324,7 +328,9 @@ paths:
                   - type: object
                     required: [scanlog]
                     properties:
-                      scanlog: { type: array, items: { type: object } }
+                      scanlog:
+                        type: array
+                        items: { $ref: '#/components/schemas/ScanlogRecord' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '501': { $ref: '#/components/responses/NotImplemented' }
@@ -346,7 +352,7 @@ paths:
                   - type: object
                     required: [meminfo]
                     properties:
-                      meminfo: { type: object }
+                      meminfo: { $ref: '#/components/schemas/Meminfo' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '501': { $ref: '#/components/responses/NotImplemented' }
@@ -530,6 +536,7 @@ paths:
       requestBody: { $ref: '#/components/requestBodies/WaitMs' }
       responses:
         '200': { $ref: '#/components/responses/ControlResult' }
+        '202': { $ref: '#/components/responses/ControlAccepted' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -542,6 +549,7 @@ paths:
       requestBody: { $ref: '#/components/requestBodies/WaitMs' }
       responses:
         '200': { $ref: '#/components/responses/ControlResult' }
+        '202': { $ref: '#/components/responses/ControlAccepted' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -556,6 +564,7 @@ paths:
       requestBody: { $ref: '#/components/requestBodies/WaitMs' }
       responses:
         '200': { $ref: '#/components/responses/ControlResult' }
+        '202': { $ref: '#/components/responses/ControlAccepted' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
         '409': { $ref: '#/components/responses/Conflict' }
@@ -676,6 +685,29 @@ components:
                       state:  { $ref: '#/components/schemas/ControlStateName' }
                       epoch:  { type: integer }
                       parked: { type: integer }
+    ControlAccepted:
+      description: |
+        Accepted but not complete within `wait_ms`. The mutation is still
+        running; poll `/control/state` until `state` leaves `switching`, then
+        read `epoch` (advanced = applied) and `last_error`. `wait_ms: 0`
+        always takes this path.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: '#/components/schemas/Envelope'
+              - type: object
+                required: [result]
+                properties:
+                  result:
+                    type: object
+                    properties:
+                      state:  { $ref: '#/components/schemas/ControlStateName' }
+                      epoch:  { type: integer }
+                      parked: { type: integer }
+                      poll:
+                        type: string
+                        description: Path to poll, supplied so a client need not build it.
     BadRequest:
       description: Malformed path, query or body; wrong JSON type; missing required field.
       content: { application/json: { schema: { $ref: '#/components/schemas/ErrorEnvelope' } } }
@@ -868,6 +900,7 @@ components:
         cpus:          { type: [integer, "null"] }
         cpu_temp_c:    { type: [number, "null"] }
         cpu_clock_mhz: { type: [integer, "null"] }
+        cpu_fan_pct:   { type: [integer, "null"], description: "null where no CPU fan sensor is implemented." }
 
     Pool:
       type: object
@@ -880,8 +913,19 @@ components:
         user:             { type: [string, "null"] }
         algo:             { type: [string, "null"] }
         shares:           { $ref: '#/components/schemas/Shares' }
+        type:             { type: string, enum: [stratum, getwork] }
+        status:           { type: string, enum: [connected, disconnected] }
         stale:            { type: [integer, "null"], description: "null on a cpu miner." }
         difficulty:       { type: [number, "null"] }
+        best_share:       { type: [number, "null"] }
+        job:
+          type: object
+          description: Current stratum job. The binary API exposed these as JOB/H/N2SZ/N2.
+          properties:
+            id:               { type: [string, "null"] }
+            height:           { type: [integer, "null"] }
+            extranonce2_size: { type: integer }
+            extranonce2:      { type: [string, "null"] }
         ping_ms:          { type: [integer, "null"] }
         disconnects:      { type: [integer, "null"] }
         wait_time_s:      { type: [integer, "null"] }
@@ -904,7 +948,12 @@ components:
       required: [name, type, tier]
       properties:
         name: { type: string }
-        type: { type: string, enum: [int, string, float, bool] }
+        type:
+          type: string
+          enum: [int, string, int_list, float_list]
+          description: |
+            The list types are comma-separated and positional, one entry per
+            device; a single value applies to every device.
         tier:
           type: string
           enum: [fast, slow]
@@ -920,6 +969,46 @@ components:
         params:
           type: array
           items: { $ref: '#/components/schemas/AlgoParam' }
+
+    HistoryRecord:
+      type: object
+      description: One scan record. hashrate_hs is H/s; the binary API reported kH/s.
+      properties:
+        thread_id:   { type: integer }
+        device_id:   { type: integer }
+        height:      { type: integer }
+        hashrate_hs: { type: number }
+        difficulty:  { type: number }
+        hashcount:   { type: integer }
+        found:       { type: boolean }
+        id:          { type: integer, description: Monotonic record id. }
+        timestamp:   { type: integer }
+
+    ScanlogRecord:
+      type: object
+      description: One entry of the nonce-range hash log. Debug builds only.
+      properties:
+        height:        { type: integer }
+        pool_index:    { type: integer }
+        job_id:        { type: integer }
+        nonce_id:      { type: integer }
+        share_diff:    { type: number }
+        nonce:         { type: integer }
+        scanned_from:  { type: integer }
+        scanned_to:    { type: integer }
+        scanned_count: { type: integer }
+        submitted:     { type: boolean }
+        timestamp:     { type: integer }
+
+    Meminfo:
+      type: object
+      description: The miner's own bookkeeping allocations, not device or process memory.
+      properties:
+        stats_records:   { type: integer }
+        stats_bytes:     { type: integer }
+        hashlog_records: { type: integer }
+        hashlog_bytes:   { type: integer }
+        total_bytes:     { type: integer }
 
     ControlStateName:
       type: string

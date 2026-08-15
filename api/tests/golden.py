@@ -29,6 +29,9 @@ HOST, PORT = "127.0.0.1", 4068
 COMMANDS = [
     "summary", "threads", "pool", "hwinfo", "histo", "scanlog", "meminfo",
     "help", "bogus", "",
+    # Read-only control probes. The mutating verbs are deliberately absent: a
+    # golden capture must not change the state of the miner it is measuring.
+    "ctl|state", "ctl|bogusverb",
 ]
 
 # key=value pairs whose value legitimately differs between two runs of the SAME

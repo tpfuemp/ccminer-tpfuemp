@@ -209,6 +209,13 @@ bool pool_switch(int thr_id, int pooln)
 
 	pthread_mutex_unlock(&stratum_work_lock);
 
+	/* A pool added at runtime (API or seturl) never passed through
+	 * pool_init_defaults(), so its algo is still the unset sentinel. Assigning
+	 * -1 below would put opt_algo out of range for algo_names[] and the
+	 * scanhash dispatch. */
+	if (p->algo == -1)
+		p->algo = (int) opt_algo;
+
 	// algo "blind" switch without free, not proper
 	// todo: barrier required to free algo resources
 	if (p->algo != (int) opt_algo) {
@@ -317,7 +324,13 @@ bool pool_switch_next(int thr_id)
 }
 
 // seturl from api remote (deprecated)
-bool pool_switch_url(char *params)
+/*
+ * As pool_switch_url(), but pins the algo for the new entry. parse_arg('o')
+ * rotates through MAX_POOLS slots, so a recycled slot still carries the
+ * previous occupant's algo, which pool_switch() would apply over the caller's.
+ * Pass -1 for the historic behaviour.
+ */
+bool pool_switch_url_algo(char *params, int algo)
 {
 	int prevn = cur_pooln, nextn;
 	parse_arg('o', params);
@@ -327,7 +340,14 @@ bool pool_switch_url(char *params)
 	cur_pooln = prevn;
 	if (nextn == prevn)
 		return false;
+	if (algo >= 0)
+		pools[nextn].algo = algo;
 	return pool_switch(-1, nextn);
+}
+
+bool pool_switch_url(char *params)
+{
+	return pool_switch_url_algo(params, -1);
 }
 
 // Parse pools array in json config

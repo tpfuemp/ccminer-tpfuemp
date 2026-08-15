@@ -1136,11 +1136,23 @@ void stratum_free_job(struct stratum_ctx *sctx)
 	pthread_mutex_unlock(&stratum_work_lock);
 }
 
+/* Set while the control API drops the socket on purpose, so a manager stopping
+ * a rig does not fabricate pool failures in the stat used to judge it. */
+static bool stratum_disconnect_deliberate = false;
+
+void stratum_disconnect_intentional(struct stratum_ctx *sctx)
+{
+	stratum_disconnect_deliberate = true;
+	stratum_disconnect(sctx);
+	stratum_disconnect_deliberate = false;
+}
+
 void stratum_disconnect(struct stratum_ctx *sctx)
 {
 	pthread_mutex_lock(&stratum_sock_lock);
 	if (sctx->curl) {
-		pools[sctx->pooln].disconnects++;
+		if (!stratum_disconnect_deliberate)
+			pools[sctx->pooln].disconnects++;
 		curl_easy_cleanup(sctx->curl);
 		sctx->curl = NULL;
 		if (sctx->sockbuf)

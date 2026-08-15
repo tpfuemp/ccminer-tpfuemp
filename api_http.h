@@ -82,12 +82,20 @@ typedef enum {
 typedef int (*api_handler_fn)(const api_request *req, void *ctx,
                               json_t **out, char *errmsg, size_t errlen);
 
+/* Same contract, but the body is already-rendered text and the route names its
+ * own content type (Prometheus exposition is not JSON). On success the handler
+ * stores a malloc'd buffer in *out and the transport frees it. */
+typedef int (*api_text_fn)(const api_request *req, void *ctx,
+                           char **out, char *errmsg, size_t errlen);
+
 typedef struct {
 	api_method method;
 	const char *path;            /* exact, or trailing '/' = prefix match  */
 	api_priv priv;
 	bool available;              /* false -> 501 not_implemented           */
 	api_handler_fn handler;
+	api_text_fn text_handler;    /* optional; wins over handler when set   */
+	const char *content_type;    /* required when text_handler is set      */
 } api_route;
 
 /* Everything the transport needs to know about policy, supplied by the

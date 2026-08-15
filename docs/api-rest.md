@@ -1,16 +1,20 @@
 # Miner REST API — contract v1
 
-**Status: specification. No miner implements this yet.** This document is the contract that the
-implementations are built against, and it is written first on purpose: it is the interface an
-external manager, dashboard or monitoring agent codes against, so it must be agreed before either
-miner grows handlers.
+**Status: implemented in part.** The GPU miner serves the read and write routes below and answers
+`501` for the rest; the CPU miner does not implement it yet. Call `GET /api/v1/` and read the
+capability list rather than assuming — that is what it is for, and section 10 lists the differences.
+
+This document is the contract both implementations are built against, and it was written before
+either grew handlers: it is the interface an external manager, dashboard or monitoring agent codes
+against, so it had to be agreed first.
 
 This file is duplicated verbatim in both miner trees. If you change one copy, change both in the
 same session — a checked-in hash of this file plus `openapi.yaml` is compared by the test suite,
 and a divergence fails the run.
 
-Examples below are normative for shape and field names. They are hand-written at specification
-time; each will be replaced with real captured output as the corresponding endpoint lands.
+Examples below are normative for shape and field names. They are **real captured output** from a
+running miner against a live pool, reformatted for width, with the operator's wallet replaced by
+`wallet.worker`. Values are a snapshot, not a promise; field names and nullability are the contract.
 
 ---
 
@@ -128,16 +132,22 @@ exactly which capabilities that build serves, so a manager negotiates once inste
 
 ```json
 {
-  "miner": { "name": "gpu-miner", "version": "1.2.3", "api_version": "1.0", "kind": "gpu" },
+  "miner": { "name": "ccminer-tpfuemp", "version": "2026.07.2", "api_version": "1.0", "kind": "gpu" },
   "index": {
     "capabilities": ["summary", "threads", "devices", "system", "pools", "health",
-                     "history", "scanlog", "meminfo", "config", "algos",
-                     "pools.switch", "pools.url", "quit",
-                     "control.run_state", "control.profile", "metrics"],
+                     "config", "algos", "history", "scanlog", "meminfo",
+                     "pools.switch", "pools.url", "quit"],
     "links": { "summary": "/api/v1/summary", "devices": "/api/v1/devices" }
   }
 }
 ```
+
+⚠️ **That capability list is one build's, not the contract's.** The example above omits the
+`control.*` group and `metrics`; a build that does not route them answers `501` on those paths. A
+routed `control.*` capability still answers `403` when the miner was started without
+`--api-control`, so a manager should treat a `403` there as "control exists but is switched off",
+not as a missing feature. A client must read the list rather than assume the full set — that is the
+whole point of calling this endpoint first.
 
 The list is derived from the server's route table and the `--api-control` gate, so it cannot drift
 from actual behaviour. A capability absent here answers `501` (or `403` for control) if called.
@@ -184,18 +194,22 @@ Query parameters: `/threads?id=N` · `/history?thread=N&limit=50` (capped at 50)
 ```json
 { "miner": { "…": "" },
   "summary": {
-    "algo": "x16r",
-    "uptime_s": 3612,
-    "timestamp": 1786000000,
-    "hashrate_hs": 21500000.0,
-    "hashrate_avg_hs": 21300000.0,
-    "devices": 3,
-    "threads": 3,
-    "shares": { "accepted": 41, "rejected": 1, "stale": 0, "solved": 0, "accepted_per_min": 0.68 },
-    "difficulty": { "pool": 0.5, "network": 12345.678, "best_share": 3.21 },
-    "network": { "hashrate_hs": 4.1e15 },
-    "pools": { "count": 2, "active": 0, "wait_time_s": 12 } } }
+    "algo": "sha3t",
+    "uptime_s": 40,
+    "timestamp": 1786735914,
+    "hashrate_hs": 269024983.0,
+    "hashrate_avg_hs": null,
+    "devices": 1,
+    "threads": 1,
+    "shares": { "accepted": 5, "rejected": 0, "stale": null, "solved": 0, "accepted_per_min": 7.5 },
+    "difficulty": { "pool": 1.0, "network": 372.6308775514737, "best_share": 8.176620023103917 },
+    "network": { "hashrate_hs": null },
+    "pools": { "count": 1, "active": 0, "wait_time_s": 1 } } }
 ```
+
+`hashrate_avg_hs` is `null` because this build does not track a rolling average yet, and
+`shares.stale` is `null` because stale counts are per pool — see `/pools`. Both are the `null`
+convention doing its job: the value is unavailable, not zero.
 
 `devices` is the GPU count when `kind` is `gpu`, the CPU count when it is `cpu`. Errors: `401`, `403`, `500`.
 
@@ -204,9 +218,9 @@ Query parameters: `/threads?id=N` · `/history?thread=N&limit=50` (capped at 50)
 `{"threads":[…]}`, one entry per mining thread:
 
 ```json
-{ "id": 0, "device_id": 0, "hashrate_hs": 7200000.0,
-  "accepted": 14, "rejected": 0, "hw_errors": 0,
-  "intensity": 20.5, "throughput": 1048576 }
+{ "id": 0, "device_id": 0, "hashrate_hs": 269024982.6536372,
+  "accepted": 5, "rejected": 0, "hw_errors": 0,
+  "intensity": 25.0, "throughput": 33554432 }
 ```
 
 `intensity` and `throughput` are `null` on a `cpu` miner, as are `accepted`/`rejected` until it
@@ -217,17 +231,21 @@ grows per-thread accounting. `device_id` indexes into `/devices`.
 `{"devices":[…]}` — a common shell plus exactly one typed sub-object:
 
 ```json
-{ "id": 0, "type": "gpu", "name": "NVIDIA GeForce RTX 3070",
-  "temp_c": 61.0, "fan_pct": 55, "fan_rpm": 1580,
-  "clock_mhz": 1725, "mem_clock_mhz": 7001,
-  "power_mw": 143000, "power_limit_mw": 220000,
-  "hashrate_hs": 7200000.0, "hashrate_per_watt_khs": 50.35,
-  "gpu": { "bus_id": 1, "sm": 86, "mem_bytes": 8589934592, "pstate": "P2",
-           "base_clock_mhz": 1500, "base_mem_clock_mhz": 7001,
-           "vendor_id": "0x10de", "device_id": "0x2484",
-           "serial": null, "bios": "94.06.2F.00.6A",
+{ "id": 0, "type": "gpu", "name": "NVIDIA GeForce RTX 3060",
+  "temp_c": 74.0, "fan_pct": 46, "fan_rpm": null,
+  "clock_mhz": null, "mem_clock_mhz": null,
+  "power_mw": 145470, "power_limit_mw": 170000,
+  "hashrate_hs": 269024982.6536372, "hashrate_per_watt_khs": null,
+  "gpu": { "bus_id": 1, "sm": 860, "mem_bytes": 12884901888, "pstate": "P2",
+           "base_clock_mhz": 1777, "base_mem_clock_mhz": 7501,
+           "vendor_id": "0x103c", "device_id": "0x8903",
+           "serial": "C445A31728", "bios": "94.06.2f.00.ed",
            "nvml_id": 0, "nvapi_id": 0, "monitoring": true } }
 ```
+
+⚠️ `clock_mhz`, `mem_clock_mhz`, `fan_rpm` and `hashrate_per_watt_khs` are `null` above because they
+come from the optional monitoring sampler, which was not running in that capture. `sm` is the compute
+capability ×10 (860 = 8.6), not ×1.
 
 A `cpu` miner emits one `"type": "cpu"` entry with a `cpu` sub-object (`cores`, `threads`,
 `features`) and no `gpu` key. **Clients must tolerate either sub-object being absent.**
@@ -238,7 +256,8 @@ This is the **expensive** route — it queries the vendor telemetry libraries. P
 ### 6.4 `GET /api/v1/system`
 
 ```json
-{ "os": "windows", "driver": "581.42", "cpus": 16, "cpu_temp_c": 45, "cpu_clock_mhz": 3800 }
+{ "os": "windows", "driver": "595.95", "cpus": 16, "cpu_temp_c": null,
+  "cpu_clock_mhz": null, "cpu_fan_pct": null }
 ```
 
 `driver` is the GPU driver version on a `gpu` miner, `null` on a `cpu` miner.
@@ -264,7 +283,7 @@ length 1 so that only index `0` exists.
 Cheap enough to poll every 5 s — no vendor telemetry calls.
 
 ```json
-{ "status": "ok", "mining": true, "pool_connected": true, "devices_ok": 3 }
+{ "status": "ok", "mining": true, "pool_connected": true, "devices_ok": 1 }
 ```
 
 `200` when healthy; `503` with `"status": "degraded"` and `"reasons": ["pool_disconnected"]`
@@ -521,7 +540,13 @@ Some algorithms take parameters beyond their name (`n`, `r`, `key`, a data file,
 
 - **`GET /api/v1/algos` is authoritative.** It lists, per algorithm, the accepted parameter names,
   their types and their tier. Managers must read it rather than hardcoding, because the set differs
-  between the two miners and between builds.
+  between the two miners and between builds. A parameter absent from an algorithm's list is
+  **rejected** for that algorithm, not ignored — an algorithm that would silently drop a parameter
+  is the one case a profit switcher cannot detect, because the miner then hashes the wrong thing at
+  the right rate.
+- **Types** are `int`, `string`, `int_list` and `float_list`. The two list types are
+  comma-separated and positional, one entry per device; a single value applies to every device.
+  Values are range-checked before anything is applied.
 - Parameters are applied **live** — no process restart. They are validated per algorithm; an unknown
   name, a wrong type or an out-of-range value is `400` and **nothing** is applied.
 - **Omitted ≠ `null`.** Omitting a parameter keeps the value currently in effect; sending `null`
@@ -540,7 +565,7 @@ The table integrators actually need. Everything else is identical.
 
 | Path / field | `gpu` | `cpu` | Why |
 |---|---|---|---|
-| `/history`, `/scanlog`, `/meminfo` | ✔ | `501` | the underlying statistics and hash-log subsystems exist only on the GPU side |
+| `/history`, `/scanlog`, `/meminfo` | ✔ | `501` | the statistics and hash-log subsystems exist only on the GPU side; `/scanlog` is additionally debug-build-only |
 | `POST /pools/switch` | ✔ | **`501`, permanently** | a `cpu` miner has no pool array; pool selection belongs to the manager, which supplies a pool with every `/control/profile` call |
 | `/pools` array length | `0..n` | always `1` | single-pool miner |
 | `threads[].accepted` / `.rejected` | ✔ | `null` | per-thread share accounting not tracked |
@@ -576,7 +601,7 @@ that from the scrape.
 | `miner_mining_active` | gauge 0/1 | — | — |
 | `miner_control_state` | gauge 0/1 | `state="running\|paused\|stopped\|switching"` | — (exactly one series is 1) |
 | `miner_uptime_seconds` | gauge | — | s |
-| `miner_info` | gauge (always 1) | `version`, `algo`, `kind` | — |
+| `miner_info` | gauge (always 1) | `version`, `algo`, `kind`, `name` | — |
 | `miner_device_temperature_celsius` | gauge | `device` | °C |
 | `miner_device_power_watts` | gauge | `device` | W |
 | `miner_device_fan_percent` | gauge | `device` | % |
@@ -585,6 +610,14 @@ that from the scrape.
 `miner_shares_total` is **process-lifetime monotonic**: the metrics layer keeps its own accumulating
 totals, because some internal counters are reset on an algorithm switch and a counter that decreases
 corrupts `rate()`.
+
+**A series is absent rather than zero when the miner has no value for it** — the same rule the JSON
+side expresses as `null`, because Prometheus has no null and a fabricated `0` poisons every average
+built on it. Concretely: device temperature, power and fan are published only where the miner's
+telemetry sampler has a reading (a miner started quiet, or without vendor telemetry, reports
+hashrate but no temperature), and `miner_pool_connected` is published only for a pool that can
+actually hold a connection — a stratum pool the miner is currently using. A miner keeping one live
+socket therefore exports one `miner_pool_connected` series, not one per configured pool.
 
 Scrape config:
 
@@ -623,11 +656,18 @@ The binary protocol is unchanged and stays the default. Mapping for existing con
 | `summary` → `ACC`, `REJ`, `ACCMN`, `SOLV` | `/summary` → `shares.accepted`, `.rejected`, `.accepted_per_min`, `.solved` |
 | `summary` → `DIFF`, `NETKHS` | `/summary` → `difficulty.network`, `network.hashrate_hs` |
 | `summary` → `UPTIME`, `TS` | `/summary` → `uptime_s`, `timestamp` |
-| `threads` → `GPU`, `KHS`, `HWF` | `/threads[]` → `device_id`, `hashrate_hs`, `hw_errors` |
-| `hwinfo` → `TEMP`, `FAN`, `POWER`, `CLOCK` | `/devices[]` → `temp_c`, `fan_pct`, `power_mw`, `clock_mhz` |
-| `hwinfo` → `OS`, `DRIVER`, `CPUTEMP` | `/system` → `os`, `driver`, `cpu_temp_c` |
-| `pool` → `URL`, `USER`, `DIFF`, `N2SZ` | `/pools/{n}` → `url`, `user`, `difficulty`, `job.extranonce2_size` |
+| `threads` → `GPU`, `KHS`, `HWF`, `I`, `THR` | `/threads[]` → `device_id`, `hashrate_hs`, `hw_errors`, `intensity`, `throughput` |
+| `hwinfo` → `TEMP`, `FAN`, `RPM`, `POWER`, `PLIM` | `/devices[]` → `temp_c`, `fan_pct`, `fan_rpm`, `power_mw`, `power_limit_mw` |
+| `hwinfo` → `FREQ`, `MEMFREQ` (base) | `/devices[]` → `gpu.base_clock_mhz`, `gpu.base_mem_clock_mhz` |
+| `hwinfo` → `GPUF`, `MEMF` (current) | `/devices[]` → `clock_mhz`, `mem_clock_mhz` |
+| `hwinfo` → `SM`, `MEM`, `PST`, `VID`, `PID`, `SN`, `BIOS` | `/devices[]` → `gpu.sm`, `gpu.mem_bytes` (**bytes, not MB**), `gpu.pstate`, `gpu.vendor_id`, `gpu.device_id`, `gpu.serial`, `gpu.bios` |
+| `hwinfo` → `OS`, `NVDRIVER`, `CPUS`, `CPUTEMP`, `CPUFREQ` | `/system` → `os`, `driver`, `cpus`, `cpu_temp_c`, `cpu_clock_mhz` |
+| `pool` → `POOL`, `URL`, `USER`, `DIFF`, `BEST` | `/pools/{n}` → `name`, `url`, `user`, `difficulty`, `best_share` |
+| `pool` → `JOB`, `H`, `N2SZ`, `N2` | `/pools/{n}` → `job.id`, `job.height`, `job.extranonce2_size`, `job.extranonce2` |
+| `pool` → `ACC`, `REJ`, `STALE`, `SOLV` | `/pools/{n}` → `shares.accepted`, `.rejected`, `.stale`, `.solved` |
+| `pool` → `PING`, `DISCO`, `WAIT`, `UPTIME`, `LAST` | `/pools/{n}` → `ping_ms`, `disconnects`, `wait_time_s`, `uptime_s`, `last_share_age_s` |
 | `histo`, `scanlog`, `meminfo` | `/history`, `/scanlog`, `/meminfo` |
+| `histo` → `KHS` | `/history[]` → `hashrate_hs`. ⚠️ **The binary key is mislabelled**: `histo`'s `KHS` already carries **H/s**, not kH/s, so this is the one mapping where the value does *not* change by 1000. Unchanged in the binary API for compatibility. |
 | `switchpool\|n`, `seturl\|url`, `quit` | `POST /pools/switch`, `POST /pools/url`, `POST /quit` |
 
 Every value that was a bare number in a `;`-separated record is now a typed JSON field, and

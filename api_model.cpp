@@ -14,6 +14,7 @@
 #include "miner.h"
 #include "algos.h"
 #include "nvml.h"
+#include "api_control.h"
 #include "api_model.h"
 
 #ifdef WIN32
@@ -213,6 +214,8 @@ void api_collect_pool(int pooln, struct api_pool_snapshot *s)
 	s->disconnects = p->disconnects;
 	s->wait_time = p->wait_time;
 	s->work_time = p->work_time;
+	s->stratum = (p->type & POOL_STRATUM) != 0;
+	s->connected = s->stratum ? (stratum.curl != NULL) : true;
 }
 
 int api_format_pool_binary(const struct api_pool_snapshot *s, char *out, size_t outlen)
@@ -335,6 +338,9 @@ void api_collect_system(struct api_system_snapshot *s)
 	s->cpus = num_cpus;
 	s->cpu_temp_c = (int) cpu_temp(0);
 	s->cpu_clock_mhz = cpu_clock(0) / 1000;
+	/* cpu_fanpercent() is a stub returning 0 on every platform here; 0 would
+	 * mean *measured* zero, so report it as unavailable instead. */
+	s->cpu_fan_pct = -1;
 }
 
 int api_format_system_binary(const struct api_system_snapshot *s, char *out, size_t outlen)
@@ -451,8 +457,22 @@ json_t *api_build_pool_json(int index, bool active, const struct api_pool_snapsh
 	json_object_set_new(shares, "accepted_per_min", json_null());
 	json_object_set_new(o, "shares", shares);
 
+	json_object_set_new(o, "type", json_string(s->stratum ? "stratum" : "getwork"));
+	json_object_set_new(o, "status", json_string(s->connected ? "connected" : "disconnected"));
 	json_object_set_new(o, "stale", json_integer(s->stales));
 	json_object_set_new(o, "difficulty", jnum_or_null(s->diff, s->diff > 0.0));
+	json_object_set_new(o, "best_share", jnum_or_null(s->best_share, s->best_share > 0.0));
+
+	/* The binary API exposes JOB/H/N2SZ/N2; dropping them here would be a
+	 * regression against it. */
+	json_t *job = json_object();
+	if (job) {
+		json_object_set_new(job, "id", s->job_id[0] ? json_string(s->job_id) : json_null());
+		json_object_set_new(job, "height", jint_or_null(s->height, s->height > 0));
+		json_object_set_new(job, "extranonce2_size", json_integer(s->xnonce2_size));
+		json_object_set_new(job, "extranonce2", s->xnonce2[0] ? json_string(s->xnonce2) : json_null());
+		json_object_set_new(o, "job", job);
+	}
 	json_object_set_new(o, "ping_ms", jint_or_null(s->ping_ms, s->ping_ms > 0));
 	json_object_set_new(o, "disconnects", json_integer(s->disconnects));
 	json_object_set_new(o, "wait_time_s", json_integer(s->wait_time));
@@ -516,5 +536,95 @@ json_t *api_build_system_json(const struct api_system_snapshot *s)
 	json_object_set_new(o, "cpus", json_integer(s->cpus));
 	json_object_set_new(o, "cpu_temp_c", jint_or_null(s->cpu_temp_c, s->cpu_temp_c > 0));
 	json_object_set_new(o, "cpu_clock_mhz", jint_or_null(s->cpu_clock_mhz, s->cpu_clock_mhz > 0));
+	json_object_set_new(o, "cpu_fan_pct", jint_or_null(s->cpu_fan_pct, s->cpu_fan_pct >= 0));
 	return o;
+}
+
+/* ------------------------------------------------------------- metrics */
+
+/* Snapshot for GET /metrics. Deliberately not api_collect_thread(): that one
+ * queries NVML/NVAPI per field, and a scraper polls every 15-60 s. Only plain
+ * globals and the monitor thread's cached sample are read here. */
+void api_collect_metrics(api_metrics_input *in)
+{
+	memset(in, 0, sizeof(*in));
+
+	static char algo_buf[64];
+	get_currentalgo(algo_buf, sizeof(algo_buf));
+
+	in->name = PACKAGE_NAME;
+	in->version = PACKAGE_VERSION;
+	in->kind = "gpu";
+	in->algo = algo_buf;
+	in->uptime_s = difftime(time(NULL), api_startup_time);
+	in->hashrate_hs = (double) global_hashrate;
+	in->net_difficulty = net_diff;
+	in->pool_difficulty = stratum_diff;
+
+	const ctl_state_t st = api_ctl_get_state();
+	in->control_state = api_ctl_state_name(st);
+	in->mining_active = !abort_flag && opt_n_threads > 0 &&
+		st != CTL_PAUSED && st != CTL_STOPPED && global_hashrate > 0.;
+
+	/* The per-pool counters are not monotonic — a recycled pool slot takes its
+	 * predecessor's totals with it — and a counter that goes backwards makes
+	 * rate() report a spike that never happened. Accumulate deltas. */
+	static uint64_t tot_acc = 0, tot_rej = 0, tot_stale = 0, tot_solved = 0;
+	static uint32_t seen_acc = 0, seen_rej = 0, seen_stale = 0, seen_solved = 0;
+	uint32_t acc = 0, rej = 0, stale = 0, solved = 0;
+	for (int p = 0; p < num_pools; p++) {
+		acc += pools[p].accepted_count;
+		rej += pools[p].rejected_count;
+		stale += pools[p].stales_count;
+		solved += pools[p].solved_count;
+	}
+	tot_acc    += (acc    >= seen_acc)    ? (acc    - seen_acc)    : acc;
+	tot_rej    += (rej    >= seen_rej)    ? (rej    - seen_rej)    : rej;
+	tot_stale  += (stale  >= seen_stale)  ? (stale  - seen_stale)  : stale;
+	tot_solved += (solved >= seen_solved) ? (solved - seen_solved) : solved;
+	seen_acc = acc; seen_rej = rej; seen_stale = stale; seen_solved = solved;
+
+	in->shares_accepted = tot_acc;
+	in->shares_rejected = tot_rej;
+	in->shares_stale = tot_stale;
+	in->blocks_solved = tot_solved;
+
+	for (int i = 0; i < opt_n_threads && in->ndevices < API_METRICS_MAX_DEVICES; i++) {
+		struct cgpu_info *cgpu = &thr_info[i].gpu;
+		api_metrics_device *d = &in->devices[in->ndevices++];
+		d->valid = true;
+		d->device = cgpu->gpu_id;
+		snprintf(d->type, sizeof(d->type), "gpu");
+		snprintf(d->algo, sizeof(d->algo), "%s", algo_buf);
+		d->hashrate_hs = stats_get_speed(i, 0.0);
+
+		/* Only what the monitor thread sampled; it does not run under --quiet,
+		 * so "no temperature" is normal and a fabricated 0 would poison every
+		 * average built on it. */
+		d->has_temp  = cgpu->monitor.gpu_temp  > 0;
+		d->temp_c    = (double) cgpu->monitor.gpu_temp;
+		d->has_power = cgpu->monitor.gpu_power > 0;
+		d->power_w   = (double) cgpu->monitor.gpu_power / 1000.0;   /* mW -> W */
+		d->has_fan   = cgpu->monitor.gpu_fan   > 0;
+		d->fan_pct   = (double) cgpu->monitor.gpu_fan;
+		d->has_hw_errors = true;
+		d->hw_errors = cgpu->hw_errors;
+	}
+
+	for (int p = 0; p < num_pools && in->npools < API_METRICS_MAX_POOLS; p++) {
+		if (pools[p].type == POOL_UNUSED)
+			continue;
+		api_metrics_pool *mp = &in->pools[in->npools++];
+		mp->index = p;
+		mp->active = (p == cur_pooln);
+		snprintf(mp->url, sizeof(mp->url), "%s", pools[p].url);
+		/* One live socket: connection state exists only for the pool in use,
+		 * and reporting 0 for the others would invent a fault. */
+		mp->stratum = mp->active && (pools[p].type & POOL_STRATUM) != 0;
+		mp->connected = mp->stratum ? (stratum.curl != NULL) : false;
+		mp->disconnects = pools[p].disconnects;
+		mp->has_last_share = pools[p].last_share_time != 0;
+		mp->last_share_age_s = mp->has_last_share
+			? difftime(time(NULL), pools[p].last_share_time) : 0.0;
+	}
 }

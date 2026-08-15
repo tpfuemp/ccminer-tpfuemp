@@ -131,6 +131,20 @@ void algo_free_all(int thr_id)
 	free_timetravel(thr_id);
 	free_tribus(thr_id);
 	free_bitcore(thr_id);
+	/* Missing from this list, an algo's per-thread init[] flag stays set while
+	 * another algo's teardown invalidates the device state behind it, so
+	 * switching back fails with a CUDA "invalid argument". */
+	free_argon2d500(thr_id);
+	free_argon2d4096(thr_id);
+	free_argon2d16000(thr_id);
+	free_argon2id1024(thr_id);
+	free_equihash(thr_id);
+	free_gostd(thr_id);
+	free_sha256csm(thr_id);
+	free_sha3t(thr_id);
+	free_soterg(thr_id);
+	free_x16rt(thr_id);
+	free_x25x(thr_id);
 }
 
 // benchmark all algos (called once per mining thread)

@@ -288,6 +288,12 @@
     <ClCompile Include="api.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="api_control.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="api_metrics.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="api_model.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -496,6 +502,12 @@
       <Filter>Header Files\compat</Filter>
     </ClInclude>
     <ClInclude Include="elist.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="api_control.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="api_metrics.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="api_model.h">
