@@ -23,7 +23,11 @@
 
 #include "secp256k1_group_device.cuh"
 
-#define SECP256K1_ECMULT_GEN_WINDOWS 32
+/* 16-bit windows: 16 over the 256-bit scalar, 65536 entries each. Half the point
+ * additions of an 8-bit window, for a 64 MB table instead of 512 KB. */
+#define SECP256K1_ECMULT_GEN_WBITS   16
+#define SECP256K1_ECMULT_GEN_WINDOWS (256 / SECP256K1_ECMULT_GEN_WBITS)
+#define SECP256K1_ECMULT_GEN_ENTRIES (1u << SECP256K1_ECMULT_GEN_WBITS)
 #define SECP256K1_ECMULT_GEN_ENTRY   64  /* bytes per table entry: X[32]||Y[32] */
 
 __device__ static void secp256k1_ecmult_gen(secp256k1_gej *r, const unsigned char *k32,
@@ -32,11 +36,14 @@ __device__ static void secp256k1_ecmult_gen(secp256k1_gej *r, const unsigned cha
     add.infinity = 0;
     secp256k1_gej_set_infinity(r);
     for (int j = 0; j < SECP256K1_ECMULT_GEN_WINDOWS; j++) {
-        int bits = k32[31 - j];      /* window j = byte j from the LSB */
+        /* window j = the j-th 16-bit chunk counting from the LSB; k32 is
+         * big-endian, so its low byte is k32[31 - 2j] and its high k32[30 - 2j] */
+        uint32_t bits = (uint32_t)k32[31 - 2 * j] | ((uint32_t)k32[30 - 2 * j] << 8);
         if (bits == 0) {
             continue; /* table[j][0] == infinity: additive no-op */
         }
-        const unsigned char *p = gtable + (size_t)(j * 256 + bits) * SECP256K1_ECMULT_GEN_ENTRY;
+        const unsigned char *p = gtable +
+            ((size_t)j * SECP256K1_ECMULT_GEN_ENTRIES + bits) * SECP256K1_ECMULT_GEN_ENTRY;
         secp256k1_fe_set_b32(&add.x, p);
         secp256k1_fe_set_b32(&add.y, p + 32);
         add.infinity = 0;

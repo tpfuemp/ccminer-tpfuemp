@@ -16,7 +16,9 @@
 
 #include "cuda/curvehash_device.cuh"
 
-#define CURVE_GTABLE_BYTES (32 * 256 * 64)
+/* 16 windows of 16 bits, 65536 entries of 64 B = 64 MB. */
+#define CURVE_W8_BYTES     (32 * 256 * 64)
+#define CURVE_GTABLE_BYTES ((size_t)16 * 65536 * 64)
 
 static bool      init_done[MAX_GPUS] = { 0 };
 static uint8_t  *d_gtable[MAX_GPUS];
@@ -24,6 +26,8 @@ static uint8_t  *d_header[MAX_GPUS];
 static uint32_t *d_resNonce[MAX_GPUS];
 
 extern "C" void curvehash_build_gtable(unsigned char *out);
+extern "C" void curvehash_build_window_table(unsigned char *out, int wbits);
+extern "C" int  curvehash_check_w16_vs_w8(const unsigned char *w16, const unsigned char *w8);
 extern "C" int  curvehash_host_reverify(int thr_id, const uint32_t *pdata, uint32_t nonce,
                                         const uint32_t *ptarget, uint32_t *hash);
 extern "C" void curvehash_host_free(int thr_id);
@@ -146,8 +150,9 @@ static bool curvehash_selftest_gpu(int thr_id, const uint8_t *d_gtable,
       { 0x07,0x3f,0x04,0xc8,0xbd,0x37,0x98,0x77,0x84,0xd4,0x8c,0x99,0x9c,0xea,0x20,0x5e,
         0x5b,0x3d,0xb4,0x0e,0xfc,0x02,0x3c,0xbd,0x8d,0xb5,0x25,0x5d,0x27,0xc0,0x05,0xe5 }
     };
-    /* sha256d of the whole 512 KB table, from an independent implementation of
-     * the same table (so this also cross-checks libsecp256k1's build of it). */
+    /* sha256d of the 8-bit table, from an independent implementation of it. The
+     * shipped 16-bit table is checked through this one: see
+     * curvehash_check_w16_vs_w8. */
     static const uint8_t tbl_sha256d[32] = {
         0x05,0xee,0x91,0x6f,0x8e,0xc8,0xb4,0xf1,0x4d,0x7c,0xd3,0xa3,0x71,0x0b,0xb5,0xff,
         0xc6,0x55,0x3c,0x10,0xc0,0x1c,0x11,0x2d,0xcb,0xb6,0x5c,0x06,0xe6,0xb1,0x6d,0x91
@@ -180,12 +185,22 @@ static bool curvehash_selftest_gpu(int thr_id, const uint8_t *d_gtable,
      * (byte-for-byte readback of the full 512 KB). */
     unsigned char dig[32];
     unsigned char *rb = (unsigned char *)malloc(CURVE_GTABLE_BYTES);
-    sha256d(dig, h_gtable, CURVE_GTABLE_BYTES);
-    const bool tbl_build_ok = (memcmp(dig, tbl_sha256d, 32) == 0);
+
+    /* Leg 1: rebuild the 8-bit table and check it against the constant.
+     * Leg 2: every 16-bit entry must decompose into two 8-bit entries. */
+    unsigned char *w8 = (unsigned char *)malloc(CURVE_W8_BYTES);
+    bool tbl_build_ok = false, tbl_decomp_ok = true;
+    if (w8) {
+        curvehash_build_gtable(w8);
+        sha256d(dig, w8, CURVE_W8_BYTES);
+        tbl_build_ok = (memcmp(dig, tbl_sha256d, 32) == 0);
+        tbl_decomp_ok = curvehash_check_w16_vs_w8(h_gtable, w8);
+        free(w8);
+    }
     CUDA_SAFE_CALL(cudaMemcpy(rb, d_gtable, CURVE_GTABLE_BYTES, cudaMemcpyDeviceToHost));
     const bool tbl_upload_ok = (memcmp(rb, h_gtable, CURVE_GTABLE_BYTES) == 0);
     free(rb);
-    const bool tbl_ok = tbl_build_ok && tbl_upload_ok;
+    const bool tbl_ok = tbl_build_ok && tbl_decomp_ok && tbl_upload_ok;
     const bool kat0_ok = (memcmp(h_out,       kat[0], 32) == 0);
     const bool kat1_ok = (memcmp(h_out + 32,  kat[1], 32) == 0);
     const bool kat2_ok = (memcmp(h_out + 64,  kat[2], 32) == 0);
@@ -195,11 +210,14 @@ static bool curvehash_selftest_gpu(int thr_id, const uint8_t *d_gtable,
         if (!tbl_build_ok)
             gpulog(LOG_ERR, thr_id, "curvehash self-test: host-built G-table checksum mismatch "
                                     "- libsecp256k1 table build is broken, not the kernel");
+        if (!tbl_decomp_ok)
+            gpulog(LOG_ERR, thr_id, "curvehash self-test: 16-bit table does not decompose into the "
+                                    "8-bit table - the window table build is broken, not the kernel");
         if (!tbl_upload_ok)
             gpulog(LOG_ERR, thr_id, "curvehash self-test: device G-table != host G-table "
                                     "- the 512 KB upload is broken, not the kernel");
-        gpulog(LOG_ERR, thr_id, "curvehash GPU self-test FAILED (tblbuild %d tblup %d kat %d%d%d neg %d)",
-               (int)tbl_build_ok, (int)tbl_upload_ok, (int)kat0_ok, (int)kat1_ok, (int)kat2_ok, (int)neg_ok);
+        gpulog(LOG_ERR, thr_id, "curvehash GPU self-test FAILED (tblbuild %d tbldecomp %d tblup %d kat %d%d%d neg %d)",
+               (int)tbl_build_ok, (int)tbl_decomp_ok, (int)tbl_upload_ok, (int)kat0_ok, (int)kat1_ok, (int)kat2_ok, (int)neg_ok);
         return false;
     }
     return true;
@@ -269,7 +287,12 @@ static void curvehash_init(int thr_id)
     CUDA_SAFE_CALL(cudaMalloc(&d_resNonce[thr_id], sizeof(uint32_t)));
 
     unsigned char *tbl = (unsigned char *)malloc(CURVE_GTABLE_BYTES);
-    curvehash_build_gtable(tbl);
+    if (!tbl) {
+        gpulog(LOG_ERR, thr_id, "curvehash: out of memory for the %.0f MB window table",
+               (double)CURVE_GTABLE_BYTES / 1048576.0);
+        proper_exit(EXIT_CODE_SW_INIT_ERROR);
+    }
+    curvehash_build_window_table(tbl, 16);
     CUDA_SAFE_CALL(cudaMemcpy(d_gtable[thr_id], tbl, CURVE_GTABLE_BYTES, cudaMemcpyHostToDevice));
 
     /* One-time device self-test, FAIL-CLOSED: a GPU that cannot reproduce the
