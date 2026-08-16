@@ -33,15 +33,11 @@ extern "C" void curvehash_host_free(int thr_id);
  * 32 B spill it costs is cheaper than the residency any wider shape gives up. */
 #define CURVE_TPB 512
 
-__global__ void __launch_bounds__(CURVE_TPB, 1)
-curvehash_scan_kernel(uint32_t threads, uint32_t startNonce,
-    const uint8_t * __restrict__ header76, const uint8_t * __restrict__ gtable,
-    uint32_t target7, uint32_t *resNonce)
+/* Shared by the scan kernel and the differential so the two cannot drift.
+ * Inlining it leaves the scan kernel's SASS unchanged. */
+__device__ __forceinline__ bool curvehash_nonce_digest(uint8_t h[32], uint32_t nonce,
+    const uint8_t * __restrict__ header76, const uint8_t * __restrict__ gtable)
 {
-    uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= threads) return;
-    uint32_t nonce = startNonce + idx;
-
     uint8_t hdr[80];
     #pragma unroll
     for (int i = 0; i < 76; i++) hdr[i] = header76[i];
@@ -51,13 +47,68 @@ curvehash_scan_kernel(uint32_t threads, uint32_t startNonce,
     hdr[78] = (uint8_t)(nonce >> 8);
     hdr[79] = (uint8_t)(nonce);
 
+    return curvehash_full(h, hdr, gtable);
+}
+
+__global__ void __launch_bounds__(CURVE_TPB, 1)
+curvehash_scan_kernel(uint32_t threads, uint32_t startNonce,
+    const uint8_t * __restrict__ header76, const uint8_t * __restrict__ gtable,
+    uint32_t target7, uint32_t *resNonce)
+{
+    uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= threads) return;
+    uint32_t nonce = startNonce + idx;
+
     uint8_t h[32];
-    if (!curvehash_full(h, hdr, gtable)) return; /* invalid-seckey nonce: skip */
+    if (!curvehash_nonce_digest(h, nonce, header76, gtable)) return; /* invalid seckey: skip */
 
     /* host compares hash[7] (uint32 at byte 28, little-endian read) <= target7 */
     uint32_t w7 = ((uint32_t)h[31] << 24) | ((uint32_t)h[30] << 16) |
                   ((uint32_t)h[29] << 8)  | (uint32_t)h[28];
     if (w7 <= target7) atomicMin(resNonce, nonce);
+}
+
+/*
+ * GPU-vs-CPU differential over a nonce RANGE: the candidate re-verify only sees
+ * nonces the GPU reported, so it cannot catch one the kernel never hashed.
+ *
+ * Two order-independent accumulators. acc[0..7] (xor of the digest words) catches
+ * a wrong, missing or duplicated digest; acc[8..15] weights each digest by the
+ * nonce and is what binds the two, since a plain xor is permutation-blind.
+ *
+ * The weight must stay injective AND odd: 2*nonce+1, never nonce|1 -- clearing
+ * bit 0 gives an aligned pair (2k, 2k+1) the same weight, hiding a swap of it.
+ *
+ * Launch shape mirrors the scan kernel so an index-math defect reproduces here.
+ */
+#define CURVE_DIFF_ACC 16
+
+__global__ void __launch_bounds__(CURVE_TPB, 1)
+curvehash_diff_kernel(uint32_t threads, uint32_t startNonce,
+    const uint8_t * __restrict__ header76, const uint8_t * __restrict__ gtable,
+    uint32_t *acc, uint32_t fault)
+{
+    uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= threads) return;
+    uint32_t nonce = startNonce + idx;
+
+    /* Fault injection for the negative control: 1 = drop a nonce (both
+     * accumulators must catch it), 2 = swap two (only acc[8..15] can). */
+    if (fault == 1 && idx == 3) return;
+    if (fault == 2 && idx == 3) nonce = startNonce + 4;
+    if (fault == 2 && idx == 4) nonce = startNonce + 3;
+
+    uint8_t h[32];
+    if (!curvehash_nonce_digest(h, nonce, header76, gtable)) return;
+
+    const uint32_t w = 2u * (startNonce + idx) + 1u;
+    #pragma unroll
+    for (int i = 0; i < 8; i++) {
+        uint32_t d = ((uint32_t)h[4*i+3] << 24) | ((uint32_t)h[4*i+2] << 16) |
+                     ((uint32_t)h[4*i+1] << 8)  | (uint32_t)h[4*i];
+        atomicXor(&acc[i],     d);
+        atomicXor(&acc[8 + i], d * w);
+    }
 }
 
 /* Hash n headers (80 B each) into n digests (32 B each), so the host can run
@@ -154,6 +205,61 @@ static bool curvehash_selftest_gpu(int thr_id, const uint8_t *d_gtable,
     return true;
 }
 
+/*
+ * Compare both accumulators against the libsecp256k1 oracle. The count is not a
+ * multiple of the block size and the start is offset, so the launch has a ragged
+ * tail and does not begin on a block boundary. Costs one host hash per nonce, so
+ * it runs once per job under -D, never per launch.
+ */
+#define CURVE_DIFF_N      1000u
+#define CURVE_DIFF_OFF    7u
+
+static bool curvehash_differential(int thr_id, const uint32_t *pdata, uint32_t fault)
+{
+    const uint32_t start = pdata[19] + CURVE_DIFF_OFF;
+    uint32_t h_acc[CURVE_DIFF_ACC], cpu[CURVE_DIFF_ACC] = { 0 };
+    uint32_t *d_acc = NULL;
+    const uint32_t tpb = CURVE_TPB;
+    const uint32_t grid = (CURVE_DIFF_N + tpb - 1) / tpb;
+
+    CUDA_SAFE_CALL(cudaMalloc(&d_acc, sizeof(h_acc)));
+    CUDA_SAFE_CALL(cudaMemset(d_acc, 0, sizeof(h_acc)));
+    curvehash_diff_kernel <<< grid, tpb >>> (CURVE_DIFF_N, start, d_header[thr_id],
+                                             d_gtable[thr_id], d_acc, fault);
+    CUDA_SAFE_CALL(cudaMemcpy(h_acc, d_acc, sizeof(h_acc), cudaMemcpyDeviceToHost));
+    cudaFree(d_acc);
+
+    /* Same two accumulators on the host, over the same range. The oracle's
+     * target test is irrelevant here, only the digest is. */
+    uint32_t dummy_target[8];
+    memset(dummy_target, 0, sizeof(dummy_target));
+    for (uint32_t i = 0; i < CURVE_DIFF_N; i++) {
+        uint32_t _ALIGN(64) vhash[8];
+        const uint32_t nonce = start + i;
+        curvehash_host_reverify(thr_id, pdata, nonce, dummy_target, vhash);
+        const uint32_t w = 2u * nonce + 1u;
+        for (int k = 0; k < 8; k++) {
+            cpu[k]     ^= vhash[k];
+            cpu[8 + k] ^= vhash[k] * w;
+        }
+    }
+
+    const bool d_ok = (memcmp(h_acc, cpu, 8 * sizeof(uint32_t)) == 0);
+    const bool n_ok = (memcmp(h_acc + 8, cpu + 8, 8 * sizeof(uint32_t)) == 0);
+    if (!(d_ok && n_ok)) {
+        gpulog(LOG_ERR, thr_id, "curvehash differential FAILED over %u nonces from %08x "
+               "(digest %s, nonce-weighted %s)", CURVE_DIFF_N, start,
+               d_ok ? "ok" : "MISMATCH", n_ok ? "ok" : "MISMATCH");
+        if (d_ok && !n_ok)
+            gpulog(LOG_ERR, thr_id, "curvehash differential: digests agree but their NONCE "
+                                    "pairing does not - the kernel is hashing the wrong nonces");
+        return false;
+    }
+    gpulog(LOG_DEBUG, thr_id, "curvehash differential OK: %u nonces from %08x, both accumulators",
+           CURVE_DIFF_N, start);
+    return true;
+}
+
 static void curvehash_init(int thr_id)
 {
     cudaSetDevice(device_map[thr_id]);
@@ -201,6 +307,24 @@ extern "C" int scanhash_curvehash(int thr_id, struct work *work, uint32_t max_no
     for (int i = 0; i < 19; i++)
         be32enc(&endiandata[i], pdata[i]);
     CUDA_SAFE_CALL(cudaMemcpy(d_header[thr_id], endiandata, 76, cudaMemcpyHostToDevice));
+
+    /* Once per job, after the header upload, under -D only. CURVEHASH_DIFF_FAULT
+     * injects a defect (1 = drop a nonce, 2 = swap two) so the gate can be shown
+     * to fire without a rebuild. */
+    if (opt_debug) {
+        static uint32_t last_hdr[MAX_GPUS][19];
+        if (memcmp(last_hdr[thr_id], endiandata, sizeof(last_hdr[0])) != 0) {
+            memcpy(last_hdr[thr_id], endiandata, sizeof(last_hdr[0]));
+            const char *fenv = getenv("CURVEHASH_DIFF_FAULT");
+            const uint32_t fault = fenv ? (uint32_t)atoi(fenv) : 0;
+            if (fault)
+                gpulog(LOG_WARNING, thr_id, "curvehash differential: FAULT %u injected on purpose", fault);
+            if (!curvehash_differential(thr_id, pdata, fault)) {
+                gpulog(LOG_ERR, thr_id, "curvehash: refusing to mine after a failed differential");
+                proper_exit(EXIT_CODE_SW_INIT_ERROR);
+            }
+        }
+    }
 
     const uint32_t UMAX = UINT32_MAX;
     const uint32_t tpb = CURVE_TPB;

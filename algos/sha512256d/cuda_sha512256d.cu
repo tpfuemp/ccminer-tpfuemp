@@ -123,7 +123,8 @@ void sha512256d_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint
 
 /* Diagnostic kernel (never launched while mining): accumulates the whole range
  * instead of screening it. acc[0] catches a wrong, missing or duplicated digest;
- * acc[1] weights by nonce, so a permutation cannot cancel out. */
+ * acc[1] weights by 2*nonce+1, so a permutation cannot cancel out (the weight
+* must be injective and odd; nonce|1 is not injective). */
 __global__ __launch_bounds__(TPB)
 void sha512256d_gpu_checksum(const uint32_t threads, const uint32_t startNonce, uint64_t *acc)
 {
@@ -135,7 +136,7 @@ void sha512256d_gpu_checksum(const uint32_t threads, const uint32_t startNonce, 
 
 		// uint64_t is `unsigned long` on Linux: the casts pick the overload
 		atomicXor((unsigned long long*)&acc[0], (unsigned long long) q3);
-		atomicXor((unsigned long long*)&acc[1], (unsigned long long)(q3 * (uint64_t)(nonce | 1u)));
+		atomicXor((unsigned long long*)&acc[1], (unsigned long long)(q3 * (2ull * (uint64_t)nonce + 1ull)));
 	}
 }
 

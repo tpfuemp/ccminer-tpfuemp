@@ -41,9 +41,11 @@ CPU reference (donor): cpuminer-opt `algo/sha/sha512256d-4way.c` (scalar
 - `-D` runs a **nonce-range differential** once per job: 4133 consecutive
   nonces (deliberately not a whole number of 256-thread blocks) are replayed
   on GPU and CPU and compared through two order-independent checksums,
-  `xor(q3)` and `xor(q3 * (nonce|1))`. It covers what the candidate re-verify
+  `xor(q3)` and `xor(q3 * (2*nonce+1))`. It covers what the candidate re-verify
   cannot — a nonce the kernel never hashed, or hashed under the wrong index.
   The second checksum is not redundant: a plain xor sum is permutation-blind.
+  The weight must be injective and odd -- `nonce|1` is neither, because clearing
+  bit 0 gives an aligned pair (2k, 2k+1) the same weight.
   The checksum kernel inlines the same hash body the mining kernel does.
 - `--benchmark -D` logs every CPU-validated candidate (blue) — the only
   positive proof channel in benchmark mode (no submit; the API ACC counter

@@ -55,8 +55,10 @@ extern "C" void sha512256d_hash(void *output, const void *input)
  * re-verify below only sees nonces the GPU chose to report, so it cannot catch
  * one the kernel never hashed. Both sides accumulate, over the same range:
  *   acc[0] = XOR of every share qword    -> wrong, missing or duplicate digest
- *   acc[1] = XOR of (qword * (nonce|1))  -> binds each digest to its own nonce
- * acc[1] is not redundant: a plain XOR sum is permutation-blind. */
+ *   acc[1] = XOR of (qword * (2*nonce+1)) -> binds each digest to its own nonce
+ * acc[1] is not redundant: a plain XOR sum is permutation-blind. The weight must
+* stay injective and odd -- nonce|1 clears bit 0, giving an aligned pair
+* (2k, 2k+1) the same weight and hiding a swap of it. */
 static bool sha512256d_check_range(int thr_id, const uint32_t *endiandata, uint32_t startNonce, uint32_t count)
 {
 	uint32_t _ALIGN(64) vhash[8], td[20];
@@ -71,7 +73,7 @@ static bool sha512256d_check_range(int thr_id, const uint32_t *endiandata, uint3
 		sha512256d_hash(vhash, td);
 		const uint64_t q3 = ((uint64_t*)vhash)[3];
 		cpu[0] ^= q3;
-		cpu[1] ^= q3 * (uint64_t)(nonce | 1u);
+		cpu[1] ^= q3 * (2ull * (uint64_t)nonce + 1ull);
 	}
 
 	if (gpu[0] == cpu[0] && gpu[1] == cpu[1]) {

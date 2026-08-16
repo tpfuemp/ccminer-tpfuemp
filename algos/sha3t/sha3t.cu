@@ -112,7 +112,8 @@ extern "C" int scanhash_sha3t(int thr_id, struct work *work,
 					pdata[19] = work->nonces[0] + 1;
 				}
 				return work->valid_nonces;
-			} else if (vhash[7] > Htarg) {
+			} else {
+				/* also the vhash[7] <= Htarg case that fails fulltest */
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
 					gpulog(LOG_WARNING, thr_id,
