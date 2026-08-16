@@ -18,7 +18,10 @@ public:
 	virtual int get_major_version() { return 3; };
 	virtual int get_minor_version() { return 5; };
 
-	virtual int max_warps_per_block() { return 24; };
+	/* 16, not the 24 this claimed: at 17+ warps per block the kernel returns
+	 * wrong hashes at a wildly inflated rate. Bounds both the autotune search
+	 * and a user-supplied -l, so it is the only place that has to know. */
+	virtual int max_warps_per_block() { return 16; };
 	virtual int get_texel_width() { return 4; };
 	virtual bool no_textures() { return true; }
 	virtual bool support_lookup_gap() { return true; }

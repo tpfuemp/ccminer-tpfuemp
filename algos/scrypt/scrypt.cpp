@@ -48,19 +48,16 @@ using namespace Concurrency;
 #endif
 #include <new>
 
-#if _MSC_VER > 1800
-#undef _THROW1
-#define _THROW1(x) throw(std::bad_alloc)
-#endif
-
 // A thin wrapper around the builtin __m128i type
 class uint32x4_t
 {
 public:
 #if WIN32
-	void * operator new(size_t size) _THROW1(_STD bad_alloc) { void *p; if ((p = _aligned_malloc(size, 16)) == 0) { static const std::bad_alloc nomem; _RAISE(nomem); } return (p); }
+	/* Plain throw: the _THROW1/_RAISE pair this carried are MSVC-internal
+	 * macros that no longer exist. */
+	void * operator new(size_t size) { void *p; if ((p = _aligned_malloc(size, 16)) == 0) { static const std::bad_alloc nomem; throw nomem; } return (p); }
 	void operator delete(void *p) { _aligned_free(p); }
-	void * operator new[](size_t size) _THROW1(_STD bad_alloc) { void *p; if ((p = _aligned_malloc(size, 16)) == 0) { static const std::bad_alloc nomem; _RAISE(nomem); } return (p); }
+	void * operator new[](size_t size) { void *p; if ((p = _aligned_malloc(size, 16)) == 0) { static const std::bad_alloc nomem; throw nomem; } return (p); }
 	void operator delete[](void *p) { _aligned_free(p); }
 #else
 	void * operator new(size_t size) { void *p; if (posix_memalign(&p, 16, size) < 0) { static const std::bad_alloc nomem; throw nomem; } return (p); }
@@ -738,6 +735,12 @@ int scanhash_scrypt(int thr_id, struct work *work, uint32_t max_nonce, unsigned 
 	if (throughput == 0)
 		return -1;
 
+	/* The benchmark target is all zeroes, which the screen below can essentially
+	 * never satisfy, so the CPU re-verify would never run and a wrong kernel
+	 * would look identical to a right one. */
+	if (opt_benchmark)
+		ptarget[7] = 0x00ffff;
+
 	gettimeofday(tv_start, NULL);
 
 	uint32_t n = pdata[19];
@@ -942,6 +945,10 @@ int scanhash_scrypt(int thr_id, struct work *work, uint32_t max_nonce, unsigned 
 					if (!good) {
 						gpulog(LOG_WARNING, thr_id, "result does not validate on CPU! (i=%d, s=%d)", i, cur);
 					} else {
+						/* A silent success is indistinguishable from never
+						 * having found a candidate. */
+						if (opt_benchmark)
+							gpulog(LOG_INFO, thr_id, "benchmark: candidate validated on CPU");
 						*hashes_done = n - pdata[19];
 						work_set_target_ratio(work, refhash);
 						pdata[19] = nonce[cur] + i;

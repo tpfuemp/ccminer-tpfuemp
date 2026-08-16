@@ -147,11 +147,12 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/x25x/swifftx.c sph/sph_panama.c algos/x25x/lane.c
 
 # scrypt
+# Only the two texture-free kernels are wired up; test/fermi/kepler/nv target
+# sm_2x/sm_30, below this build's floor, and nothing references them.
 ccminer_SOURCES += algos/scrypt/scrypt.cpp algos/scrypt/scrypt-jane.cpp \
     algos/scrypt/blake.cu algos/scrypt/keccak.cu algos/scrypt/sha256.cu \
-    algos/scrypt/salsa_kernel.cu algos/scrypt/test_kernel.cu \
-    algos/scrypt/fermi_kernel.cu algos/scrypt/kepler_kernel.cu \
-    algos/scrypt/nv_kernel.cu algos/scrypt/nv_kernel2.cu algos/scrypt/titan_kernel.cu
+    algos/scrypt/salsa_kernel.cu \
+    algos/scrypt/nv_kernel2.cu algos/scrypt/titan_kernel.cu
 
 if HAVE_NVML
 nvml_defs = -DUSE_WRAPNVML
@@ -257,9 +258,6 @@ algos/stages/cuda_quark_compactionTest.o: algos/stages/cuda_quark_compactionTest
 algos/jha/cuda_jha_compactionTest.o: algos/jha/cuda_jha_compactionTest.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
-
-algos/scrypt/titan_kernel.o: algos/scrypt/titan_kernel.cu
-	$(NVCC) $(nvcc_FLAGS) -gencode=arch=compute_35,code=\"sm_35,compute_35\" -o $@ -c $<
 
 algos/skein/skein.o: algos/skein/skein.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=64 -o $@ -c $<

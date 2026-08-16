@@ -337,6 +337,14 @@ extern int scanhash_sha256t(int thr_id, struct work *work, uint32_t max_nonce, u
 extern int scanhash_sha256csm(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done);
 extern int scanhash_sha3d(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_sha512256d(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
+/* The scrypt pair keeps its historic signature: it pipelines several launches
+ * per call and reports its own timing window. */
+extern int scanhash_scrypt(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done,
+	unsigned char *scratchbuf, struct timeval *tv_start, struct timeval *tv_end);
+extern int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done,
+	unsigned char *scratchbuf, struct timeval *tv_start, struct timeval *tv_end);
+extern void free_scrypt(int thr_id);
+extern void free_scrypt_jane(int thr_id);
 extern int scanhash_sia(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_sib(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_skeincoin(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);

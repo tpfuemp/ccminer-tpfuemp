@@ -288,6 +288,12 @@
     <ClCompile Include="api.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="algos\scrypt\scrypt.cpp">
+      <Filter>Source Files\CUDA\scrypt</Filter>
+    </ClCompile>
+    <ClCompile Include="algos\scrypt\scrypt-jane.cpp">
+      <Filter>Source Files\CUDA\scrypt</Filter>
+    </ClCompile>
     <ClCompile Include="api_control.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -696,6 +702,15 @@
     <ClInclude Include="algos\scrypt\salsa_kernel.h">
       <Filter>Source Files\CUDA\scrypt</Filter>
     </ClInclude>
+    <ClInclude Include="algos\scrypt\nv_kernel2.h">
+      <Filter>Source Files\CUDA\scrypt</Filter>
+    </ClInclude>
+    <ClInclude Include="algos\scrypt\titan_kernel.h">
+      <Filter>Source Files\CUDA\scrypt</Filter>
+    </ClInclude>
+    <ClInclude Include="algos\scrypt\scrypt-jane.h">
+      <Filter>Source Files\CUDA\scrypt</Filter>
+    </ClInclude>
     <ClInclude Include="algos\neoscrypt\neoscrypt.h">
       <Filter>Source Files\neoscrypt</Filter>
     </ClInclude>
@@ -1079,6 +1094,12 @@
       <Filter>Source Files\CUDA\scrypt</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\scrypt\salsa_kernel.cu">
+      <Filter>Source Files\CUDA\scrypt</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\scrypt\nv_kernel2.cu">
+      <Filter>Source Files\CUDA\scrypt</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\scrypt\titan_kernel.cu">
       <Filter>Source Files\CUDA\scrypt</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\scrypt\sha256.cu">

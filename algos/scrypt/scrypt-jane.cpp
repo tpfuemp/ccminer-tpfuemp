@@ -455,6 +455,12 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 {
 	uint32_t *pdata = work->data;
 	uint32_t *ptarget = work->target;
+
+	/* Same reason as scanhash_scrypt: an all-zero benchmark target means the
+	 * host re-verify below never runs. */
+	if (opt_benchmark)
+		ptarget[7] = 0x00ffff;
+
 	const uint32_t Htarg = ptarget[7];
 	uint32_t N;
 
@@ -629,6 +635,8 @@ int scanhash_scrypt_jane(int thr_id, struct work *work, uint32_t max_nonce, unsi
 
 				if (memcmp(thash, &hash[cur][8*i], 32) == 0)
 				{
+					if (opt_benchmark)
+						gpulog(LOG_INFO, thr_id, "benchmark: candidate validated on CPU");
 					work_set_target_ratio(work, thash);
 					*hashes_done = n - pdata[19];
 					pdata[19] = tmp_nonce;

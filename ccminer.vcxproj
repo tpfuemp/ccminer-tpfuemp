@@ -326,6 +326,8 @@
     <ClCompile Include="stats.cpp" />
     <ClCompile Include="nvml.cpp" />
     <ClCompile Include="api.cpp" />
+    <ClCompile Include="algos\scrypt\scrypt.cpp" />
+    <ClCompile Include="algos\scrypt\scrypt-jane.cpp" />
     <ClCompile Include="api_control.cpp" />
     <ClCompile Include="api_metrics.c" />
     <ClCompile Include="api_model.cpp" />
@@ -483,6 +485,9 @@
     <ClInclude Include="res\resource.h" />
     <ClInclude Include="algos\sia\sia-rpc.h" />
     <ClInclude Include="algos\scrypt\salsa_kernel.h" />
+    <ClInclude Include="algos\scrypt\nv_kernel2.h" />
+    <ClInclude Include="algos\scrypt\titan_kernel.h" />
+    <ClInclude Include="algos\scrypt\scrypt-jane.h" />
     <ClInclude Include="sph\blake2b.h" />
     <ClInclude Include="sph\blake2s.h" />
     <ClInclude Include="sph\sph_blake.h" />
@@ -533,6 +538,8 @@
     <CudaCompile Include="algos\scrypt\sha256.cu" />
     <CudaCompile Include="algos\scrypt\salsa_kernel.cu">
     </CudaCompile>
+    <CudaCompile Include="algos\scrypt\nv_kernel2.cu" />
+    <CudaCompile Include="algos\scrypt\titan_kernel.cu" />
     <CudaCompile Include="algos\sha256d\cuda_sha256csm.cu" />
     <CudaCompile Include="algos\sha256d\cuda_sha256d.cu" />
     <CudaCompile Include="algos\sha256d\cuda_sha256_selftest.cu" />

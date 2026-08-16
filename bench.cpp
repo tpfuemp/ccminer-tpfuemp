@@ -145,6 +145,8 @@ void algo_free_all(int thr_id)
 	free_soterg(thr_id);
 	free_x16rt(thr_id);
 	free_x25x(thr_id);
+	free_scrypt(thr_id);
+	free_scrypt_jane(thr_id);
 }
 
 // benchmark all algos (called once per mining thread)

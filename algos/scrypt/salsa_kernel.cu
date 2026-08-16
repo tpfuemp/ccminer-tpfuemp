@@ -14,10 +14,6 @@
 
 #include "nv_kernel2.h"
 #include "titan_kernel.h"
-#include "nv_kernel.h"
-#include "kepler_kernel.h"
-#include "fermi_kernel.h"
-#include "test_kernel.h"
 
 #include "miner.h"
 
@@ -51,10 +47,27 @@ int       MAXWARPS[MAX_GPUS];
 uint32_t* h_V[MAX_GPUS][TOTAL_WARP_LIMIT*64];          // NOTE: the *64 prevents buffer overflow for --keccak
 uint32_t  h_V_extra[MAX_GPUS][TOTAL_WARP_LIMIT*64];    //       with really large kernel launch configurations
 
+/*
+ * Only the two texture-free kernels are wired up; the four others target
+ * sm_2x/sm_30, below this build's floor, and use texture references that CUDA
+ * 12 removed. The split is by register pressure: scrypt and low-N scrypt-jane
+ * take the high-register kernel, high-N scrypt-jane the low-register one.
+ */
 KernelInterface *Best_Kernel_Heuristics(cudaDeviceProp *props)
 {
 	KernelInterface *kernel = NULL;
 	uint64_t N = 1UL << (opt_nfactor+1);
+
+	if (props->major < 3 || (props->major == 3 && props->minor < 5)) {
+		applog(LOG_ERR, "scrypt: no kernel for compute %d.%d (need 3.5+)",
+			props->major, props->minor);
+		return NULL;
+	}
+
+	if (IS_SCRYPT() || (IS_SCRYPT_JANE() && N <= 8192))
+		kernel = new NV2Kernel();
+	else
+		kernel = new TitanKernel();
 
 	return kernel;
 }
@@ -81,8 +94,15 @@ bool validate_config(char *config, int &b, int &w, KernelInterface **kernel = NU
 		{
 			switch (kernelid)
 			{
+				case 'T': *kernel = new NV2Kernel(); break;
+				case 't': *kernel = new TitanKernel(); break;
 				case ' ': // choose based on device architecture
 					*kernel = Best_Kernel_Heuristics(props);
+				break;
+				default:
+					applog(LOG_ERR, "scrypt: kernel '%c' is not built in "
+						"this version, use T or t", kernelid);
+					success = false;
 				break;
 			}
 		}
