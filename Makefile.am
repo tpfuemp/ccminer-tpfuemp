@@ -59,6 +59,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/yescrypt/yescrypt.cu algos/yescrypt/cuda_yescrypt.cu \
 			  sph/yescrypt-common.c sph/yescrypt-opt.c sph/sha256_Y.c \
 			  sph/yescrypt.h sph/yescrypt-platform.h \
+algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh algos/yespower/yespower_smix.cuh algos/yespower/yespower_head_tail.cuh algos/yespower/yespower_hash.cuh sph/yespower_ref.c sph/yespower.h \
 			  algos/odocrypt/odocrypt_host.cpp algos/odocrypt/cuda_odocrypt.cu \
 			  algos/heavyhash/heavyhash.cu \
 			  algos/heavyhash/cuda_heavyhash.cu \

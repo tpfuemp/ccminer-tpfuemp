@@ -333,6 +333,12 @@ Options:\n\
 			sha3d		Bsha3, Yilacoin and Kylacoin\n\
 			sha3t		Fjarcode and Bitcoin III\n\
 			sha512256d	Double SHA512/256 (Radiant)\n\
+			yespower	yespower 1.0, params via --yespower-param/-key\n\
+			yespowerr16	yespower 1.0 N=4096 r=16 (Yenten)\n\
+			 coin aliases	yespowerSUGAR yespowerURX yespowerLTNCG yespowerMGPC\n\
+					yespowerTIDE yespowerARWN yespowerIC yespowerIOTS\n\
+					yespowerLITB cpupower  (each presets N, r and key)\n\
+			power2b		yespower 1.0-b2b (MicroBitcoin), NOT YET IMPLEMENTED\n\
 			sia		SIA (Blake2B)\n\
 			sib		Sibcoin (X11+Streebog)\n\
 			soterg		Soteria (X12R)\n\
@@ -413,6 +419,8 @@ Options:\n\
       --no-getwork      disable getwork support\n\
 	  --yescrypt-param  set params(N,r,p) for yescrypt\n\
 	  --yescrypt-key    set key for yescrypt\n\
+	  --yespower-param  set params(N,r) for yespower (alias of --yescrypt-param)\n\
+	  --yespower-key    set key for yespower (alias of --yescrypt-key)\n\
   -n, --ndevs           list cuda devices\n\
   -N, --statsavg        number of samples used to compute hashrate (default: 30)\n\
       --no-gbt          disable getblocktemplate support (height check in solo)\n\
@@ -578,6 +586,9 @@ struct option options[] = {
 	{ "segwit", 0, NULL, 1083 },
 	{ "yescrypt-param", 1, NULL, 1084 },
 	{ "yescrypt-key", 1, NULL, 1085 },
+	/* yespower reads the same two globals; both spellings are accepted */
+	{ "yespower-param", 1, NULL, 1084 },
+	{ "yespower-key", 1, NULL, 1085 },
 	{ "user-agent", 1, NULL, 1086 },
 	{ 0, 0, 0, 0 }
 };
@@ -1993,6 +2004,12 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_YESCRYPTR16V2:
 		case ALGO_YESCRYPTR24:
 		case ALGO_YESCRYPTR32:
+		// yespower shares the yescrypt/scrypt difficulty scale: difficulty-1 is
+		// ~65536 expected hashes, not Bitcoin's 2^32.  Measured against the CPU
+		// sibling on the same job: ~380 hashes per share at stratum diff 0.006.
+		case ALGO_YESPOWER:
+		case ALGO_YESPOWERR16:
+		case ALGO_POWER2B:
 			work_set_target(work, sctx->job.diff / (65536.0 * opt_difficulty));
 			break;
 		case ALGO_DMD_GR:
@@ -2645,6 +2662,9 @@ static void *miner_thread(void *userdata)
 			case ALGO_YESCRYPTR16V2:
 			case ALGO_YESCRYPTR24:
 			case ALGO_YESCRYPTR32:
+				case ALGO_YESPOWER:
+				case ALGO_YESPOWERR16:
+				case ALGO_POWER2B:
 				minmax = 0x8000;
 				break;
 			case ALGO_CRYPTOLIGHT:
@@ -2903,6 +2923,11 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_SHA512256D:
 			rc = scanhash_sha512256d(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_YESPOWER:
+		case ALGO_YESPOWERR16:
+		case ALGO_POWER2B:
+			rc = scanhash_yespower(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_SCRYPT:
 			rc = scanhash_scrypt(thr_id, &work, max_nonce, &hashes_done,
@@ -3667,6 +3692,13 @@ void parse_arg(int key, char *arg)
 		    (!strcasecmp("equihash144", arg) || !strcasecmp("equihash144_5", arg)))
 			eq_set_variant_144();
 
+		// Same shape as equihash above: the yespower coin variants share one algo
+		// and differ only in (N, r, pers), which the alias name selects. A later
+		// --yespower-param/-key clears the selection and wins.
+		if ((opt_algo == ALGO_YESPOWER || opt_algo == ALGO_YESPOWERR16) &&
+		    !yespower_set_variant(arg))
+			show_usage_and_exit(1);
+
 		if (p) {
 			opt_nfactor = atoi(p + 1);
 			if (opt_algo == ALGO_SCRYPT_JANE) {
@@ -4070,9 +4102,11 @@ void parse_arg(int key, char *arg)
 			yescrypt_param_N = vals[0];
 			if (n > 1) yescrypt_param_r = vals[1];
 			if (n > 2) yescrypt_param_p = vals[2];
+			yespower_clear_variant(); /* explicit params beat a -a coin preset */
 		}
 		break;
 	case 1085: /* --yescrypt-key */
+		yespower_clear_variant(); /* as above */
 		free(yescrypt_key);
 		yescrypt_key = strdup(arg);
 		yescrypt_key_len = strlen(arg);

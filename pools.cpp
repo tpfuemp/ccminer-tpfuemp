@@ -128,6 +128,12 @@ void pool_set_attr(int pooln, const char* key, char* arg)
 	}
 	if (!strcasecmp(key, "algo")) {
 		p->algo = algo_to_int(arg);
+		/* Only if it resolved: an unknown name falls back to opt_algo below, and
+		 * keeping the typo here would then be handed to yespower_set_variant(). */
+		if (p->algo >= 0)
+			snprintf(p->algo_name, sizeof(p->algo_name), "%s", arg);
+		else
+			p->algo_name[0] = '\0';
 		return;
 	}
 	if (!strcasecmp(key, "scantime")) {
@@ -234,6 +240,15 @@ bool pool_switch(int thr_id, int pooln)
 		}
 
 		opt_algo = (enum sha_algos) p->algo;
+
+		/* The int alone loses which yespower coin this pool asked for, and the
+		 * loss is silent: generic r=32/keyless parameters hash fine and are
+		 * rejected 100% of the time. Re-select from the name the config gave;
+		 * with no "algo" for this pool the CLI's own selection stands. */
+		if ((opt_algo == ALGO_YESPOWER || opt_algo == ALGO_YESPOWERR16) &&
+		    p->algo_name[0] && !yespower_set_variant(p->algo_name))
+			applog(LOG_ERR, "pool %d: keeping yespower variant '%s'", pooln,
+			       yespower_variant_name());
 	}
 
 	if (prevn != cur_pooln) {

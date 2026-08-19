@@ -888,9 +888,24 @@ static bool profile_apply(const ctl_profile_req *p, char *err, size_t errlen)
 	const int   old_algo = opt_algo;
 	const bool  algo_changed = p->has_algo && p->algo != opt_algo;
 	bool params_touched = false;
+	char old_variant[32];
 
-	if (algo_changed)
+	/* Which yespower coin was selected, for the same walk-back reason: the algo
+	 * int does not carry it, so restoring opt_algo alone would leave the previous
+	 * algo running the new coin's (N, r, pers). */
+	snprintf(old_variant, sizeof(old_variant), "%s", yespower_variant_name());
+
+	if (algo_changed) {
 		opt_algo = (enum sha_algos) p->algo;
+		if ((opt_algo == ALGO_YESPOWER || opt_algo == ALGO_YESPOWERR16) &&
+		    !yespower_set_variant(p->algo_name)) {
+			opt_algo = (enum sha_algos) old_algo;
+			yespower_set_variant(old_variant);
+			snprintf(err, errlen, "algo '%s' has no yespower parameter entry",
+			         p->algo_name);
+			return false;
+		}
+	}
 
 	/* Sticky params for the incoming algo first, so an explicit params object
 	 * in this same request wins over what was remembered. */
@@ -902,6 +917,7 @@ static bool profile_apply(const ctl_profile_req *p, char *err, size_t errlen)
 		if (!api_ctl_param_apply(opt_algo, p->pname[i], v, err, errlen)) {
 			if (algo_changed) {
 				opt_algo = (enum sha_algos) old_algo;
+				yespower_set_variant(old_variant);
 				api_ctl_params_restore(opt_algo);
 			}
 			return false;
@@ -935,6 +951,7 @@ static bool profile_apply(const ctl_profile_req *p, char *err, size_t errlen)
 		if (!pool_switch_via_stratum(packed, -1, (int) opt_algo, err, errlen)) {
 			if (algo_changed) {
 				opt_algo = (enum sha_algos) old_algo;
+				yespower_set_variant(old_variant);
 				api_ctl_params_restore(opt_algo);
 			}
 			return false;
@@ -943,6 +960,7 @@ static bool profile_apply(const ctl_profile_req *p, char *err, size_t errlen)
 		if (!pool_switch_via_stratum(NULL, p->pool_index, -1, err, errlen)) {
 			if (algo_changed) {
 				opt_algo = (enum sha_algos) old_algo;
+				yespower_set_variant(old_variant);
 				api_ctl_params_restore(opt_algo);
 			}
 			return false;

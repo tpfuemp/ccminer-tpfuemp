@@ -261,6 +261,11 @@
     <ClInclude Include="cuda\keccak_device.cuh" />
     <ClInclude Include="cuda\luffa512_device.cuh" />
     <ClInclude Include="cuda\sha256_device.cuh" />
+    <ClInclude Include="cuda\salsa_device.cuh" />
+    <ClInclude Include="cuda\pwxform_device.cuh" />
+    <ClInclude Include="algos\yespower\yespower_smix.cuh" />
+    <ClInclude Include="algos\yespower\yespower_head_tail.cuh" />
+    <ClInclude Include="algos\yespower\yespower_hash.cuh" />
     <ClInclude Include="cuda\shabal512_device.cuh" />
     <ClInclude Include="cuda\sha512_device.cuh" />
     <ClInclude Include="cuda\skein512_device.cuh" />
@@ -316,6 +321,7 @@
     <ClCompile Include="sph\sha256_Y.c" />
     <ClCompile Include="sph\yescrypt-common.c" />
     <ClCompile Include="sph\yescrypt-opt.c" />
+    <ClCompile Include="sph\yespower_ref.c" />
     <ClCompile Include="util.cpp" />
     <ClCompile Include="bench.cpp" />
     <ClCompile Include="bignum.cpp" />
@@ -352,6 +358,7 @@
     <ClInclude Include="sph\SHA3api_ref.h" />
     <ClInclude Include="sph\yescrypt-platform.h" />
     <ClInclude Include="sph\yescrypt.h" />
+    <ClInclude Include="sph\yespower.h" />
     <ClInclude Include="algos\common\cuda_x_stages.h" />
     <CudaCompile Include="algos\bmw\bmw.cu" />
     <CudaCompile Include="algos\bmw\bmw512.cu" />
@@ -555,6 +562,7 @@
     <CudaCompile Include="algos\stages\cuda_shavite512.cu" />
     <CudaCompile Include="algos\yescrypt\cuda_yescrypt.cu" />
     <CudaCompile Include="algos\yescrypt\yescrypt.cu" />
+    <CudaCompile Include="algos\yespower\yespower.cu" />
     <CudaCompile Include="algos\zr5\zr5.cu" />
     <CudaCompile Include="algos\gost\cuda_gosthash.cu" />
     <CudaCompile Include="algos\gost\gost.cu" />

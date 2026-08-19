@@ -151,6 +151,9 @@
     <Filter Include="Source Files\CUDA\yescrypt">
       <UniqueIdentifier>{600e2767-1d6f-4434-9f53-5fa16bd1385f}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\CUDA\yespower">
+      <UniqueIdentifier>{7f3a1c62-9e04-4d18-b5a7-2c9d61e8f4b3}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Source Files\CUDA\balloon">
       <UniqueIdentifier>{da9944d6-30eb-4887-b42f-a91e1f63091c}</UniqueIdentifier>
     </Filter>
@@ -419,6 +422,9 @@
       <Filter>Source Files\sph</Filter>
     </ClCompile>
     <ClCompile Include="sph\yescrypt-opt.c">
+      <Filter>Source Files\sph</Filter>
+    </ClCompile>
+    <ClCompile Include="sph\yespower_ref.c">
       <Filter>Source Files\sph</Filter>
     </ClCompile>
     <ClCompile Include="sph\sha256_Y.c">
@@ -777,6 +783,24 @@
     <ClInclude Include="sph\sha3.h" />
     <ClInclude Include="sph\yescrypt.h">
       <Filter>Header Files\sph</Filter>
+    </ClInclude>
+    <ClInclude Include="sph\yespower.h">
+      <Filter>Header Files\sph</Filter>
+    </ClInclude>
+    <ClInclude Include="cuda\salsa_device.cuh">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="cuda\pwxform_device.cuh">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="algos\yespower\yespower_smix.cuh">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="algos\yespower\yespower_head_tail.cuh">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="algos\yespower\yespower_hash.cuh">
+      <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="sph\yescrypt-platform.h">
       <Filter>Header Files\sph</Filter>
@@ -1333,6 +1357,11 @@
     </CudaCompile>
     <CudaCompile Include="algos\evohash\evohash.cu">
       <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <CudaCompile Include="algos\yespower\yespower.cu">
+      <Filter>Source Files\CUDA\yespower</Filter>
     </CudaCompile>
   </ItemGroup>
   <ItemGroup>

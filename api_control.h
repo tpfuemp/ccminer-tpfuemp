@@ -119,6 +119,8 @@ void api_ctl_note_switch(void);
 typedef struct {
 	bool has_algo;
 	int  algo;
+	char algo_name[32];   /* as sent: yespower coin variants share one algo and
+	                       * differ only in (N, r, pers), which the int loses */
 
 	bool has_pool;
 	char pool_url[512];

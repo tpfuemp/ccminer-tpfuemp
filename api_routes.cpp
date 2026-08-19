@@ -989,6 +989,8 @@ static int h_control_profile(const api_request *req, void *ctx, json_t **out, ch
 		}
 		p.has_algo = true;
 		p.algo = a;
+		snprintf(p.algo_name, sizeof(p.algo_name), "%s",
+		         json_string_value(jalgo));
 	}
 
 	/* Structural: algo X against a pool expecting Y yields 100% rejects while

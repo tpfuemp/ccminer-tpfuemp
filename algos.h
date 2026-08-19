@@ -115,6 +115,9 @@ enum sha_algos {
 	ALGO_FIROPOW,
 	ALGO_MERAKI,
 	ALGO_VERTHASH,
+	ALGO_YESPOWER,
+	ALGO_YESPOWERR16,
+	ALGO_POWER2B,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -242,6 +245,9 @@ static const char *algo_names[] = {
 	"firopow",
 	"meraki",
 	"verthash",
+	"yespower",
+	"yespowerr16",
+	"power2b",
 	"auto", /* reserved for multi algo */
 	""
 };
@@ -261,6 +267,28 @@ static inline int algo_to_int(char* arg)
 		// some aliases...
 		if (!strcasecmp("all", arg))
 			i = ALGO_AUTO;
+		/* Every wild yespower 1.0 coin is -a yespower with a distinct
+		 * --yespower-key on the r=32 default, so these are aliases, not algos.
+		 * The parameters each one needs live in the table in
+		 * algos/yespower/yespower.cu, which `-a` applies via
+		 * yespower_set_variant(); a name added here and not there aborts at
+		 * startup rather than mining generic parameters. */
+		else if (!strcasecmp("yespower-b2b", arg))
+			i = ALGO_POWER2B;
+		else if (!strcasecmp("yenten", arg))
+			i = ALGO_YESPOWERR16;
+		else if (!strcasecmp("yespowersugar", arg) ||
+		         !strcasecmp("sugarchain", arg) ||
+		         !strcasecmp("yespowerurx", arg) ||
+		         !strcasecmp("yespowerltncg", arg) ||
+		         !strcasecmp("yespowermgpc", arg) ||
+		         !strcasecmp("yespowertide", arg) ||
+		         !strcasecmp("yespowerarwn", arg) ||
+		         !strcasecmp("yespoweric", arg) ||
+		         !strcasecmp("yespoweriots", arg) ||
+		         !strcasecmp("yespowerlitb", arg) ||
+		         !strcasecmp("cpupower", arg))
+			i = ALGO_YESPOWER;
 		else if (!strcasecmp("hoohashv110", arg))
 			i = ALGO_HOOHASH;
 		else if (!strcasecmp("pepepow", arg))

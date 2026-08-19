@@ -14,103 +14,6 @@ __device__ void __syncwarp(uint32_t mask);
 #endif
 #endif
 
-#if defined(CUDART_VERSION) && CUDART_VERSION < 9000
-#define __syncwarp(mask) __threadfence_block()
-#endif
-
-#if __CUDA_ARCH__ < 300
-#define bitselect(a, b, c) ((a) ^ ((c) & ((b) ^ (a))))
-
-__device__ __forceinline__ uint32_t WarpShuffle(uint32_t a, uint32_t b, uint32_t c)
-{
-	extern __shared__ uint32_t shared_mem[];
-	uint32_t thread = threadIdx.y * blockDim.x + threadIdx.x;
-	uint32_t threads = blockDim.y * blockDim.x;
-	uint32_t buf, result;
-
-	__syncwarp(0xFFFFFFFF);
-	buf = shared_mem[threads * 0 + thread];
-	shared_mem[threads * 0 + thread] = a;
-	__syncwarp(0xFFFFFFFF);
-	result = shared_mem[0 * threads + bitselect(thread, b, c - 1)];
-	__syncwarp(0xFFFFFFFF);
-	shared_mem[threads * 0 + thread] = buf;
-
-	return result;
-}
-
-__device__ __forceinline__ void WarpShuffle2(uint32_t &d0, uint32_t &d1, uint32_t a0, uint32_t a1, uint32_t b0, uint32_t b1, uint32_t c)
-{
-	extern __shared__ uint32_t shared_mem[];
-	uint32_t thread = threadIdx.y * blockDim.x + threadIdx.x;
-	uint32_t threads = blockDim.y * blockDim.x;
-	uint32_t buf0, buf1;
-
-	__syncwarp(0xFFFFFFFF);
-	buf0 = shared_mem[threads * 0 + thread];
-	buf1 = shared_mem[threads * 1 + thread];
-	shared_mem[threads * 0 + thread] = a0;
-	shared_mem[threads * 1 + thread] = a1;
-	__syncwarp(0xFFFFFFFF);
-	d0 = shared_mem[0 * threads + bitselect(thread, b0, c - 1)];
-	d1 = shared_mem[1 * threads + bitselect(thread, b1, c - 1)];
-	__syncwarp(0xFFFFFFFF);
-	shared_mem[threads * 0 + thread] = buf0;
-	shared_mem[threads * 1 + thread] = buf1;
-}
-
-__device__ __forceinline__ void WarpShuffle3(uint32_t &d0, uint32_t &d1, uint32_t &d2, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t b0, uint32_t b1, uint32_t b2, uint32_t c)
-{
-	extern __shared__ uint32_t shared_mem[];
-	uint32_t thread = threadIdx.y * blockDim.x + threadIdx.x;
-	uint32_t threads = blockDim.y * blockDim.x;
-	uint32_t buf0, buf1, buf2;
-
-	__syncwarp(0xFFFFFFFF);
-	buf0 = shared_mem[threads * 0 + thread];
-	buf1 = shared_mem[threads * 1 + thread];
-	buf2 = shared_mem[threads * 2 + thread];
-	shared_mem[threads * 0 + thread] = a0;
-	shared_mem[threads * 1 + thread] = a1;
-	shared_mem[threads * 2 + thread] = a2;
-	__syncwarp(0xFFFFFFFF);
-	d0 = shared_mem[0 * threads + bitselect(thread, b0, c - 1)];
-	d1 = shared_mem[1 * threads + bitselect(thread, b1, c - 1)];
-	d2 = shared_mem[2 * threads + bitselect(thread, b2, c - 1)];
-	__syncwarp(0xFFFFFFFF);
-	shared_mem[threads * 0 + thread] = buf0;
-	shared_mem[threads * 1 + thread] = buf1;
-	shared_mem[threads * 2 + thread] = buf2;
-}
-
-__device__ __forceinline__ void WarpShuffle4(uint32_t &d0, uint32_t &d1, uint32_t &d2, uint32_t &d3, uint32_t a0, uint32_t a1, uint32_t a2, uint32_t a3, uint32_t b0, uint32_t b1, uint32_t b2, uint32_t b3, uint32_t c)
-{
-	extern __shared__ uint32_t shared_mem[];
-	uint32_t thread = threadIdx.y * blockDim.x + threadIdx.x;
-	uint32_t threads = blockDim.y * blockDim.x;
-	uint32_t buf0, buf1, buf2, buf3;
-
-	__syncwarp(0xFFFFFFFF);
-	buf0 = shared_mem[threads * 0 + thread];
-	buf1 = shared_mem[threads * 1 + thread];
-	buf2 = shared_mem[threads * 2 + thread];
-	buf3 = shared_mem[threads * 3 + thread];
-	shared_mem[threads * 0 + thread] = a0;
-	shared_mem[threads * 1 + thread] = a1;
-	shared_mem[threads * 2 + thread] = a2;
-	shared_mem[threads * 3 + thread] = a3;
-	__syncwarp(0xFFFFFFFF);
-	d0 = shared_mem[0 * threads + bitselect(thread, b0, c - 1)];
-	d1 = shared_mem[1 * threads + bitselect(thread, b1, c - 1)];
-	d2 = shared_mem[2 * threads + bitselect(thread, b2, c - 1)];
-	d3 = shared_mem[3 * threads + bitselect(thread, b3, c - 1)];
-	__syncwarp(0xFFFFFFFF);
-	shared_mem[threads * 0 + thread] = buf0;
-	shared_mem[threads * 1 + thread] = buf1;
-	shared_mem[threads * 2 + thread] = buf2;
-	shared_mem[threads * 3 + thread] = buf3;
-}
-#else
 __device__ __forceinline__ uint32_t WarpShuffle(uint32_t a, uint32_t b, uint32_t c)
 {
 	return SHFL(a, b, c);
@@ -137,7 +40,6 @@ __device__ __forceinline__ void WarpShuffle4(uint32_t &d0, uint32_t &d1, uint32_
 	d3 = SHFL(a3, b3, c);
 }
 
-#endif
 
 extern cudaError_t MyStreamSynchronize(cudaStream_t stream, int situation, int thr_id);
 
@@ -798,6 +700,7 @@ __global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c_r8(int threads, u
 
 		for (k = 0; k < 128; k++)
 			shared_mem[(threadIdx.y * 128 + k) * 16 + threadIdx.x] = Sdev(k);
+		__syncwarp();	// the gather below reads other lanes' fill words
 
 #pragma unroll
 		for (k = 0; k < r * 2; k++)
@@ -874,6 +777,7 @@ __global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c1_r8(int threads, 
 
 		for (k = 0; k < 128; k++)
 			shared_mem[(threadIdx.y * 128 + k) * 16 + threadIdx.x] = Sdev(k);
+		__syncwarp();	// the gather below reads other lanes' fill words
 
 #pragma unroll
 		for (k = 0; k < r * 2; k++)
@@ -933,12 +837,23 @@ __global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c1_r8(int threads, 
 #define Bdev(a) B[((a) * threads + thread) * 16 + threadIdx.x]
 #define Sdev(a) S[(thread_part_4 * 128 + (a)) * 16 + threadIdx.x]
 
-__global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c(int threads, uint32_t startNonce, uint32_t offset1, uint32_t offset2, uint32_t start, uint32_t end, const uint32_t N, const uint32_t r, const uint32_t p)
+/* R != 0 fixes r at compile time; R == 0 keeps the original runtime-r path for
+ * `-a yescrypt --yescrypt-param` with an r we do not instantiate.
+ *
+ * With a runtime r the compiler cannot register-promote x[], so all of it lives
+ * in local memory: measured 1024 B of stack frame and 68 LDL + 61 STL in this
+ * kernel's inner loop, against 0 and 0 for the hand-specialised _r8 twin. Note
+ * x[256] was also 4x oversized -- only x[0 .. r*2-1] is ever touched, so even at
+ * r=32 the array is 64 words. */
+template<uint32_t R>
+__global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c(int threads, uint32_t startNonce, uint32_t offset1, uint32_t offset2, uint32_t start, uint32_t end, const uint32_t N, const uint32_t r_arg, const uint32_t p)
 {
 	uint32_t thread_part_16 = (2 * blockIdx.x + threadIdx.y);
 	uint32_t thread_part_4 = thread_part_16 + offset1;
 	uint32_t thread = thread_part_16 + offset2;
 	extern __shared__ uint32_t shared_mem[];
+
+	const uint32_t r = R ? R : r_arg;
 
 	uint32_t *v = &V[blockIdx.x * N * r * 2 * 32 + threadIdx.y * 16 + threadIdx.x];
 
@@ -947,11 +862,13 @@ __global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c(int threads, uint
 		uint32_t n, i, j, k;
 		uint32_t x0, x1, x2, x3;
 		uint2 buf;
-		uint32_t x[256];
+		uint32_t x[R ? R * 2 : 256];
 
 		for (k = 0; k < 128; k++)
 			shared_mem[(threadIdx.y * 128 + k) * 16 + threadIdx.x] = Sdev(k);
+		__syncwarp();	// the gather below reads other lanes' fill words
 
+#pragma unroll
 		for (k = 0; k < r * 2; k++) {
 			x3 = Bdev(k);
 			x[k] = x3;
@@ -959,6 +876,7 @@ __global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c(int threads, uint
 
 		for (n = p2floor(start), i = start; i < end; i++) {
 
+#pragma unroll
 			for (k = 0; k < r * 2; k++) {
 				x3 = x[k];
 				__stL1(&Vdev(i, k), x3);
@@ -969,12 +887,14 @@ __global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c(int threads, uint
 				j = WarpShuffle(x3, 0, 16) & (n - 1);
 				j += i - n;
 
+#pragma unroll
 				for (k = 0; k < r * 2; k++) {
 					x3 = x[k] ^ __ldL1(&Vdev(j, k));
 					x[k] = x3;
 				}
 			}
 
+#pragma unroll
 			for (k = 0; k < r * 2; k++) {
 				x3 ^= x[k];
 				WarpShuffle2(buf.x, buf.y, x3, x3, 0, 1, 2);
@@ -1000,18 +920,22 @@ __global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c(int threads, uint
 			x[r * 2 - 1] = x3;
 		}
 
+#pragma unroll
 		for (k = 0; k < r * 2; k++)
 			Bdev(k) = x[k];
 
 	}
 }
 
-__global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c1(int threads, uint32_t startNonce, uint32_t offset1, uint32_t offset2, uint32_t start, uint32_t end, const uint32_t N, const uint32_t r, const uint32_t p)
+template<uint32_t R>
+__global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c1(int threads, uint32_t startNonce, uint32_t offset1, uint32_t offset2, uint32_t start, uint32_t end, const uint32_t N, const uint32_t r_arg, const uint32_t p)
 {
 	uint32_t thread_part_16 = (2 * blockIdx.x + threadIdx.y);
 	uint32_t thread_part_4 = thread_part_16 + offset1;
 	uint32_t thread = thread_part_16 + offset2;
 	extern __shared__ uint32_t shared_mem[];
+
+	const uint32_t r = R ? R : r_arg;
 
 	uint32_t *v = &V[blockIdx.x * N * r * 2 * 32 + threadIdx.y * 16 + threadIdx.x];
 
@@ -1020,11 +944,13 @@ __global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c1(int threads, uin
 		uint32_t j, k;
 		uint32_t x0, x1, x2, x3;
 		uint2 buf;
-		uint32_t x[256];
+		uint32_t x[R ? R * 2 : 256];
 
 		for (k = 0; k < 128; k++)
 			shared_mem[(threadIdx.y * 128 + k) * 16 + threadIdx.x] = Sdev(k);
+		__syncwarp();	// the gather below reads other lanes' fill words
 
+#pragma unroll
 		for (k = 0; k < r * 2; k++) {
 			x3 = Bdev(k);
 			x[k] = x3;
@@ -1034,14 +960,17 @@ __global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c1(int threads, uin
 		{
 			j = WarpShuffle(x3, 0, 16) & (N - 1);
 
+#pragma unroll
 			for (k = 0; k < r * 2; k++)
 				x[k] ^= __ldL1(&Vdev(j, k));
 
+#pragma unroll
 			for (k = 0; k < r * 2; k++) {
 				x3 = x[k];
 				__stL1(&Vdev(j, k), x3);
 			}
 
+#pragma unroll
 			for (k = 0; k < r * 2; k++) {
 				x3 ^= x[k];
 				WarpShuffle2(buf.x, buf.y, x3, x3, 0, 1, 2);
@@ -1066,17 +995,21 @@ __global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c1(int threads, uin
 			x[r * 2 - 1] = x3;
 		}
 
+#pragma unroll
 		for (k = 0; k < r * 2; k++)
 			Bdev(k) = x[k];
 	}
 }
 
-__global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c2(int threads, uint32_t startNonce, uint32_t offset1, uint32_t offset2, const uint32_t N, const uint32_t r, const uint32_t p)
+template<uint32_t R>
+__global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c2(int threads, uint32_t startNonce, uint32_t offset1, uint32_t offset2, const uint32_t N, const uint32_t r_arg, const uint32_t p)
 {
 	uint32_t thread_part_16 = (2 * blockIdx.x + threadIdx.y);
 	uint32_t thread_part_4 = thread_part_16 + offset1;
 	uint32_t thread = thread_part_16 + offset2;
 	extern __shared__ uint32_t shared_mem[];
+
+	const uint32_t r = R ? R : r_arg;
 
 	uint32_t *v = &V[blockIdx.x * N * r * 2 * 32 + threadIdx.y * 16 + threadIdx.x];
 
@@ -1085,11 +1018,13 @@ __global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c2(int threads, uin
 		uint32_t j, k;
 		uint32_t x0, x1, x2, x3;
 		uint2 buf;
-		uint32_t x[256];
+		uint32_t x[R ? R * 2 : 256];
 
 		for (k = 0; k < 128; k++)
 			shared_mem[(threadIdx.y * 128 + k) * 16 + threadIdx.x] = Sdev(k);
+		__syncwarp();	// the gather below reads other lanes' fill words
 
+#pragma unroll
 		for (k = 0; k < r * 2; k++) {
 			x3 = Bdev(k);
 			x[k] = x3;
@@ -1099,11 +1034,13 @@ __global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c2(int threads, uin
 		{
 			j = WarpShuffle(x3, 0, 16) & (N - 1);
 
+#pragma unroll
 			for (k = 0; k < r * 2; k++) {
 				x3 = x[k] ^ __ldL1(&Vdev(j, k));
 				x[k] = x3;
 			}
 
+#pragma unroll
 			for (k = 0; k < r * 2; k++) {
 				x3 ^= x[k];
 				WarpShuffle2(buf.x, buf.y, x3, x3, 0, 1, 2);
@@ -1128,6 +1065,7 @@ __global__ __launch_bounds__(32, 1) void yescrypt_gpu_hash_k2c2(int threads, uin
 			x[r * 2 - 1] = x3;
 		}
 
+#pragma unroll
 		for (k = 0; k < r * 2; k++)
 			Bdev(k) = x[k];
 	}
@@ -1195,6 +1133,10 @@ void yescrypt_setTarget(int thr_id, uint32_t pdata[20], char *key, uint32_t key_
 	CUDA_SAFE_CALL(cudaMemcpyToSymbol(client_key_len, &key_len, sizeof(uint32_t), 0, cudaMemcpyHostToDevice));
 }
 
+// PRECONDITION: threads must be a multiple of 32. The batch is tiled three ways --
+// grid = threads/tpb, k1's 4-way split by threads>>2, SMix's 16-way split by
+// threads>>4 -- and only a multiple of 32 makes all three cover exactly `threads`.
+// A non-multiple silently scans a wrong subset; the caller clamps (yescrypt.cu).
 __host__ void yescrypt_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *resultnonces, uint32_t target, const uint32_t N, const uint32_t r, const uint32_t p)
 {
 	int dev_id = device_map[thr_id % MAX_GPUS];
@@ -1208,41 +1150,34 @@ __host__ void yescrypt_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startN
 	dim3 block2(4U, tpb >> 2);
 	dim3 block3(16U, tpb >> 4);
 
-	if (device_sm[dev_id] < 500) {
-		cudaFuncSetCacheConfig(yescrypt_gpu_hash_k2c, cudaFuncCachePreferShared);
-		cudaFuncSetCacheConfig(yescrypt_gpu_hash_k2c1, cudaFuncCachePreferShared);
-		cudaFuncSetCacheConfig(yescrypt_gpu_hash_k2c2, cudaFuncCachePreferShared);
-		cudaFuncSetCacheConfig(yescrypt_gpu_hash_k2c_r8, cudaFuncCachePreferShared);
-		cudaFuncSetCacheConfig(yescrypt_gpu_hash_k2c1_r8, cudaFuncCachePreferShared);
+	/* The SMix kernels are templates now, so each instantiation is its own
+	 * function and needs its own cache config -- naming the template alone does
+	 * not compile, and configuring only one R would silently leave the others on
+	 * the default split. Keep this list in step with the launch dispatch below. */
+#define YS_EACH_SMIX(DO) \
+	DO(yescrypt_gpu_hash_k2c<0>)  DO(yescrypt_gpu_hash_k2c<16>)  DO(yescrypt_gpu_hash_k2c<24>)  DO(yescrypt_gpu_hash_k2c<32>)  \
+	DO(yescrypt_gpu_hash_k2c1<0>) DO(yescrypt_gpu_hash_k2c1<16>) DO(yescrypt_gpu_hash_k2c1<24>) DO(yescrypt_gpu_hash_k2c1<32>) \
+	DO(yescrypt_gpu_hash_k2c2<0>) DO(yescrypt_gpu_hash_k2c2<8>)  DO(yescrypt_gpu_hash_k2c2<16>) DO(yescrypt_gpu_hash_k2c2<24>) \
+	DO(yescrypt_gpu_hash_k2c2<32>) DO(yescrypt_gpu_hash_k2c_r8)  DO(yescrypt_gpu_hash_k2c1_r8)
+
+	if (device_sm[dev_id] >= 700) {
+#define YS_CARVEOUT(K) cudaFuncSetAttribute(K, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
+		YS_EACH_SMIX(YS_CARVEOUT)
+#undef YS_CARVEOUT
 	}
-#if defined(CUDART_VERSION) && CUDART_VERSION >= 9000
-	else if (device_sm[dev_id] >= 700) {
-		cudaFuncSetAttribute(yescrypt_gpu_hash_k2c, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
-		cudaFuncSetAttribute(yescrypt_gpu_hash_k2c1, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
-		cudaFuncSetAttribute(yescrypt_gpu_hash_k2c2, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
-		cudaFuncSetAttribute(yescrypt_gpu_hash_k2c_r8, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
-		cudaFuncSetAttribute(yescrypt_gpu_hash_k2c1_r8, cudaFuncAttributePreferredSharedMemoryCarveout, 100);
-	}
-#endif
-	if (device_sm[dev_id] < 300) sm = 4 * sizeof(uint32_t) * tpb;
 
 	const uint32_t Nw = ((N + 2) / 3) & ~1;
 	const uint32_t Nr = ((N + 2) / 3 + 1) & ~1;
 
-	// 応答が遅いとErrorになるので、loop_countで適度に分割します。
-	uint32_t loop_count;
-	if (device_sm[dev_id] > 500) loop_count = max(N * r / 16384, 1);
-	else if (device_sm[dev_id] == 500) loop_count = max(N * r / 8192, 1);
-	else if (device_sm[dev_id] > 300) loop_count = max(N * r / 4096, 1);
-	else loop_count = max(N * r / 2048, 1);
+	// A slow response trips the driver watchdog, so the work is split into loop_count chunks.
+	uint32_t loop_count = max(N * r / 16384, 1);
 
 	yescrypt_gpu_hash_k0 << <grid, block >> > (threads, startNounce, r, p);
 	CUDA_SAFE_CALL(cudaGetLastError());
 	for (uint32_t l = 0; l < p; l++)
 	{
-		// メモリの使用量を抑えるため、16分割で演算を行います。
-		// しかし、yescrypt_gpu_hash_k1で16分割は不向きで、この部分のメモリ使用量も少ないため、
-		// yescrypt_gpu_hash_k1は4分割で演算を行います。
+		// Split 16 ways (4 x 4) to hold memory use down. k1 is a poor fit for a
+		// 16-way split and its own memory use is small, so k1 is split 4 ways.
 		for (uint32_t i = 0; i < 4; i++)
 		{
 			yescrypt_gpu_hash_k1 << <grid, block2, sm >> > (threads, startNounce, i * (threads >> 2) + l * r * 2 * threads);
@@ -1260,17 +1195,34 @@ __host__ void yescrypt_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startN
 					CUDA_SAFE_CALL(cudaGetLastError());
 				}
 				else {
-					for (uint32_t k = 0; k < loop_count - 1; k++)
-						yescrypt_gpu_hash_k2c << <grid, block3, 16384 >> > (threads, startNounce, j * (threads >> 4), (i * 4 + j) * (threads >> 4) + l * r * 2 * threads, (N / loop_count) * k, (N / loop_count) * (k + 1), N, r, p);
-					yescrypt_gpu_hash_k2c << <grid, block3, 16384 >> > (threads, startNounce, j * (threads >> 4), (i * 4 + j) * (threads >> 4) + l * r * 2 * threads, N / loop_count * (loop_count - 1), N, N, r, p);
+					/* R is a compile-time r. See the kernels: a runtime r keeps
+					 * x[] in local memory. R = 0 is the original runtime path,
+					 * kept for an r we do not instantiate. */
+#define YS_SMIX(R)                                                                                                                                                                                                                          \
+					for (uint32_t k = 0; k < loop_count - 1; k++)                                                                                                                                                                           \
+						yescrypt_gpu_hash_k2c<R> << <grid, block3, 16384 >> > (threads, startNounce, j * (threads >> 4), (i * 4 + j) * (threads >> 4) + l * r * 2 * threads, (N / loop_count) * k, (N / loop_count) * (k + 1), N, r, p);      \
+					yescrypt_gpu_hash_k2c<R> << <grid, block3, 16384 >> > (threads, startNounce, j * (threads >> 4), (i * 4 + j) * (threads >> 4) + l * r * 2 * threads, N / loop_count * (loop_count - 1), N, N, r, p);                      \
+					CUDA_SAFE_CALL(cudaGetLastError());                                                                                                                                                                                     \
+					for (uint32_t k = 0; k < loop_count - 1; k++)                                                                                                                                                                           \
+						yescrypt_gpu_hash_k2c1<R> << <grid, block3, 16384 >> > (threads, startNounce, j * (threads >> 4), (i * 4 + j) * (threads >> 4) + l * r * 2 * threads, (Nw / loop_count) * k, (Nw / loop_count)* (k + 1), N, r, p);    \
+					yescrypt_gpu_hash_k2c1<R> << <grid, block3, 16384 >> > (threads, startNounce, j * (threads >> 4), (i * 4 + j) * (threads >> 4) + l * r * 2 * threads, (Nw / loop_count) * (loop_count - 1), Nw, N, r, p);                 \
 					CUDA_SAFE_CALL(cudaGetLastError());
-					for (uint32_t k = 0; k < loop_count - 1; k++)
-						yescrypt_gpu_hash_k2c1 << <grid, block3, 16384 >> > (threads, startNounce, j * (threads >> 4), (i * 4 + j) * (threads >> 4) + l * r * 2 * threads, (Nw / loop_count) * k, (Nw / loop_count)* (k + 1), N, r, p);
-					yescrypt_gpu_hash_k2c1 << <grid, block3, 16384 >> > (threads, startNounce, j * (threads >> 4), (i * 4 + j) * (threads >> 4) + l * r * 2 * threads, (Nw / loop_count) * (loop_count - 1), Nw, N, r, p);
-					CUDA_SAFE_CALL(cudaGetLastError());
+
+					     if (r == 16) { YS_SMIX(16) }
+					else if (r == 24) { YS_SMIX(24) }
+					else if (r == 32) { YS_SMIX(32) }
+					else              { YS_SMIX(0)  }
+#undef YS_SMIX
 				}
-				if (Nr - Nw > 0)
-					yescrypt_gpu_hash_k2c2 << <grid, block3, 16384 >> > (threads, startNounce, j * (threads >> 4), (i * 4 + j) * (threads >> 4) + l * r * 2 * threads, N, r, p);
+				if (Nr - Nw > 0) {
+#define YS_SMIX2(R) yescrypt_gpu_hash_k2c2<R> << <grid, block3, 16384 >> > (threads, startNounce, j * (threads >> 4), (i * 4 + j) * (threads >> 4) + l * r * 2 * threads, N, r, p);
+					     if (r ==  8) { YS_SMIX2(8)  }
+					else if (r == 16) { YS_SMIX2(16) }
+					else if (r == 24) { YS_SMIX2(24) }
+					else if (r == 32) { YS_SMIX2(32) }
+					else              { YS_SMIX2(0)  }
+#undef YS_SMIX2
+				}
 				CUDA_SAFE_CALL(cudaGetLastError());
 			}
 		}

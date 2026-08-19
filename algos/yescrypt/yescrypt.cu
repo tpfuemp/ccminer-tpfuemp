@@ -79,14 +79,9 @@ int scanhash_yescrypt_base(int thr_id, struct work* work, uint32_t max_nonce, un
 	uint32_t CUDAcore_count;
 	if (device_sm[dev_id] == 600)		// Pascal(P100)
 		CUDAcore_count = props.multiProcessorCount * 64;
-	else if (device_sm[dev_id] >= 500)	// Maxwell/Pascal(other)/Volta
+	else								// Maxwell/Pascal/Volta and everything newer; the Kepler and
+										// Fermi arms were unreachable under a sm_61 floor
 		CUDAcore_count = props.multiProcessorCount * 128;
-	else if (device_sm[dev_id] >= 300)	// Kepler
-		CUDAcore_count = props.multiProcessorCount * 96; // * 192
-	else if (device_sm[dev_id] >= 210)	// Fermi(GF11x)
-		CUDAcore_count = props.multiProcessorCount * 48;
-	else					// Fermi(GF10x)
-		CUDAcore_count = props.multiProcessorCount * 32;
 
 	uint32_t throughputmax;
 #if defined WIN32 && !defined _WIN64
@@ -98,19 +93,29 @@ int scanhash_yescrypt_base(int thr_id, struct work* work, uint32_t max_nonce, un
 
 	if (device_sm[dev_id] > 500)		// Maxwell(GTX9xx)/Pascal/Volta
 		throughputmax = device_intensity(dev_id, __func__, CUDAcore_count * min(3, max_thread_multiple));
-	else if (device_sm[dev_id] == 500)	// Maxwell(GTX750Ti/GTX750)
-		throughputmax = device_intensity(dev_id, __func__, CUDAcore_count * min(2, max_thread_multiple));
-	else if (device_sm[dev_id] >= 300)	// Kepler
-		throughputmax = device_intensity(dev_id, __func__, CUDAcore_count);
-	else if (device_sm[dev_id] >= 210)	// Fermi(GF11x)
-		throughputmax = device_intensity(dev_id, __func__, CUDAcore_count * min(2, max_thread_multiple));
-	else								// Fermi(GF10x)
+	else								// sm_61 floor: nothing below 500 can load this build,
+										// but keep an else so the value is always initialised
 		throughputmax = device_intensity(dev_id, __func__, CUDAcore_count * min(2, max_thread_multiple));
 
 	throughputmax = (throughputmax / CUDAcore_count) * CUDAcore_count;
 	if (throughputmax == 0) throughputmax = CUDAcore_count;
 
 	uint32_t throughput = min(throughputmax, max_nonce - first_nonce);
+
+	// yescrypt_cpu_hash_32 requires a multiple of 32: it tiles the batch three ways
+	// at once -- grid = threads/32, the 4-way k1 split by threads>>2 and the 16-way
+	// SMix split by threads>>4 -- and only a multiple of 32 makes all three cover
+	// exactly `threads` nonces. throughputmax already is one; max_nonce-first_nonce
+	// need not be, so clamp here, where hashes_done is derived from the same value.
+	throughput &= ~31u;
+	if (throughput == 0) {
+		// Fewer than 32 nonces left in this work unit: nothing scannable. Advance
+		// pdata[19] so the caller sees the stub range consumed -- returning 0 with
+		// hashes_done = 0 and an unchanged nonce would spin.
+		pdata[19] = max_nonce;
+		*hashes_done = 0;
+		return 0;
+	}
 
 	if (opt_benchmark)
 		((uint32_t*)ptarget)[7] = 0x00ff;

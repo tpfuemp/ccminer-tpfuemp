@@ -183,6 +183,93 @@ static bool api_request_is_ws_upgrade(const char *buf, int len)
 	return strstr(tmp, "Sec-WebSocket-Key") != NULL;
 }
 
+/* Exact-match the Bearer token of an upgrade request.
+ *
+ * The WebSocket compat path runs a command lifted from the URL, so it bypasses
+ * the router and with it --api-token. Exact match, as the router does: a
+ * substring test would pass headers the router refuses. Upgrades only -- the
+ * binary protocol has its own access model. */
+static bool api_ws_token_ok(const char *buf, int len)
+{
+	char tmp[SOCK_REC_BUFSZ + 1];
+	int n = len < SOCK_REC_BUFSZ ? len : SOCK_REC_BUFSZ;
+	const char *p;
+
+	if (!opt_api_token || !*opt_api_token)
+		return true;
+
+	memcpy(tmp, buf, (size_t) n);
+	tmp[n] = '\0';
+
+	for (p = tmp; *p; ) {
+		const char *eol = strpbrk(p, "\r\n");
+		size_t llen = eol ? (size_t) (eol - p) : strlen(p);
+
+		if (llen > 14 && strncasecmp(p, "Authorization:", 14) == 0) {
+			const char *v = p + 14;
+			size_t vlen;
+			char val[288];
+
+			while (v < p + llen && (*v == ' ' || *v == '\t')) v++;
+			vlen = (size_t) (p + llen - v);
+			if (vlen <= 7 || strncasecmp(v, "Bearer ", 7) != 0)
+				return false;
+			v += 7; vlen -= 7;
+			while (vlen && (*v == ' ' || *v == '\t')) { v++; vlen--; }
+			while (vlen && (v[vlen-1] == ' ' || v[vlen-1] == '\t')) vlen--;
+			if (vlen >= sizeof(val))
+				return false;          /* absurd length: refuse, never truncate */
+			memcpy(val, v, vlen);
+			val[vlen] = '\0';
+			return strcmp(val, opt_api_token) == 0;
+		}
+		p = eol ? eol + 1 : p + llen;
+	}
+	return false;
+}
+
+/* Legacy-protocol privilege check -- the dispatch loop had none, so R/W was
+ * enforced only on the REST path (api_serve_http).
+ *
+ * Group W means every command; any other group means exactly its own list, which
+ * setup_groups() builds pipe-delimited -- the bars are what stop "sum" matching
+ * "summary". Loopback keeps full access: it can signal the process anyway, so
+ * refusing it adds no boundary and breaks local tooling. */
+static bool api_cmd_allowed(char group, const char *addr, const char *name)
+{
+	char want[64];
+	const char *list;
+
+	if (ISPRIVGROUP(group))
+		return true;
+	if (addr && strcmp(addr, localaddr) == 0)
+		return true;
+
+	list = COMMANDS(group);
+	if (!list)
+		return false;
+	snprintf(want, sizeof(want), "|%s|", name);
+	return strstr(list, want) != NULL;
+}
+
+/* Contract-shaped error for the two cases refused before the router is reached.
+ * Uses the shared sender so the envelope and CORS handling stay in one place. */
+static void api_send_early_error(SOCKETTYPE c, int status, const char *msg)
+{
+	api_http_config cfg;
+	char *body;
+
+	memset(&cfg, 0, sizeof(cfg));
+	cfg.token = opt_api_token;
+	cfg.cors = opt_api_cors != NULL;
+
+	body = api_http_error_body(&cfg, status, msg);
+	if (!body)
+		return;
+	api_http_send((int) c, status, NULL, body, strlen(body), &cfg);
+	free(body);
+}
+
 static void api_serve_http(SOCKETTYPE c, char group, const char *prefix, size_t prefixlen)
 {
 	api_http_config cfg;
@@ -1267,6 +1354,25 @@ static void api()
 				continue;
 			}
 
+			/* http mode serves HTTP/JSON only: refuse a binary command rather
+			 * than fall through. Upgrades stay exempt (see above). */
+			if (!fail && n > 0 && opt_api_mode == API_MODE_HTTP &&
+			    !api_request_is_http(buf, n) && !api_request_is_ws_upgrade(buf, n)) {
+				api_send_early_error(c, 400, "binary command on an http-only port");
+				CLOSESOCKET(c);
+				continue;
+			}
+
+			/* Checked on the RAW buffer, before the trim below rewrites it. */
+			if (!fail && n > 0 && api_request_is_ws_upgrade(buf, n) &&
+			    !api_ws_token_ok(buf, n)) {
+				applog(LOG_WARNING, "API: websocket upgrade from %s refused"
+					" (missing or invalid token)", connectaddr);
+				api_send_early_error(c, 401, "missing or invalid token");
+				CLOSESOCKET(c);
+				continue;
+			}
+
 			if (fail)
 				n = 0; // recv returned -1; buf[n] below would write buf[-1]
 			else if (n > 0 && buf[n-1] == '\n') {
@@ -1321,6 +1427,16 @@ static void api()
 								params[strlen(params)-1] = '\0';
 						}
 						matched = true;
+
+						if (!api_cmd_allowed(group, connectaddr, cmds[i].name)) {
+							applog(LOG_WARNING, "API: %s refused '%s'"
+								" (group %c has no write access)",
+								connectaddr, cmds[i].name, group);
+							if (!wskey)
+								send_result(c, (char*) "ERR=access denied|");
+							break;
+						}
+
 						result = (cmds[i].func)(params);
 						if (wskey) {
 							websocket_handshake(c, result, wskey);
@@ -1335,6 +1451,10 @@ static void api()
 				if (!matched && !wskey)
 					send_result(c, (char*) "ERR=unknown command|");
 			}
+			CLOSESOCKET(c);
+		} else {
+			/* Close it: a rejected address used to leak the accepted
+			 * descriptor, one per probe. */
 			CLOSESOCKET(c);
 		}
 	}

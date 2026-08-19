@@ -336,6 +336,8 @@ extern int scanhash_sha256d(int thr_id, struct work *work, uint32_t max_nonce, u
 extern int scanhash_sha256t(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_sha256csm(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done);
 extern int scanhash_sha3d(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_yespower(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
+
 extern int scanhash_sha512256d(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 /* The scrypt pair keeps its historic signature: it pipelines several launches
  * per call and reports its own timing window. */
@@ -886,6 +888,9 @@ struct pool_infos {
 #define POOL_ST_REMOVED 8
 	uint16_t status;
 	int algo;
+	char algo_name[32]; // as written in the config: yespower coin variants share
+	                    // one algo and differ only in (N, r, pers), which the int
+	                    // above cannot carry. Empty unless "algo" was set.
 	char name[64];
 	// credentials
 	char url[512];
@@ -964,6 +969,9 @@ int eq_variant_storelen(void); // bytes in work->extra to submit (compactSize+so
 int eq_variant_wk(void);       // active equihash k (9 for 200/9, 5 for 144/5)
 void eq_set_variant_144(void); // select 144/5 (BitcoinZ) variant (from -a alias)
 void eq_set_variant_params(int wn, int wk, const char* personal); // pool notify: adopt personal; (n,k) validate-only (fixed by -a)
+bool yespower_set_variant(const char* name); // select a coin variant's N/r/pers (from -a alias or pool "algo"); false = no such variant
+void yespower_clear_variant(void);           // back to --yespower-param/-key
+const char* yespower_variant_name(void);     // selected variant, "" if none
 double equi_network_diff(struct work *work);
 
 void hashlog_remember_submit(struct work* work, uint32_t nonce);
