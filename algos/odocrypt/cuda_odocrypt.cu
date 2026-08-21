@@ -16,6 +16,8 @@
 #include "miner.h"
 #include "cuda_helper.h"
 #include "odocrypt.h"
+#include "odocrypt_jit.h"
+#include "cuda/selftest_gate.cuh"
 
 // ---- device tables (uploaded per epoch) -----------------------------------
 // S-boxes are data-dependent lookups -> keep them in global memory (L2-cached);
@@ -23,6 +25,12 @@
 // tables are accessed uniformly, so they live in constant memory.
 __device__ uint8_t  d_Sbox1[ODO_SMALL_SBOX_COUNT][1 << ODO_SMALL_SBOX_WIDTH];
 __device__ uint16_t d_Sbox2[ODO_LARGE_SBOX_COUNT][1 << ODO_LARGE_SBOX_WIDTH];
+
+// ...and staged per block in shared memory. The 23 KB costs no occupancy here
+// because the register count caps the resident blocks first. Read directly, not
+// through a pointer parameter, so the accesses stay LDS rather than generic.
+static __shared__ uint8_t  s_Sbox1[ODO_SMALL_SBOX_COUNT][1 << ODO_SMALL_SBOX_WIDTH];
+static __shared__ uint16_t s_Sbox2[ODO_LARGE_SBOX_COUNT][1 << ODO_LARGE_SBOX_WIDTH];
 
 __constant__ uint64_t c_pmask[2][ODO_PBOX_SUBROUNDS][ODO_STATE_SIZE / 2];
 __constant__ int      c_prot[2][ODO_PBOX_SUBROUNDS - 1][ODO_STATE_SIZE / 2];
@@ -34,11 +42,19 @@ __constant__ uint32_t c_target[8];
 static uint32_t *d_resNonce[MAX_GPUS] = { 0 };
 static uint32_t *h_resNonce[MAX_GPUS] = { 0 };
 
+// The JIT'd kernel lives in its own module with its own __constant__ bank, so
+// odocrypt_jit_set_job() fills that separately; this is the arch it compiles for.
+static int s_sm_arch[MAX_GPUS] = { 0 };
+
 // ---- device cipher ---------------------------------------------------------
 
+// Rotation amounts come from the epoch tables and are always 1..63 (see
+// odocrypt_init), so the funnel shift is safe and r == 0 needs no guard;
+// odocrypt_upload_tables asserts the range. Spelled as (x << r) ^ (x >> (64-r))
+// a runtime r costs two variable-distance 64-bit shifts instead.
 __device__ __forceinline__ uint64_t dev_rot64( uint64_t x, int r )
 {
-   return r == 0 ? x : ( x << r ) ^ ( x >> ( 64 - r ) );
+   return ROTL64( x, r );
 }
 
 __device__ void dev_apply_pbox( uint64_t state[ODO_STATE_SIZE], int p )
@@ -85,9 +101,9 @@ __device__ void dev_apply_sboxes( uint64_t state[ODO_STATE_SIZE] )
       #pragma unroll
       for ( int j = 0; j < ODO_SMALL_SBOX_COUNT / ODO_STATE_SIZE; j++ )
       {
-         next |= (uint64_t)d_Sbox1[smallIdx][( state[i] >> pos ) & MASK1] << pos;
+         next |= (uint64_t)s_Sbox1[smallIdx][( state[i] >> pos ) & MASK1] << pos;
          pos += ODO_SMALL_SBOX_WIDTH;
-         next |= (uint64_t)d_Sbox2[largeIdx][( state[i] >> pos ) & MASK2] << pos;
+         next |= (uint64_t)s_Sbox2[largeIdx][( state[i] >> pos ) & MASK2] << pos;
          pos += ODO_LARGE_SBOX_WIDTH;
          smallIdx++;
       }
@@ -141,9 +157,11 @@ __device__ void dev_keccakp800_12( uint32_t A[25] )
          #pragma unroll
          for ( int y = 0; y < 5; y++ )
             A[KIDX(x,y)] ^= D[x];
+      // ROTL32 is a funnel shift and __funnelshift_l(x, x, 0) is x, so the
+      // zero rho offset needs no guard.
       #pragma unroll
       for ( int i = 0; i < 25; i++ )
-         A[i] = kc_rho[i] ? ROTL32( A[i], kc_rho[i] ) : A[i];
+         A[i] = ROTL32( A[i], kc_rho[i] );
       #pragma unroll
       for ( int x = 0; x < 5; x++ )
          #pragma unroll
@@ -158,12 +176,12 @@ __device__ void dev_keccakp800_12( uint32_t A[25] )
    }
 }
 
-__global__ void odocrypt_gpu_hash( uint32_t threads, uint32_t startNonce, uint32_t *resNonce )
+// One nonce's full hash: 84 SPN rounds + Keccak-p[800]-12, yielding the 32-byte
+// digest as 8 little-endian words (out[i] == odo_hash_host's vhash[i]). Factored
+// out of the kernel so a differential test can inline the same body; the kernel
+// reads only out[7], and ptxas drops the rest.
+__device__ __forceinline__ void odocrypt_hash_nonce( uint32_t nonce, uint32_t out[8] )
 {
-   const uint32_t thread = blockDim.x * blockIdx.x + threadIdx.x;
-   if ( thread >= threads ) return;
-   const uint32_t nonce = startNonce + thread;
-
    // Build the 10 x uint64 state from the big-endian header words + nonce.
    uint64_t state[ODO_STATE_SIZE];
    #pragma unroll
@@ -204,9 +222,52 @@ __global__ void odocrypt_gpu_hash( uint32_t threads, uint32_t startNonce, uint32
 
    dev_keccakp800_12( A );
 
-   // prefilter on the most-significant hash word (A[7]); host re-verifies.
-   if ( A[7] <= c_target[7] )
+   #pragma unroll
+   for ( int i = 0; i < 8; i++ ) out[i] = A[i];
+}
+
+// Stage the epoch S-boxes in shared. Every thread must reach the barrier, so
+// the out-of-range guard moves down to the store instead of returning early.
+__device__ __forceinline__ void odocrypt_stage_sboxes( void )
+{
+   uint32_t *dst1 = (uint32_t*)s_Sbox1;
+   uint32_t *dst2 = (uint32_t*)s_Sbox2;
+   const uint32_t *src1 = (const uint32_t*)d_Sbox1;
+   const uint32_t *src2 = (const uint32_t*)d_Sbox2;
+   for ( uint32_t i = threadIdx.x; i < sizeof s_Sbox1 / 4; i += blockDim.x ) dst1[i] = src1[i];
+   for ( uint32_t i = threadIdx.x; i < sizeof s_Sbox2 / 4; i += blockDim.x ) dst2[i] = src2[i];
+   __syncthreads();
+}
+
+__global__ void odocrypt_gpu_hash( uint32_t threads, uint32_t startNonce, uint32_t *resNonce )
+{
+   odocrypt_stage_sboxes();
+
+   const uint32_t thread = blockDim.x * blockIdx.x + threadIdx.x;
+   const uint32_t nonce = startNonce + thread;
+
+   uint32_t h[8];
+   odocrypt_hash_nonce( nonce, h );
+
+   // prefilter on the most-significant hash word (h[7]); host re-verifies.
+   if ( thread < threads && h[7] <= c_target[7] )
       atomicMin( resNonce, nonce );
+}
+
+// Same body, digests out instead of a screen: the GPU side of the init-time
+// check against the CPU reference and of the per-epoch JIT check. Not on the
+// mining path.
+__global__ void odocrypt_gpu_digest( uint32_t threads, uint32_t startNonce, uint32_t *out )
+{
+   odocrypt_stage_sboxes();
+
+   const uint32_t thread = blockDim.x * blockIdx.x + threadIdx.x;
+   uint32_t h[8];
+   odocrypt_hash_nonce( startNonce + thread, h );
+
+   if ( thread >= threads ) return;
+   #pragma unroll
+   for ( int i = 0; i < 8; i++ ) out[8 * thread + i] = h[i];
 }
 
 // ---- host driver -----------------------------------------------------------
@@ -220,6 +281,19 @@ static THREAD bool      h_ctx_ready = false;
 
 static void odocrypt_upload_tables( const OdoCrypt *c )
 {
+   // dev_rot64 uses a funnel shift, which needs 1 <= r <= 63.
+   for ( int p = 0; p < 2; p++ )
+      for ( int j = 0; j < ODO_PBOX_SUBROUNDS - 1; j++ )
+         for ( int k = 0; k < ODO_STATE_SIZE / 2; k++ )
+         {
+            const int r = c->Permutation[p].rotation[j][k];
+            if ( r < 1 || r > 63 )
+               applog( LOG_ERR, "odocrypt: pbox rotation %d out of range", r );
+         }
+   for ( int j = 0; j < ODO_ROTATION_COUNT; j++ )
+      if ( c->Rotations[j] < 1 || c->Rotations[j] > 63 )
+         applog( LOG_ERR, "odocrypt: rotation %d out of range", c->Rotations[j] );
+
    CUDA_SAFE_CALL( cudaMemcpyToSymbol( d_Sbox1, c->Sbox1, sizeof c->Sbox1, 0, cudaMemcpyHostToDevice ) );
    CUDA_SAFE_CALL( cudaMemcpyToSymbol( d_Sbox2, c->Sbox2, sizeof c->Sbox2, 0, cudaMemcpyHostToDevice ) );
 
@@ -244,7 +318,7 @@ static const uint8_t odo_kat[32] =
    0x46,0x24,0x3b,0xae,0xe9,0xd6,0xab,0x7e,0xbc,0x87,0xe1,0x96,0x7f,0xd4,0xbc,0x7c
 };
 
-static void odo_self_test( int thr_id )
+static bool odo_host_kat( void )
 {
    uint8_t in[ODO_DIGEST_SIZE], h[32];
    for ( int i = 0; i < ODO_DIGEST_SIZE; i++ ) in[i] = (uint8_t)( i * 7 + 1 );
@@ -252,10 +326,105 @@ static void odo_self_test( int thr_id )
    OdoCrypt c;
    odocrypt_init( &c, key );
    odo_hash_host( &c, h, in );
-   if ( memcmp( h, odo_kat, 32 ) == 0 )
-      gpulog( LOG_INFO, thr_id, "odocrypt host self-test OK" );
+   return memcmp( h, odo_kat, 32 ) == 0;
+}
+
+// Digest differential against the CPU reference. `jit` selects which kernel
+// produces the GPU side, so one routine serves both the init-time check and the
+// per-epoch JIT check. The job must already be uploaded.
+#define ODO_GATE_N 256
+
+static bool odo_gpu_matches_host( int thr_id, const OdoCrypt *ctx, const uint32_t endiandata[20],
+                                 uint32_t startNonce, bool jit, uint32_t *ngood )
+{
+   const size_t bytes = ODO_GATE_N * 8 * sizeof(uint32_t);
+   uint32_t *d_out = NULL, *h_out = NULL;
+   *ngood = 0;
+
+   if ( cudaMalloc( &d_out, bytes ) != cudaSuccess ) return selftest_cuda_fault();
+   h_out = (uint32_t*)malloc( bytes );
+   if ( !h_out ) { cudaFree( d_out ); return selftest_cuda_fault(); }
+
+   bool launched;
+   if ( jit )
+   {
+      void *s1 = NULL, *s2 = NULL;
+      cudaGetSymbolAddress( &s1, d_Sbox1 );
+      cudaGetSymbolAddress( &s2, d_Sbox2 );
+      launched = odocrypt_jit_launch_digest( thr_id, ODO_GATE_N, startNonce, s1, s2, d_out, 256 );
+   }
    else
-      gpulog( LOG_ERR, thr_id, "odocrypt host self-test MISMATCH" );
+   {
+      odocrypt_gpu_digest <<< ( ODO_GATE_N + 255 ) / 256, 256 >>> ( ODO_GATE_N, startNonce, d_out );
+      launched = cudaGetLastError() == cudaSuccess;
+   }
+
+   bool ok = false;
+   if ( launched && cudaDeviceSynchronize() == cudaSuccess &&
+        cudaMemcpy( h_out, d_out, bytes, cudaMemcpyDeviceToHost ) == cudaSuccess )
+   {
+      ok = true;
+      uint32_t _ALIGN(64) buf[20], ref[8];
+      memcpy( buf, endiandata, sizeof buf );
+      for ( uint32_t i = 0; i < ODO_GATE_N; i++ )
+      {
+         buf[19] = startNonce + i;
+         odo_hash_host( ctx, ref, buf );
+         if ( memcmp( ref, h_out + 8 * i, 32 ) != 0 )
+         {
+            if ( ok )
+               gpulog( LOG_ERR, thr_id, "odocrypt: %s kernel disagrees with the CPU at nonce %08x"
+                       " (gpu %08x host %08x)", jit ? "JIT" : "static",
+                       buf[19], h_out[8*i+7], ref[7] );
+            ok = false;
+         }
+         else (*ngood)++;
+      }
+   }
+   else
+   {
+      free( h_out ); cudaFree( d_out );
+      return selftest_cuda_fault();
+   }
+
+   free( h_out );
+   cudaFree( d_out );
+   return ok;
+}
+
+// Init-time gate: the host KAT proves the reference, then the reference gates
+// the kernel over a range of nonces. Fails closed: a card that cannot
+// reproduce the consensus hash mines a whole session into local rejects.
+static void odo_self_test( int thr_id, const OdoCrypt *ctx, const uint32_t endiandata[20] )
+{
+   const bool kat_ok = odo_host_kat();
+   uint32_t ngood = 0;
+   const bool gpu_ok = kat_ok && odo_gpu_matches_host( thr_id, ctx, endiandata, 0x30000000u, false, &ngood );
+
+   if ( kat_ok && gpu_ok )
+      gpulog( LOG_INFO, thr_id, "odocrypt self-test OK (host KAT + %u/%u GPU digests)",
+              ngood, (uint32_t)ODO_GATE_N );
+   else
+      gpulog( LOG_ERR, thr_id, "odocrypt self-test FAILED (host KAT %s, GPU %u/%u)",
+              kat_ok ? "ok" : "MISMATCH", ngood, (uint32_t)ODO_GATE_N );
+
+   selftest_gate( thr_id, "odocrypt", kat_ok && gpu_ok );
+}
+
+// Per-epoch gate for the JIT'd kernel, which is a textual mirror of the device
+// code in this file: it is checked against the CPU reference before it screens
+// anything, and on any disagreement the JIT path is retired for the session and
+// mining continues on the static kernel.
+static void odo_jit_gate( int thr_id, const OdoCrypt *ctx, const uint32_t endiandata[20], uint32_t key )
+{
+   if ( !odocrypt_jit_ready( thr_id ) ) return;
+
+   uint32_t ngood = 0;
+   if ( odo_gpu_matches_host( thr_id, ctx, endiandata, 0x30000000u, true, &ngood ) )
+      gpulog( LOG_INFO, thr_id, "odocrypt: JIT kernel for epoch %u verified (%u/%u digests)",
+              key / ODO_SHAPECHANGE_INTERVAL, ngood, (uint32_t)ODO_GATE_N );
+   else
+      odocrypt_jit_disable( thr_id, "digest mismatch against the CPU reference" );
 }
 
 int scanhash_odocrypt( int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done )
@@ -268,6 +437,11 @@ int scanhash_odocrypt( int thr_id, struct work *work, uint32_t max_nonce, unsign
    uint32_t _ALIGN(64) endiandata[20];
    for ( int i = 0; i < 19; i++ )
       be32enc( &endiandata[i], pdata[i] );
+
+   // --benchmark hands out an all-zero target, so the A[7] screen would never
+   // fire and the run would prove only that the kernel launches.
+   if ( opt_benchmark )
+      ptarget[7] = 0x3f;
 
    uint32_t throughput = cuda_default_throughput( thr_id, 1U << 20 );
    throughput = min( throughput, max_nonce - first_nonce );
@@ -282,9 +456,11 @@ int scanhash_odocrypt( int thr_id, struct work *work, uint32_t max_nonce, unsign
          cudaDeviceReset();
          cudaSetDeviceFlags( cudaDeviceScheduleBlockingSync );
       }
-      odo_self_test( thr_id );
       CUDA_SAFE_CALL( cudaMalloc( &d_resNonce[thr_id], 2 * sizeof(uint32_t) ) );
       CUDA_SAFE_CALL( cudaMallocHost( &h_resNonce[thr_id], 2 * sizeof(uint32_t) ) );
+      cudaDeviceProp prop;
+      if ( cudaGetDeviceProperties( &prop, dev_id ) == cudaSuccess )
+         s_sm_arch[thr_id] = prop.major * 10 + prop.minor;
       gpulog( LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads",
               throughput2intensity( throughput ), throughput );
       init = true;
@@ -293,16 +469,36 @@ int scanhash_odocrypt( int thr_id, struct work *work, uint32_t max_nonce, unsign
    // Build the per-epoch cipher tables on key change and upload them.
    const uint32_t ntime = endiandata[17];
    const uint32_t key = ntime - ( ntime % ODO_SHAPECHANGE_INTERVAL );
+   static THREAD bool     epoch_new = false;
    if ( !h_ctx_ready || h_ctx_key != key )
    {
       odocrypt_init( &h_ctx, key );
       odocrypt_upload_tables( &h_ctx );
+
+      odocrypt_jit_prepare( thr_id, &h_ctx, key, s_sm_arch[thr_id] );
+
       h_ctx_key = key;
       h_ctx_ready = true;
+      epoch_new = true;
    }
 
    CUDA_SAFE_CALL( cudaMemcpyToSymbol( c_header, endiandata, 19 * sizeof(uint32_t), 0, cudaMemcpyHostToDevice ) );
    CUDA_SAFE_CALL( cudaMemcpyToSymbol( c_target, ptarget, 8 * sizeof(uint32_t), 0, cudaMemcpyHostToDevice ) );
+   odocrypt_jit_set_job( thr_id, endiandata, ptarget[7] );
+
+   // Both gates need a job on the device, so they run here rather than in the
+   // init block: the kernel against the CPU once, the JIT'd kernel once per epoch.
+   static THREAD bool tested = false;
+   if ( !tested ) { odo_self_test( thr_id, &h_ctx, endiandata ); tested = true; }
+   if ( epoch_new ) { odo_jit_gate( thr_id, &h_ctx, endiandata, key ); epoch_new = false; }
+
+   const bool use_jit = odocrypt_jit_ready( thr_id );
+   void *sbox1 = NULL, *sbox2 = NULL;
+   if ( use_jit )
+   {
+      CUDA_SAFE_CALL( cudaGetSymbolAddress( &sbox1, d_Sbox1 ) );
+      CUDA_SAFE_CALL( cudaGetSymbolAddress( &sbox2, d_Sbox2 ) );
+   }
 
    const dim3 block( 256 );
    const dim3 grid( ( throughput + block.x - 1 ) / block.x );
@@ -314,7 +510,10 @@ int scanhash_odocrypt( int thr_id, struct work *work, uint32_t max_nonce, unsign
       *h_resNonce[thr_id] = UINT32_MAX;
       CUDA_SAFE_CALL( cudaMemcpy( d_resNonce[thr_id], h_resNonce[thr_id], sizeof(uint32_t), cudaMemcpyHostToDevice ) );
 
-      odocrypt_gpu_hash <<< grid, block >>> ( throughput, n, d_resNonce[thr_id] );
+      if ( !use_jit ||
+           !odocrypt_jit_launch_hash( thr_id, throughput, n, sbox1, sbox2,
+                                      d_resNonce[thr_id], block.x ) )
+         odocrypt_gpu_hash <<< grid, block >>> ( throughput, n, d_resNonce[thr_id] );
 
       CUDA_SAFE_CALL( cudaMemcpy( h_resNonce[thr_id], d_resNonce[thr_id], sizeof(uint32_t), cudaMemcpyDeviceToHost ) );
 
@@ -330,7 +529,7 @@ int scanhash_odocrypt( int thr_id, struct work *work, uint32_t max_nonce, unsign
             work_set_target_ratio( work, vhash );
             *hashes_done = n - first_nonce + throughput;
             work->valid_nonces = 1;
-            pdata[19] = cand;
+            pdata[19] = cand + 1;   // resume PAST the winner, or the scan re-finds it
             return 1;
          }
          gpulog( LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", cand );

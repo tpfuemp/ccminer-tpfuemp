@@ -237,6 +237,7 @@
     <ClCompile Include="algos\balloon\balloon_scan.cpp" />
     <ClCompile Include="algos\rinhash\rinhash_scanhash.cpp" />
     <ClCompile Include="algos\odocrypt\odocrypt_host.cpp" />
+    <ClCompile Include="algos\odocrypt\odocrypt_jit.cpp" />
     <ClCompile Include="algos\balloon\sha256-ref.c" />
     <ClCompile Include="compat\getopt\getopt_long.c" />
     <ClCompile Include="compat\gettimeofday.c" />

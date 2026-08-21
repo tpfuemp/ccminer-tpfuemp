@@ -478,6 +478,9 @@
     <ClCompile Include="algos\kawpow\kawpow_jit.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="algos\odocrypt\odocrypt_jit.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="algos\kawpow\ethash\ethash.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

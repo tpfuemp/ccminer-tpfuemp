@@ -5,6 +5,7 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>   // usleep() on Linux (Windows shim: compat/unistd.h)
 
 #include "miner.h"
 #include "algos.h"
