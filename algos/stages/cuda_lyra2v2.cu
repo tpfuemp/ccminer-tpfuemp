@@ -382,6 +382,17 @@ __constant__ uint28 Mask[2] = {
 	0x00000000lu, 0x01000000lu
 };
 
+// The 32-byte hash buffer has two layouts and the consumers disagree: SoA
+// (thread + k*threads, 32 B/thread) for -a lyra2v2, AoS (thread*8 + k, 64 B/thread) for
+// the x-family. Templated so each gets its own instantiation; one hardcoded layout
+// silently breaks the others.
+template <bool SOA>
+__device__ __forceinline__ uint32_t h32_idx(const uint32_t thread, const uint32_t threads, const int k)
+{
+	return SOA ? thread + threads * k : thread * 8 + k;
+}
+
+template <bool SOA>
 __global__ __launch_bounds__(64, 1)
 void lyra2v2_gpu_hash_32_1(uint32_t threads, uint32_t startNounce, uint2 *outputHash)
 {
@@ -391,16 +402,10 @@ void lyra2v2_gpu_hash_32_1(uint32_t threads, uint32_t startNounce, uint2 *output
 
 	if (thread < threads)
 	{
-		/*
-		state[0].x = state[1].x = __ldg(&outputHash[thread + threads * 0]);
-		state[0].y = state[1].y = __ldg(&outputHash[thread + threads * 1]);
-		state[0].z = state[1].z = __ldg(&outputHash[thread + threads * 2]);
-		state[0].w = state[1].w = __ldg(&outputHash[thread + threads * 3]);
-		*/
-		state[0].x = state[1].x = __ldg(&outputHash[thread * 8 + 0]);
-		state[0].y = state[1].y = __ldg(&outputHash[thread * 8 + 1]);
-		state[0].z = state[1].z = __ldg(&outputHash[thread * 8 + 2]);
-		state[0].w = state[1].w = __ldg(&outputHash[thread * 8 + 3]);
+		state[0].x = state[1].x = __ldg(&outputHash[h32_idx<SOA>(thread, threads, 0)]);
+		state[0].y = state[1].y = __ldg(&outputHash[h32_idx<SOA>(thread, threads, 1)]);
+		state[0].z = state[1].z = __ldg(&outputHash[h32_idx<SOA>(thread, threads, 2)]);
+		state[0].w = state[1].w = __ldg(&outputHash[h32_idx<SOA>(thread, threads, 3)]);
 		state[2] = blake2b_IV[0];
 		state[3] = blake2b_IV[1];
 
@@ -447,6 +452,7 @@ void lyra2v2_gpu_hash_32_2(uint32_t threads, uint32_t startNounce, uint64_t *out
 	} //thread
 }
 
+template <bool SOA>
 __global__ __launch_bounds__(64, 1)
 void lyra2v2_gpu_hash_32_3(uint32_t threads, uint32_t startNounce, uint2 *outputHash)
 {
@@ -465,16 +471,10 @@ void lyra2v2_gpu_hash_32_3(uint32_t threads, uint32_t startNounce, uint2 *output
 		for (int i = 0; i < 12; i++)
 			round_lyra(state);
 
-		/*
-		outputHash[thread + threads * 0] = state[0].x;
-		outputHash[thread + threads * 1] = state[0].y;
-		outputHash[thread + threads * 2] = state[0].z;
-		outputHash[thread + threads * 3] = state[0].w;
-		*/
-		outputHash[thread * 8 + 0] = state[0].x;
-		outputHash[thread * 8 + 1] = state[0].y;
-		outputHash[thread * 8 + 2] = state[0].z;
-		outputHash[thread * 8 + 3] = state[0].w;
+		outputHash[h32_idx<SOA>(thread, threads, 0)] = state[0].x;
+		outputHash[h32_idx<SOA>(thread, threads, 1)] = state[0].y;
+		outputHash[h32_idx<SOA>(thread, threads, 2)] = state[0].z;
+		outputHash[h32_idx<SOA>(thread, threads, 3)] = state[0].w;
 
 	} //thread
 }
@@ -486,8 +486,8 @@ void lyra2v2_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix)
 	cudaMemcpyToSymbol(DState, &d_matrix, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice);
 }
 
-__host__
-void lyra2v2_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint64_t *g_hash, int order)
+template <bool SOA>
+__host__ static void lyra2v2_cpu_hash_32_impl(uint32_t threads, uint32_t startNounce, uint64_t *g_hash)
 {
 	const uint32_t tpb = TPB52;
 
@@ -501,10 +501,24 @@ void lyra2v2_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uin
 	dim3 grid2((threads + 64 - 1) / 64);
 	dim3 block2(64);
 
-	lyra2v2_gpu_hash_32_1 << <grid2, block2 >> > (threads, startNounce, (uint2*)g_hash);
+	lyra2v2_gpu_hash_32_1<SOA> << <grid2, block2 >> > (threads, startNounce, (uint2*)g_hash);
 
 	lyra2v2_gpu_hash_32_2 << <grid1, block1, shared_mem >> > (threads, startNounce, g_hash);
 
-	lyra2v2_gpu_hash_32_3 << <grid2, block2 >> > (threads, startNounce, (uint2*)g_hash);
+	lyra2v2_gpu_hash_32_3<SOA> << <grid2, block2 >> > (threads, startNounce, (uint2*)g_hash);
 	//MyStreamSynchronize(NULL, order, thr_id);
+}
+
+// AoS, 64 B/thread -- the x-family layout (x21s, x25x).
+__host__
+void lyra2v2_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint64_t *g_hash, int order)
+{
+	lyra2v2_cpu_hash_32_impl<false>(threads, startNounce, g_hash);
+}
+
+// SoA, 32 B/thread -- -a lyra2v2. The AoS entry point above would overrun its d_hash.
+__host__
+void lyra2v2_cpu_hash_32_soa(int thr_id, uint32_t threads, uint32_t startNounce, uint64_t *g_hash, int order)
+{
+	lyra2v2_cpu_hash_32_impl<true>(threads, startNounce, g_hash);
 }

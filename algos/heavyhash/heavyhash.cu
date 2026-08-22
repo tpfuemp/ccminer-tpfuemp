@@ -43,7 +43,9 @@ extern "C" int scanhash_heavyhash(int thr_id, struct work* work, uint32_t max_no
 	const uint32_t first_nonce = pdata[19];
 
 	if (opt_benchmark)
-		ptarget[7] = 0x0400;
+		// Loose enough that candidates appear, tight enough that scanhash rarely returns --
+		// each return regenerates the matrix on the host, which would dominate the timing.
+		ptarget[7] = 0x20;
 
 	if (!init[thr_id])
 	{
@@ -51,10 +53,9 @@ extern "C" int scanhash_heavyhash(int thr_id, struct work* work, uint32_t max_no
 		cudaSetDevice(dev_id);
 		CUDA_LOG_ERROR();
 
-		int intensity = (device_sm[dev_id] >= 500 && !is_windows()) ? 17 : 16;
-		if (device_sm[device_map[thr_id]] == 500) intensity = 15;
-		throughput = cuda_default_throughput(thr_id, 1U << intensity); // 18=256*256*4;
-		if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
+		// Large batches amortise the per-launch host cost, which otherwise starves the GPU.
+		// Nothing here scales with throughput, so the batch costs no extra memory. -i overrides.
+		throughput = cuda_default_throughput(thr_id, 1U << 22);
 
 		cudaDeviceProp props;
 		cudaGetDeviceProperties(&props, dev_id);
@@ -93,8 +94,10 @@ extern "C" int scanhash_heavyhash(int thr_id, struct work* work, uint32_t max_no
 				if (work->nonces[1] != UINT32_MAX) {
 					be32enc(&endiandata[19], work->nonces[1]);
 					heavyhash_hash(vhash, endiandata);
-					bn_set_target_ratio(work, vhash, 1);
-					work->valid_nonces++;
+					if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
+						bn_set_target_ratio(work, vhash, 1);
+						work->valid_nonces++;
+					}
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				}
 				else {
@@ -128,7 +131,7 @@ extern "C" void free_heavyhash(int thr_id)
 	if (!init[thr_id])
 		return;
 
-	cudaThreadSynchronize();
+	cudaDeviceSynchronize();
 
 	heavyhash_cpu_free(thr_id);
 

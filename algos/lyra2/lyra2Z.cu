@@ -60,9 +60,8 @@ extern "C" int scanhash_lyra2Z(int thr_id, struct work* work, uint32_t max_nonce
 		}
 
 		cuda_get_arch(thr_id);
-		int intensity = (device_sm[dev_id] > 500 && !is_windows()) ? 17 : 16;
-		if (device_sm[dev_id] <= 500) intensity = 15;
-		throughput = cuda_default_throughput(thr_id, 1U << intensity); // 18=256*256*4;
+		// Saturated, and a short enough batch to stay responsive to new work; -i overrides.
+		throughput = cuda_default_throughput(thr_id, 1U << 18);
 		if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
 		cudaDeviceProp props;

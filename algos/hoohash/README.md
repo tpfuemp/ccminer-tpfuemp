@@ -14,7 +14,7 @@ dispatcher wiring in `ccminer.cpp` / `bench.cpp` / `miner.h` / `algos.h`).
 - `hoohash_device.cuh` — device helpers.
 - `blake3_hoo_device.cuh` — bundled BLAKE3 used by the matrix step.
 
-## ⚠️ Consensus-critical strict floating point
+## Consensus-critical strict floating point
 
 `cuda_hoohashv110.cu` **must** be compiled with strict FP so the on-device
 transcendentals match the CPU/glibc oracle bit-for-bit. Both build systems carry

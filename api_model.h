@@ -146,7 +146,7 @@ int api_format_gpuhw_binary(const struct api_gpuhw_snapshot *s, char *out, size_
 int api_format_system_binary(const struct api_system_snapshot *s, char *out, size_t outlen);
 
 /* --------------------------------------------------------- JSON renderers */
-/* Same snapshots, second renderer. ⚠ Unit change against the binary API,
+/* Same snapshots, second renderer. Unit change against the binary API,
  * per docs/api-rest.md: JSON reports H/s where the binary reported kH/s. */
 
 json_t *api_build_miner_json(void);

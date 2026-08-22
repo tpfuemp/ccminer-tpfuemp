@@ -101,9 +101,8 @@ extern "C" int scanhash_allium(int thr_id, struct work* work, uint32_t max_nonce
 			CUDA_LOG_ERROR();
 		}
 
-		int intensity = (device_sm[dev_id] >= 500 && !is_windows()) ? 17 : 16;
-		if (device_sm[device_map[thr_id]] == 500) intensity = 15;
-		throughput = cuda_default_throughput(thr_id, 1U << intensity); // 18=256*256*4;
+		// Bottom of the throughput plateau; -i overrides.
+		throughput = cuda_default_throughput(thr_id, 1U << 20);
 		if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
 		cudaDeviceProp props;
@@ -168,8 +167,10 @@ extern "C" int scanhash_allium(int thr_id, struct work* work, uint32_t max_nonce
 				if (work->nonces[1] != UINT32_MAX) {
 					be32enc(&endiandata[19], work->nonces[1]);
 					allium_hash(vhash, endiandata);
-					bn_set_target_ratio(work, vhash, 1);
-					work->valid_nonces++;
+					if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
+						bn_set_target_ratio(work, vhash, 1);
+						work->valid_nonces++;
+					}
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				} else {
 					pdata[19] = work->nonces[0] + 1; // cursor

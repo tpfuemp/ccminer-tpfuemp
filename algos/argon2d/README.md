@@ -102,7 +102,7 @@ Two device-code subtleties this required:
   the argon2-gpu donor; what was missing was the `thread_input` seed/advance
   state machine around it. One address block covers 128 offsets, so
   argon2id1024's 256-block segments regenerate once, at offset 128.
-- **⚠️ The v1.3 read must respect the shared cache.** Columns 2..7 live *only*
+- **The v1.3 read must respect the shared cache.** Columns 2..7 live *only*
   in the shared staging cache; their global slots are never written by
   `argon2_core`, and for lanes=1 they are not even empty — `fillFirstBlock`
   derives `row = threadIdx.x / lanes` over 16 threads, so it writes 16

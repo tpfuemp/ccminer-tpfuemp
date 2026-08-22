@@ -81,7 +81,7 @@ keep the rigs on WireGuard.
 - `HEAD` is accepted wherever `GET` is. `OPTIONS` returns `204` + `Allow` when `--api-cors` is set.
   Another verb on a known path is `405` + `Allow`; an unknown path is `404`.
 - Every response carries a `miner` object (section 5).
-- ⚠️ **Units differ from the binary API on purpose:** JSON reports **H/s**, the binary API reported
+- **Units differ from the binary API on purpose:** JSON reports **H/s**, the binary API reported
   kH/s. The suffix makes it explicit; section 12 maps the old keys.
 
 ## 4. Authentication and privilege
@@ -142,7 +142,7 @@ exactly which capabilities that build serves, so a manager negotiates once inste
 }
 ```
 
-⚠️ **That capability list is one build's, not the contract's.** The example above omits the
+**That capability list is one build's, not the contract's.** The example above omits the
 `control.*` group and `metrics`; a build that does not route them answers `501` on those paths. A
 routed `control.*` capability still answers `403` when the miner was started without
 `--api-control`, so a manager should treat a `403` there as "control exists but is switched off",
@@ -162,29 +162,29 @@ from actual behaviour. A capability absent here answers `501` (or `403` for cont
 
 ## 6. Endpoint reference
 
-Availability by `miner.kind`: ✔ served · `501` answered but not implemented · `403` gated by an option.
+Availability by `miner.kind`: yes served · `501` answered but not implemented · `403` gated by an option.
 
 | Method | Path | Priv | `gpu` | `cpu` |
 |---|---|---|---|---|
-| GET | `/api/v1/` | read | ✔ | ✔ |
-| GET | `/api/v1/summary` | read | ✔ | ✔ |
-| GET | `/api/v1/threads` | read | ✔ | ✔ |
-| GET | `/api/v1/devices` · `/devices/{id}` | read | ✔ | ✔ (1 item) |
-| GET | `/api/v1/system` | read | ✔ | ✔ |
-| GET | `/api/v1/pools` · `/pools/{n}` | read | ✔ | ✔ (index `0` only) |
-| GET | `/api/v1/health` | read | ✔ | ✔ |
-| GET | `/api/v1/history` | read | ✔ | `501` |
-| GET | `/api/v1/scanlog` | read | ✔ | `501` |
-| GET | `/api/v1/meminfo` | read | ✔ | `501` |
-| GET | `/api/v1/config` | read | ✔ | ✔ |
-| GET | `/api/v1/algos` | read | ✔ | ✔ |
-| POST | `/api/v1/pools/switch` | write | ✔ | `501` by design (section 10) |
-| POST | `/api/v1/pools/url` | write | ✔ | ✔ |
-| POST | `/api/v1/quit` | write | ✔ | ✔ |
-| GET | `/api/v1/control/state` | read | ✔ | ✔ |
-| POST | `/api/v1/control/start` · `/pause` · `/stop` | control | ✔ | ✔ |
-| POST | `/api/v1/control/profile` | control | ✔ | ✔ |
-| GET | `/metrics` | read | ✔ | ✔ |
+| GET | `/api/v1/` | read | yes | yes |
+| GET | `/api/v1/summary` | read | yes | yes |
+| GET | `/api/v1/threads` | read | yes | yes |
+| GET | `/api/v1/devices` · `/devices/{id}` | read | yes | yes (1 item) |
+| GET | `/api/v1/system` | read | yes | yes |
+| GET | `/api/v1/pools` · `/pools/{n}` | read | yes | yes (index `0` only) |
+| GET | `/api/v1/health` | read | yes | yes |
+| GET | `/api/v1/history` | read | yes | `501` |
+| GET | `/api/v1/scanlog` | read | yes | `501` |
+| GET | `/api/v1/meminfo` | read | yes | `501` |
+| GET | `/api/v1/config` | read | yes | yes |
+| GET | `/api/v1/algos` | read | yes | yes |
+| POST | `/api/v1/pools/switch` | write | yes | `501` by design (section 10) |
+| POST | `/api/v1/pools/url` | write | yes | yes |
+| POST | `/api/v1/quit` | write | yes | yes |
+| GET | `/api/v1/control/state` | read | yes | yes |
+| POST | `/api/v1/control/start` · `/pause` · `/stop` | control | yes | yes |
+| POST | `/api/v1/control/profile` | control | yes | yes |
+| GET | `/metrics` | read | yes | yes |
 
 Query parameters: `/threads?id=N` · `/history?thread=N&limit=50` (capped at 50) ·
 `/pools?index=N` (alias for `/pools/{n}`) · `?pretty=1` everywhere.
@@ -213,7 +213,7 @@ convention doing its job: the value is unavailable, not zero.
 
 `devices` is the GPU count when `kind` is `gpu`, the CPU count when it is `cpu`. Errors: `401`, `403`, `500`.
 
-⚠️ **A hashrate is a measurement, so a miner that is not hashing reports `0`, not its last value.**
+**A hashrate is a measurement, so a miner that is not hashing reports `0`, not its last value.**
 That covers `/summary`, `/threads`, `/devices` and the metrics gauges, and it applies while the
 control API holds the miner `paused` or `stopped`. Past rates remain available from `/history`.
 `0` therefore means "not hashing now" and never "broken" — read `/control/state` or
@@ -249,7 +249,7 @@ grows per-thread accounting. `device_id` indexes into `/devices`.
            "nvml_id": 0, "nvapi_id": 0, "monitoring": true } }
 ```
 
-⚠️ `clock_mhz`, `mem_clock_mhz`, `fan_rpm` and `hashrate_per_watt_khs` are `null` above because they
+`clock_mhz`, `mem_clock_mhz`, `fan_rpm` and `hashrate_per_watt_khs` are `null` above because they
 come from the optional monitoring sampler, which was not running in that capture. `sm` is the compute
 capability ×10 (860 = 8.6), not ×1.
 
@@ -462,83 +462,83 @@ One alphabetical table so a name cannot mean two things in two places. `n` = nul
 
 | Field | Type | Unit | n | Meaning |
 |---|---|---|---|---|
-| `accepted` | int | — | ✔ | accepted shares (scope: summary, thread, pool) |
+| `accepted` | int | — | yes | accepted shares (scope: summary, thread, pool) |
 | `accepted_per_min` | float | 1/min | | accepted shares per minute, process lifetime |
 | `active` | bool | — | | this pool is the one currently mined |
 | `algo` | string | — | | algorithm name as accepted by `--algo` |
 | `api_version` | string | — | | contract revision, `"1.0"` |
-| `base_clock_mhz` | int | MHz | ✔ | stock core clock |
-| `best_share` | float | difficulty | ✔ | best share difficulty seen |
-| `bios` | string | — | ✔ | GPU VBIOS version |
-| `bus_id` | int | — | ✔ | PCI bus id |
+| `base_clock_mhz` | int | MHz | yes | stock core clock |
+| `best_share` | float | difficulty | yes | best share difficulty seen |
+| `bios` | string | — | yes | GPU VBIOS version |
+| `bus_id` | int | — | yes | PCI bus id |
 | `capabilities` | array | — | | capability strings served by this build |
-| `clock_mhz` | int | MHz | ✔ | current core clock |
+| `clock_mhz` | int | MHz | yes | current core clock |
 | `code` | string | — | | stable machine-readable error code |
-| `cores` | int | — | ✔ | physical CPU cores |
-| `cpu_clock_mhz` | int | MHz | ✔ | CPU clock |
-| `cpu_temp_c` | float | °C | ✔ | CPU temperature |
-| `cpus` | int | — | ✔ | logical CPUs |
-| `device_id` | int/string | — | ✔ | thread→device index; in `gpu` sub-object, the PCI device id |
+| `cores` | int | — | yes | physical CPU cores |
+| `cpu_clock_mhz` | int | MHz | yes | CPU clock |
+| `cpu_temp_c` | float | °C | yes | CPU temperature |
+| `cpus` | int | — | yes | logical CPUs |
+| `device_id` | int/string | — | yes | thread→device index; in `gpu` sub-object, the PCI device id |
 | `devices` | int/array | — | | count in `summary`, array at `/devices` |
 | `devices_ok` | int | — | | devices reporting healthy |
 | `difficulty` | float/object | difficulty | | pool difficulty (pool scope) or `{pool,network,best_share}` |
 | `disconnects` | int | — | | **unintentional** pool disconnects only |
-| `driver` | string | — | ✔ | GPU driver version |
+| `driver` | string | — | yes | GPU driver version |
 | `epoch` | int | — | | increments once per accepted control mutation |
-| `extranonce2` / `extranonce2_size` | string/int | — | ✔ | stratum job fields |
-| `fan_pct` / `fan_rpm` | int | % / rpm | ✔ | fan speed |
-| `features` | array | — | ✔ | CPU instruction-set features |
+| `extranonce2` / `extranonce2_size` | string/int | — | yes | stratum job fields |
+| `fan_pct` / `fan_rpm` | int | % / rpm | yes | fan speed |
+| `features` | array | — | yes | CPU instruction-set features |
 | `hashrate_avg_hs` | float | H/s | | session-average hashrate |
 | `hashrate_hs` | float | H/s | | current hashrate; **`0` whenever the miner is not hashing**, including while paused or stopped by the control API |
-| `hashrate_per_watt_khs` | float | kH/s/W | ✔ | efficiency |
+| `hashrate_per_watt_khs` | float | kH/s/W | yes | efficiency |
 | `health.status` | string | — | | `ok` \| `degraded` |
-| `height` | int | — | ✔ | block height of the current job |
-| `hw_errors` | int | — | ✔ | hardware/validation errors on this thread |
+| `height` | int | — | yes | block height of the current job |
+| `hw_errors` | int | — | yes | hardware/validation errors on this thread |
 | `id` | int | — | | device or thread index |
 | `index` | int | — | | pool index |
-| `intensity` | float | — | ✔ | GPU launch intensity |
-| `job.id` | string | — | ✔ | stratum job id |
+| `intensity` | float | — | yes | GPU launch intensity |
+| `job.id` | string | — | yes | stratum job id |
 | `kind` | string | — | | `gpu` \| `cpu` |
-| `last_error` | string | — | ✔ | reason the last control mutation failed |
-| `last_share_age_s` | int | s | ✔ | seconds since the last accepted share |
-| `last_switch_age_s` | int | s | ✔ | seconds since the last control mutation |
-| `mem_bytes` | int | bytes | ✔ | device memory |
-| `mem_clock_mhz` | int | MHz | ✔ | memory clock |
+| `last_error` | string | — | yes | reason the last control mutation failed |
+| `last_share_age_s` | int | s | yes | seconds since the last accepted share |
+| `last_switch_age_s` | int | s | yes | seconds since the last control mutation |
+| `mem_bytes` | int | bytes | yes | device memory |
+| `mem_clock_mhz` | int | MHz | yes | memory clock |
 | `min_interval_s` | int | s | | configured anti-flap interval |
 | `mining` | bool | — | | is the miner hashing right now |
 | `monitoring` | bool | — | | telemetry available for this device |
 | `name` | string | — | | miner name, device name or pool name by scope |
-| `network.hashrate_hs` | float | H/s | ✔ | network hashrate |
-| `params` | object | — | ✔ | algorithm parameters in effect; `null` members = not set |
+| `network.hashrate_hs` | float | H/s | yes | network hashrate |
+| `params` | object | — | yes | algorithm parameters in effect; `null` members = not set |
 | `parked` / `threads_parked` | int | — | | mining threads currently idle |
-| `ping_ms` | int | ms | ✔ | pool round-trip time |
-| `pool_connected` | bool | — | ✔ | `null` for getwork/GBT |
-| `power_mw` / `power_limit_mw` | int | mW | ✔ | power draw and cap |
-| `pstate` | string | — | ✔ | performance state |
+| `ping_ms` | int | ms | yes | pool round-trip time |
+| `pool_connected` | bool | — | yes | `null` for getwork/GBT |
+| `power_mw` / `power_limit_mw` | int | mW | yes | power draw and cap |
+| `pstate` | string | — | yes | performance state |
 | `ready_for_switch` | bool | — | | anti-flap interval has expired |
-| `reasons` | array | — | ✔ | why health is `degraded` |
-| `rejected` | int | — | ✔ | rejected shares |
-| `serial` | string | — | ✔ | device serial |
+| `reasons` | array | — | yes | why health is `degraded` |
+| `rejected` | int | — | yes | rejected shares |
+| `serial` | string | — | yes | device serial |
 | `shares` | object | — | | `{accepted,rejected,stale,solved[,accepted_per_min]}` |
 | `since_s` | int | s | | seconds in the current control state |
-| `sm` | int | — | ✔ | CUDA compute capability ×10 |
+| `sm` | int | — | yes | CUDA compute capability ×10 |
 | `solved` | int | — | | blocks solved |
-| `stale` | int | — | ✔ | stale shares |
+| `stale` | int | — | yes | stale shares |
 | `state` | string | — | | `running` \| `paused` \| `stopped` \| `switching` |
 | `status` | string | — | | pool connection status |
 | `switch_count` | int | — | | accepted control mutations this session |
-| `temp_c` | float | °C | ✔ | device temperature |
+| `temp_c` | float | °C | yes | device temperature |
 | `threads` | int/array | — | | count in `summary`, array at `/threads` |
 | `threads_total` | int | — | | configured mining threads |
-| `throughput` | int | — | ✔ | nonces per launch |
+| `throughput` | int | — | yes | nonces per launch |
 | `timestamp` | int | unix s | | when the response was generated |
 | `type` | string | — | | `gpu` \| `cpu` (device), `stratum` \| `getwork` (pool) |
 | `uptime_s` | int | s | | process uptime, or pool session length by scope |
 | `url` | string | — | | pool URL, never containing a password |
-| `user` | string | — | ✔ | pool username/wallet |
-| `vendor_id` | string | — | ✔ | PCI vendor id |
+| `user` | string | — | yes | pool username/wallet |
+| `vendor_id` | string | — | yes | PCI vendor id |
 | `version` | string | — | | miner version |
-| `wait_time_s` | int | s | ✔ | time spent waiting for work |
+| `wait_time_s` | int | s | yes | time spent waiting for work |
 
 ## 9. Algorithm parameters
 
@@ -571,15 +571,15 @@ The table integrators actually need. Everything else is identical.
 
 | Path / field | `gpu` | `cpu` | Why |
 |---|---|---|---|
-| `/history`, `/scanlog`, `/meminfo` | ✔ | `501` | the statistics and hash-log subsystems exist only on the GPU side; `/scanlog` is additionally debug-build-only |
-| `POST /pools/switch` | ✔ | **`501`, permanently** | a `cpu` miner has no pool array; pool selection belongs to the manager, which supplies a pool with every `/control/profile` call |
+| `/history`, `/scanlog`, `/meminfo` | yes | `501` | the statistics and hash-log subsystems exist only on the GPU side; `/scanlog` is additionally debug-build-only |
+| `POST /pools/switch` | yes | **`501`, permanently** | a `cpu` miner has no pool array; pool selection belongs to the manager, which supplies a pool with every `/control/profile` call |
 | `/pools` array length | `0..n` | always `1` | single-pool miner |
-| `threads[].accepted` / `.rejected` | ✔ | `null` | per-thread share accounting not tracked |
-| `threads[].intensity` / `.throughput` | ✔ | `null` | GPU-only concepts |
-| `pools[].stale` | ✔ | `null` | not tracked |
+| `threads[].accepted` / `.rejected` | yes | `null` | per-thread share accounting not tracked |
+| `threads[].intensity` / `.throughput` | yes | `null` | GPU-only concepts |
+| `pools[].stale` | yes | `null` | not tracked |
 | `devices[].gpu` | present | absent | — |
 | `devices[].cpu` | absent | present | — |
-| `system.driver` | ✔ | `null` | no GPU driver |
+| `system.driver` | yes | `null` | no GPU driver |
 | Write gate | group `W` via `--api-allow` | `--api-remote` | pre-existing option semantics, unchanged |
 
 Out of scope for v1 on both miners, stated so it is not mistaken for an omission: no process
@@ -673,7 +673,7 @@ The binary protocol is unchanged and stays the default. Mapping for existing con
 | `pool` → `ACC`, `REJ`, `STALE`, `SOLV` | `/pools/{n}` → `shares.accepted`, `.rejected`, `.stale`, `.solved` |
 | `pool` → `PING`, `DISCO`, `WAIT`, `UPTIME`, `LAST` | `/pools/{n}` → `ping_ms`, `disconnects`, `wait_time_s`, `uptime_s`, `last_share_age_s` |
 | `histo`, `scanlog`, `meminfo` | `/history`, `/scanlog`, `/meminfo` |
-| `histo` → `KHS` | `/history[]` → `hashrate_hs`. ⚠️ **The binary key is mislabelled**: `histo`'s `KHS` already carries **H/s**, not kH/s, so this is the one mapping where the value does *not* change by 1000. Unchanged in the binary API for compatibility. |
+| `histo` → `KHS` | `/history[]` → `hashrate_hs`. **The binary key is mislabelled**: `histo`'s `KHS` already carries **H/s**, not kH/s, so this is the one mapping where the value does *not* change by 1000. Unchanged in the binary API for compatibility. |
 | `switchpool\|n`, `seturl\|url`, `quit` | `POST /pools/switch`, `POST /pools/url`, `POST /quit` |
 
 Every value that was a bare number in a `;`-separated record is now a typed JSON field, and

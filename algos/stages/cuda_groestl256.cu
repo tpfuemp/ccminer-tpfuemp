@@ -175,6 +175,8 @@ void groestl256_perm_Q(uint32_t thread, uint32_t *a, char *mixtabs)
 	}
 }
 
+// Do NOT raise minBlocks: this kernel is latency-bound over the shared T-table and needs
+// its registers to keep loads in flight. Trading them for occupancy measures slower.
 __global__ __launch_bounds__(256,1)
 void groestl256_gpu_hash_32(uint32_t threads, uint32_t startNounce, uint64_t *outputHash, uint32_t *resNonces)
 {
@@ -244,8 +246,11 @@ void groestl256_gpu_hash_32(uint32_t threads, uint32_t startNounce, uint64_t *ou
 
 		uint32_t nonce = startNounce + thread;
 		if (state[15] <= pTarget[7]) {
-			atomicMin(&resNonces[1], resNonces[0]);
-			atomicMin(&resNonces[0], nonce);
+			// Keep the two lowest candidates in one pass. atomicMin returns the previous minimum, so
+			// the displaced value moves to slot 1; reading resNonces[0] outside the atomic loses one.
+			const uint32_t prev = atomicMin(&resNonces[0], nonce);
+			if (prev != UINT32_MAX)
+				atomicMin(&resNonces[1], max(prev, nonce));
 		}
 	}
 }

@@ -10,11 +10,12 @@ extern "C" {
 #include <memory.h>
 
 __constant__ static uint32_t c_data[20];
-__constant__ static uint32_t c_matrix[64][64];
+__constant__ static uint32_t c_matrix[64][16];	// 4 nibbles per word, one per byte (__dp4a)
 __constant__ uint32_t pTarget[8];
 
 static uint32_t *h_GNonces[MAX_GPUS];
 static uint32_t *d_GNonces[MAX_GPUS];
+static bool dirty_GNonces[MAX_GPUS];
 
 typedef union {
     uint32_t h4[8];
@@ -97,18 +98,22 @@ static void __forceinline__ __device__ keccak_block(uint2 *s)
 __global__
 void heavyhash_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint32_t *resNonces)
 {
-	__shared__ uint64_t matrix[1024 * 2];
+	__shared__ uint32_t matrix[64 * 16];	// 4 KB packed
+
+	// Cooperative fill of the whole matrix, then one barrier. Both must sit OUTSIDE the
+	// thread<threads guard: every thread reads every row below, and a ragged tail block
+	// would otherwise leave part of the table unwritten and skip the barrier.
+	{
+		const uint32_t *cp = (const uint32_t *)(c_matrix);
+		for (uint32_t i = threadIdx.x; i < 64 * 16; i += blockDim.x)
+			matrix[i] = cp[i];
+	}
+	__syncthreads();
 
     uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
     uint32_t nonce = startNonce + thread;
     if (thread < threads)
 	{
-		uint32_t tid = threadIdx.x;
-		uint64_t *cp = (uint64_t *)(c_matrix);
-		for (int i = 0; i < 8; i++) {
-			matrix[tid + i * 256] = cp[tid + i * 256];
-		}
-
         hash_t hash;
 
         uint32_t pdata[50] = {0};
@@ -121,8 +126,7 @@ void heavyhash_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint3
         uint8_t hash_second[32];
         uint8_t hash_xored[32];
 
-        uint32_t vector[64];
-        uint32_t product[64];
+        uint32_t vec[16];		// 64 nibbles, 4 per word
 
         ((uint8_t *) pdata)[80] = 0x06;
         ((uint8_t *) pdata)[135] = 0x80;
@@ -133,40 +137,24 @@ void heavyhash_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint3
             ((uint64_t *)hash_first)[i] = ((uint64_t *) pdata)[i];
         }
 
-        for (int i = 0; i < 32; ++i) {
-            vector[2*i] = (hash_first[i] >> 4);
-            vector[2*i+1] = hash_first[i] & 0xF;
+        // nibbles 4w,4w+1 come from hash_first[2w]; 4w+2,4w+3 from hash_first[2w+1]
+        #pragma unroll
+        for (int w = 0; w < 16; ++w) {
+            const uint32_t b0 = hash_first[2*w], b1 = hash_first[2*w+1];
+            vec[w] = (b0 >> 4) | ((b0 & 0xF) << 8) | ((b1 >> 4) << 16) | ((b1 & 0xF) << 24);
         }
 
-        for (int i = 0; i < 64; ++i) {
-            uint32_t sum = 0;
-			for (int k = 0; k < 8; k++) {
-				uint64_t buf0 = matrix[i * 32 + k * 4 + 0];
-				uint64_t buf1 = matrix[i * 32 + k * 4 + 1];
-				uint64_t buf2 = matrix[i * 32 + k * 4 + 2];
-				uint64_t buf3 = matrix[i * 32 + k * 4 + 3];
-				uint32_t *m0 = (uint32_t *)&buf0;
-				for (int j = 0; j < 2; j++) {
-					sum += m0[j] * vector[(k * 4 + 0) * 2 + j];
-				}
-				uint32_t *m1 = (uint32_t *)&buf1;
-				for (int j = 0; j < 2; j++) {
-					sum += m1[j] * vector[(k * 4 + 1) * 2 + j];
-				}
-				uint32_t *m2 = (uint32_t *)&buf2;
-				for (int j = 0; j < 2; j++) {
-					sum += m2[j] * vector[(k * 4 + 2) * 2 + j];
-				}
-				uint32_t *m3 = (uint32_t *)&buf3;
-				for (int j = 0; j < 2; j++) {
-					sum += m3[j] * vector[(k * 4 + 3) * 2 + j];
-				}
-			}
-            product[i] = (sum >> 10);
-        }
-
-        for (int i = 0; i < 32; ++i) {
-            hash_second[i] = (product[2*i] << 4) | (product[2*i+1]);
+        // Two rows at a time: the pair packs straight into one hash_second byte.
+        for (int m = 0; m < 32; ++m) {
+            uint32_t s0 = 0, s1 = 0;
+            const uint32_t *r0 = &matrix[(2*m)     * 16];
+            const uint32_t *r1 = &matrix[(2*m + 1) * 16];
+            #pragma unroll
+            for (int w = 0; w < 16; ++w) {
+                s0 = __dp4a(r0[w], vec[w], s0);
+                s1 = __dp4a(r1[w], vec[w], s1);
+            }
+            hash_second[m] = (uint8_t)(((s0 >> 10) << 4) | (s1 >> 10));
         }
 
         for (int i = 0; i < 32; ++i) {
@@ -188,8 +176,12 @@ void heavyhash_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint3
         }
 
 		if ( hash.h8[3] <= ((uint64_t *) pTarget)[3]) {
-			atomicMin(&resNonces[1], resNonces[0]);
-			atomicMin(&resNonces[0], nonce);
+			// Keep the two lowest candidates. atomicMin returns the previous minimum, so the
+			// displaced value goes to slot 1 in the same pass; reading resNonces[0] separately
+			// lets two concurrent candidates both win slot 0 and drops one silently.
+			const uint32_t prev = atomicMin(&resNonces[0], nonce);
+			if (prev != UINT32_MAX)
+				atomicMin(&resNonces[1], max(prev, nonce));
 		}
     }
 }
@@ -215,7 +207,16 @@ void heavyhash_cpu_setBlock_80(uint32_t *pdata)
 
     generate_matrix(matrix, &state);
 
-    cudaMemcpyToSymbol(c_matrix, &matrix[0][0], sizeof(c_matrix), 0, cudaMemcpyHostToDevice);
+    // pack 4 nibbles per word, one per byte, LSB-first to match __dp4a's lane order
+    uint32_t packed[64][16];
+    for (int i = 0; i < 64; i++)
+        for (int w = 0; w < 16; w++)
+            packed[i][w] =  matrix[i][4*w]
+                         | (matrix[i][4*w+1] << 8)
+                         | (matrix[i][4*w+2] << 16)
+                         | (matrix[i][4*w+3] << 24);
+
+    cudaMemcpyToSymbol(c_matrix, &packed[0][0], sizeof(c_matrix), 0, cudaMemcpyHostToDevice);
 }
 
 __host__
@@ -229,27 +230,37 @@ void heavyhash_init(int thr_id)
 {
     cudaMalloc(&d_GNonces[thr_id], 2*sizeof(uint32_t));
 	cudaMallocHost(&h_GNonces[thr_id], 2*sizeof(uint32_t));
+	dirty_GNonces[thr_id] = true;	// force the first arming
 }
 
 __host__
 uint32_t heavyhash_cpu_hash(int thr_id, uint32_t threads, uint32_t startNounce, int order)
 {
 	uint32_t result = UINT32_MAX;
-	cudaMemset(d_GNonces[thr_id], 0xff, 2*sizeof(uint32_t));
 	const uint32_t threadsperblock = 256;
+
+	// The kernel only ever writes this buffer when it finds a candidate, so re-arm it on the
+	// launch after a hit rather than on every launch.
+	if (dirty_GNonces[thr_id]) {
+		cudaMemset(d_GNonces[thr_id], 0xff, 2*sizeof(uint32_t));
+		dirty_GNonces[thr_id] = false;
+	}
 
 	// berechne wie viele Thread Blocks wir brauchen
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
 	dim3 block(threadsperblock);
-    size_t shared_size = 8192 * 2;
 
-	heavyhash_gpu_hash<<<grid, block, shared_size>>>(threads, startNounce, d_GNonces[thr_id]);
+	// The matrix lives in a static __shared__ array; no dynamic shared memory is used.
+	heavyhash_gpu_hash<<<grid, block>>>(threads, startNounce, d_GNonces[thr_id]);
 
 	MyStreamSynchronize(NULL, order, thr_id);
 
 	// get first found nonce
 	cudaMemcpy(h_GNonces[thr_id], d_GNonces[thr_id], 1*sizeof(uint32_t), cudaMemcpyDeviceToHost);
 	result = *h_GNonces[thr_id];
+
+	if (result != UINT32_MAX)
+		dirty_GNonces[thr_id] = true;
 
 	return result;
 }
