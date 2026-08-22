@@ -38,6 +38,7 @@ extern uint32_t device_plimit[MAX_GPUS];
 
 /* startup time, owned by api.cpp */
 extern time_t api_startup_time;
+extern time_t api_stats_since;
 
 static void copy_str(char *dst, size_t dstlen, const char *src)
 {
@@ -83,7 +84,11 @@ void api_collect_summary(struct api_summary_snapshot *s)
 	s->solved = solved_count;
 	s->accepted = accepted_count;
 	s->rejected = rejected_count;
-	s->accps = (60.0 * accepted_count) / (uptime ? uptime : 1.0);
+	/* Over the counter window, not process uptime, which an algo switch would dilute. */
+	{
+		double window = difftime(ts, api_stats_since ? api_stats_since : api_startup_time);
+		s->accps = (60.0 * accepted_count) / (window > 0. ? window : 1.0);
+	}
 	s->diff = net_diff > 1e-6 ? net_diff : stratum_diff;
 	s->netkhs = (double) net_hashrate / 1000.;
 	s->pools = (uint32_t) num_pools;

@@ -1590,6 +1590,13 @@ static bool workio_submit_work(struct workio_cmd *wc, CURL *curl)
 	uint32_t pooln = wc->pooln;
 	// applog(LOG_DEBUG, "%s: pool %d", __func__, wc->pooln);
 
+	/* A queued share can predate a pool switch. submit_upstream_work() sends on the global
+	 * stratum, already repointed by pool_switch(), so it would land on the new pool. */
+	if (pooln != cur_pooln) {
+		applog(LOG_DEBUG, "share for pool %u dropped, pool switched to %d", pooln, cur_pooln);
+		return true;
+	}
+
 	/* submit solution to bitcoin via JSON-RPC */
 	while (!submit_upstream_work(curl, wc->u.work)) {
 		if (pooln != cur_pooln) {
@@ -2157,6 +2164,7 @@ static void *miner_thread(void *userdata)
 {
 	struct thr_info *mythr = (struct thr_info *)userdata;
 	int switchn = pool_switch_count;
+	int algo_gen_seen = algo_switch_gen;
 	int thr_id = mythr->id;
 	int dev_id = device_map[thr_id % MAX_GPUS];
 	struct cgpu_info * cgpu = &thr_info[thr_id].gpu;
@@ -2502,6 +2510,14 @@ static void *miner_thread(void *userdata)
 		}
 
 		pool_on_hold = false;
+
+		/* pool_switch() changed opt_algo on another thread and cannot free this thread's device
+		 * memory. Do it here, before the new algo allocates. */
+		if (algo_gen_seen != algo_switch_gen) {
+			algo_gen_seen = algo_switch_gen;
+			algo_free_all(thr_id);
+			cuda_clear_lasterror();
+		}
 
 		work_restart[thr_id].restart = 0;
 

@@ -40,6 +40,10 @@ extern volatile int pool_switch_count;
 extern volatile bool pool_is_switching;
 extern uint8_t conditional_state[MAX_GPUS];
 
+/* Bumped when pool_switch() changes opt_algo; miner threads free their device buffers on a
+ * mismatch. A counter, not a flag, so two quick switches cannot cancel out. */
+volatile int algo_switch_gen = 0;
+
 extern double thr_hashrates[MAX_GPUS];
 
 extern struct option options[];
@@ -169,7 +173,6 @@ void pool_set_attr(int pooln, const char* key, char* arg)
 bool pool_switch(int thr_id, int pooln)
 {
 	int prevn = cur_pooln;
-	bool algo_switch = false;
 	struct pool_infos *prev = &pools[cur_pooln];
 	struct pool_infos* p = NULL;
 
@@ -222,24 +225,36 @@ bool pool_switch(int thr_id, int pooln)
 	if (p->algo == -1)
 		p->algo = (int) opt_algo;
 
-	// algo "blind" switch without free, not proper
-	// todo: barrier required to free algo resources
 	if (p->algo != (int) opt_algo) {
 
 		if (opt_algo != ALGO_AUTO) {
 
-			algo_switch = true;
-
 			pthread_mutex_lock(&stats_lock);
 			for (int n=0; n<opt_n_threads; n++)
 				thr_hashrates[n] = 0.;
+			/* Not derived from thr_hashrates, so it would keep serving the old algo's speed. */
+			global_hashrate = 0;
 			stats_purge_all();
 			if (check_dups)
 				hashlog_purge_all();
+			/* Per pool, but the API sums them across pools, and a share difficulty
+			 * is algo-specific -- both meaningless once the algo changes. */
+			for (int n = 0; n < num_pools; n++) {
+				pools[n].accepted_count = 0;
+				pools[n].rejected_count = 0;
+				pools[n].solved_count = 0;
+				pools[n].stales_count = 0;
+				pools[n].best_share = 0.;
+			}
+			api_reset_stats_window();
 			pthread_mutex_unlock(&stats_lock);
 		}
 
 		opt_algo = (enum sha_algos) p->algo;
+
+		/* Device buffers belong to the miner threads; this runs on the caller's. Each thread frees
+		 * its own when it sees the generation move. */
+		algo_switch_gen++;
 
 		/* The int alone loses which yespower coin this pool asked for, and the
 		 * loss is silent: generic r=32/keyless parameters hash fine and are

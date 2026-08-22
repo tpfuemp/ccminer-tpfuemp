@@ -126,6 +126,15 @@ static void buffer_append(const char *s)
 }
 time_t api_startup_time = 0;
 #define startup api_startup_time
+
+/* Start of the window the share counters cover: api_startup_time until an algo switch
+ * resets them. Shares per minute must use this, not process uptime. */
+time_t api_stats_since = 0;
+
+void api_reset_stats_window(void)
+{
+	api_stats_since = time(NULL);
+}
 static int bye = 0;
 
 extern char *opt_api_bind;

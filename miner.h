@@ -494,6 +494,7 @@ extern void free_zr5(int thr_id);
 /* api related */
 void *api_thread(void *userdata);
 void api_set_throughput(int thr_id, uint32_t throughput);
+void api_reset_stats_window(void);
 void gpu_increment_reject(int thr_id);
 
 struct monitor_info {
@@ -654,6 +655,7 @@ extern bool opt_trust_pool;
 extern uint16_t opt_vote;
 
 extern uint64_t global_hashrate;
+extern volatile int algo_switch_gen;
 extern uint64_t net_hashrate;
 extern double net_diff;
 extern double stratum_diff;
