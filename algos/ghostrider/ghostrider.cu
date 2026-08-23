@@ -361,6 +361,167 @@ static void gr_cn_round(int thr_id, int blocks, int threads, int variant, uint32
 	cryptonight_extra_cpu_final_gr(thr_id, throughput, d_ctx_state[thr_id], (uint64_t*)d_h, zero_high);
 }
 
+// ----------------------------------------------------------------------------
+// Benchmark rotation sweep.
+//
+// The CN triple comes from header bytes [4..36), and --benchmark hands every
+// algo the same synthetic header (0x55 everywhere), which pins one cheap chain
+// for the whole run. Sweep all C(6,3)=20 rotations instead and report the
+// arithmetic mean: jobs arrive on a timer, so each rotation gets an equal share
+// of wall clock and the mean is the expected live rate.
+// ----------------------------------------------------------------------------
+#define GR_BENCH_ROTATIONS 20
+#define GR_BENCH_DWELL_SEC 4.0  // measured seconds per rotation (~80s per pass)
+#define GR_BENCH_MID_ROT   7    // dark+lite+turtle: 7 work units, the mean cost
+
+static const uint8_t gr_bench_combo[GR_BENCH_ROTATIONS][3] = {
+	{0,1,2},{0,1,3},{0,1,4},{0,1,5},{0,2,3},{0,2,4},{0,2,5},{0,3,4},{0,3,5},{0,4,5},
+	{1,2,3},{1,2,4},{1,2,5},{1,3,4},{1,3,5},{1,4,5},{2,3,4},{2,3,5},{2,4,5},{3,4,5}
+};
+
+static const char* gr_cn_names[CN_HASH_FUNC_COUNT] = {
+	"dark", "darklite", "fast", "lite", "turtle", "turtlelite"
+};
+
+static int    gr_bench_rot[MAX_GPUS]   = { 0 };
+static int    gr_bench_pass[MAX_GPUS]  = { 0 };
+static bool   gr_bench_warm[MAX_GPUS]  = { 0 };
+static double gr_bench_dwell[MAX_GPUS] = { 0 };
+static double gr_bench_secs[MAX_GPUS][GR_BENCH_ROTATIONS]   = { 0 };
+static double gr_bench_hashes[MAX_GPUS][GR_BENCH_ROTATIONS] = { 0 };
+
+static double gr_bench_now(void)
+{
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return (double)tv.tv_sec + 1e-6 * (double)tv.tv_usec;
+}
+
+// Rewrite header bytes [4..36) so the derivation yields exactly `combo` as the
+// CN triple, followed by a full 15-algo core order (nothing back-filled). pdata
+// is byteswapped word by word into endiandata, so the pattern is stored BE, and
+// selectAlgo reads the low nibble of each byte before the high one.
+static void gr_bench_set_rotation(uint32_t* pdata, const uint8_t* combo)
+{
+	uint8_t nib[64], pat[32];
+	nib[0] = combo[0]; nib[1] = combo[1]; nib[2] = combo[2];
+	for (int i = 3; i < 64; i++)
+		nib[i] = (uint8_t)((i - 3) % 15);
+	for (int i = 0; i < 32; i++)
+		pat[i] = (uint8_t)(nib[2*i] | (nib[2*i + 1] << 4));
+	for (int i = 0; i < 8; i++)
+		pdata[1 + i] = be32dec(pat + 4 * i);
+}
+
+static void gr_bench_report(int thr_id)
+{
+	char s[32];
+	double sum = 0., lo = 0., hi = 0.;
+
+	gpulog(LOG_BLUE, thr_id, "ghostrider benchmark pass %d - %d chain rotations, %.0fs each",
+		gr_bench_pass[thr_id], GR_BENCH_ROTATIONS, (double)GR_BENCH_DWELL_SEC);
+	for (int r = 0; r < GR_BENCH_ROTATIONS; r++) {
+		const uint8_t* c = gr_bench_combo[r];
+		double rate = (gr_bench_secs[thr_id][r] > 0.)
+			? gr_bench_hashes[thr_id][r] / gr_bench_secs[thr_id][r] : 0.;
+		sum += rate;
+		if (r == 0 || rate < lo) lo = rate;
+		if (rate > hi) hi = rate;
+		gpulog(LOG_INFO, thr_id, "  %-10s %-10s %-10s : %9.2f kH/s",
+			gr_cn_names[c[0]], gr_cn_names[c[1]], gr_cn_names[c[2]], rate / 1024.);
+	}
+	format_hashrate(sum / GR_BENCH_ROTATIONS, s);
+	gpulog(LOG_NOTICE, thr_id, "ghostrider average = %s (worst %.2f, best %.2f kH/s)",
+		s, lo / 1024., hi / 1024.);
+}
+
+// Charge one batch to the current rotation and advance the sweep. Totals are
+// cumulative across passes so the average keeps converging.
+static void gr_bench_account(int thr_id, uint32_t hashes, double secs)
+{
+	const int r = gr_bench_rot[thr_id];
+
+	if (!gr_bench_warm[thr_id]) { // first batch of a rotation carries the switch cost
+		gr_bench_warm[thr_id] = true;
+		return;
+	}
+	gr_bench_secs[thr_id][r]   += secs;
+	gr_bench_hashes[thr_id][r] += (double)hashes;
+	gr_bench_dwell[thr_id]     += secs;
+	if (gr_bench_dwell[thr_id] < GR_BENCH_DWELL_SEC)
+		return;
+
+	gr_bench_dwell[thr_id] = 0.;
+	gr_bench_warm[thr_id] = false;
+	if (++gr_bench_rot[thr_id] >= GR_BENCH_ROTATIONS) {
+		gr_bench_rot[thr_id] = 0;
+		gr_bench_pass[thr_id]++;
+		gr_bench_report(thr_id);
+	}
+}
+
+// ----------------------------------------------------------------------------
+// Audit the candidate screen for missed nonces.
+//
+// The host re-verify only sees nonces the screen reported, so a screen that
+// misses one produces no reject and no failed verify. No re-hashing is needed to
+// check: the GPU has already written every digest, so copy them back and apply
+// the same compare the kernel uses. Indexes hash[thread << 4] exactly as
+// cuda_checkhash_64 does, so this audits the screen's logic, not the layout.
+//
+// GR_VERIFY=1 audits every batch; GR_VERIFY=2 also corrupts one host-side digest
+// to force a miss, so the gate itself can be shown to fire.
+// ----------------------------------------------------------------------------
+static uint32_t *gr_audit_buf[MAX_GPUS] = { 0 };
+static uint32_t  gr_audit_cap[MAX_GPUS] = { 0 };
+
+static bool gr_host_below(const uint32_t *h, const uint32_t *t)
+{
+	for (int i = 7; i >= 0; i--) {
+		if (h[i] > t[i]) return false;
+		if (h[i] < t[i]) return true;
+	}
+	return true;
+}
+
+static void gr_screen_audit(int thr_id, uint32_t throughput, uint32_t start_nonce,
+	uint32_t *dh, const uint32_t *ptarget, uint32_t reported, int mode)
+{
+	if (gr_audit_cap[thr_id] < throughput) {
+		free(gr_audit_buf[thr_id]);
+		gr_audit_buf[thr_id] = (uint32_t*) malloc((size_t)throughput * 64);
+		if (!gr_audit_buf[thr_id]) { gr_audit_cap[thr_id] = 0; return; }
+		gr_audit_cap[thr_id] = throughput;
+	}
+	uint32_t *hb = gr_audit_buf[thr_id];
+	cudaMemcpy(hb, dh, (size_t)throughput * 64, cudaMemcpyDeviceToHost);
+
+	if (mode >= 2) hb[7] = 0; // negative control: lane 0 becomes unmissable
+
+	uint32_t hostcnt = 0, hostfirst = UINT32_MAX;
+	bool sawreported = (reported == UINT32_MAX);
+	for (uint32_t t = 0; t < throughput; t++) {
+		if (gr_host_below(&hb[t * 16], ptarget)) {
+			if (!hostcnt) hostfirst = start_nonce + t;
+			if (start_nonce + t == reported) sawreported = true;
+			hostcnt++;
+		}
+	}
+
+	// Make the screen state its own count over the same range.
+	cuda_check_hash_suppl(thr_id, throughput, start_nonce, dh, 1);
+	const uint32_t gpucnt = cuda_check_hash_count(thr_id);
+	const char *ctl = (mode >= 2) ? "  [negative control armed - a MISS here is EXPECTED]" : "";
+
+	if (gpucnt != hostcnt)
+		gpulog(LOG_ERR, thr_id, "gr V-12 MISS: screen counted %u, host counted %u over [%08x,+%u) first=%08x%s",
+			gpucnt, hostcnt, start_nonce, throughput, hostfirst, ctl);
+	else if (!sawreported)
+		gpulog(LOG_ERR, thr_id, "gr V-12: screen reported %08x which the host does not find%s", reported, ctl);
+	else if (opt_debug)
+		gpulog(LOG_DEBUG, thr_id, "gr V-12 ok: %u candidates over [%08x,+%u)", hostcnt, start_nonce, throughput);
+}
+
 extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done)
 {
 	uint32_t* pdata = work->data;
@@ -369,8 +530,21 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 	const int dev_id = device_map[thr_id];
 	uint32_t _ALIGN(64) endiandata[20];
 
-	if (opt_benchmark)
-		ptarget[7] = 0x00ff;
+	// Sized so the CPU re-verify actually fires at this algo's kH/s rates; the
+	// usual 0x00ff screen yields roughly one candidate every few hours, i.e. no
+	// gate at all. GR_BENCH_TARGET overrides it for benchmark experiments.
+	if (opt_benchmark) {
+		const char* env = getenv("GR_BENCH_TARGET");
+		ptarget[7] = env ? (uint32_t) strtoul(env, NULL, 0) : 0x0003ffff;
+	}
+
+	// A benchmark header pins one CN rotation, so drive the rotation ourselves.
+	// -a all has no time for a sweep (3 loops per algo), so it gets the single
+	// mean-cost rotation instead of the near-best one the 0x55 header selects.
+	const bool gr_bench = opt_benchmark;
+	const bool gr_sweep = (opt_benchmark && bench_algo < 0);
+	if (gr_bench)
+		gr_bench_set_rotation(pdata, gr_bench_combo[gr_sweep ? gr_bench_rot[thr_id] : GR_BENCH_MID_ROT]);
 
 	if (!init[thr_id]) {
 		cudaSetDevice(dev_id);
@@ -521,6 +695,15 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 
 		gpulog(LOG_INFO, thr_id, "ghostrider: self-test complete, starting mining");
 
+		if (gr_sweep)
+			gpulog(LOG_INFO, thr_id, "ghostrider: benchmark sweeps %d chain rotations, %.0fs each",
+				GR_BENCH_ROTATIONS, (double)GR_BENCH_DWELL_SEC);
+		else if (gr_bench) {
+			const uint8_t* c = gr_bench_combo[GR_BENCH_MID_ROT];
+			gpulog(LOG_WARNING, thr_id, "ghostrider: -a all times ONE rotation (%s+%s+%s); use --benchmark -a ghostrider for the %d-rotation average",
+				gr_cn_names[c[0]], gr_cn_names[c[1]], gr_cn_names[c[2]], GR_BENCH_ROTATIONS);
+		}
+
 		init[thr_id] = true;
 	}
 
@@ -550,6 +733,8 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 		*hashes_done = 0;
 		return 0;
 	}
+
+	const double gr_t0 = gr_sweep ? gr_bench_now() : 0.;
 
 	gr_core_setBlock_80(coreOrder[0], thr_id, endiandata, pdata);
 	cuda_check_cpu_setTarget(ptarget);
@@ -600,6 +785,20 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 	}
 
 	work->nonces[0] = cuda_check_hash(thr_id, throughput, pdata[19], dh);
+
+	// Timed here: cuda_check_hash has synced, and the CPU re-verify below (3 CN
+	// rounds) stays outside the window so a benchmark candidate cannot skew it.
+	if (gr_sweep)
+		gr_bench_account(thr_id, throughput, gr_bench_now() - gr_t0);
+
+	static int gr_verify = -1;
+	if (gr_verify < 0) {
+		const char* ev = getenv("GR_VERIFY");
+		gr_verify = ev ? atoi(ev) : 0;
+	}
+	if (gr_verify)
+		gr_screen_audit(thr_id, throughput, pdata[19], dh, ptarget, work->nonces[0], gr_verify);
+
 	if (work->nonces[0] != UINT32_MAX) {
 		uint32_t _ALIGN(64) vhash[8];
 		be32enc(&endiandata[19], work->nonces[0]);
@@ -609,15 +808,29 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 			work->valid_nonces = 1;
 			work_set_target_ratio(work, vhash);
 			work->nonces[1] = cuda_check_hash_suppl(thr_id, throughput, pdata[19], dh, 1);
+			const uint32_t found = cuda_check_hash_count(thr_id);
 			if (work->nonces[1] != 0) {
 				be32enc(&endiandata[19], work->nonces[1]);
 				ghostrider_hash(vhash, endiandata);
-				bn_set_target_ratio(work, vhash, 1);
-				work->valid_nonces++;
-				pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
-			} else {
-				pdata[19] = work->nonces[0] + 1;
+				// The GPU screen compares the top word only, so the second nonce
+				// can still fail the full compare -- guard it like the first.
+				if (vhash[7] <= ptarget[7] && fulltest(vhash, ptarget)) {
+					bn_set_target_ratio(work, vhash, 1);
+					work->valid_nonces++;
+				}
 			}
+
+			// The screen already covered [first_nonce, first_nonce + throughput),
+			// so resume past the whole batch rather than re-hashing its tail.
+			// Only safe when the screen found no more nonces than work can carry;
+			// otherwise resume conservatively so the rest are re-found next pass.
+			uint32_t resume = (found <= 2)
+				? first_nonce + throughput
+				: max(work->nonces[0], work->nonces[1]) + 1;
+			if (resume > max_nonce || resume < first_nonce)
+				resume = max_nonce;
+			pdata[19] = resume;
+
 			*hashes_done = pdata[19] - first_nonce;
 			return work->valid_nonces;
 		} else {

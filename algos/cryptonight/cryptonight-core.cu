@@ -358,6 +358,8 @@ extern "C" void cryptonight_core_cuda_gr(int thr_id, int blocks, int threads, in
 
 	for (uint32_t i = 0; i < partcount; i++)
 	{
+		// phase2 is one thread per hash, so block4 over-launches 4x and blocks
+		// [blocks/4, blocks) are idle. Measured neutral: they retire for free.
 		dim3 b = device_sm[dev_id] >= 300 ? block4 : block;
 		cryptonight_core_gpu_phase2_gr <<<grid, b>>> (throughput, bfactor, i, mask, iters, stride64, d_long_state, d_ctx_a, d_ctx_b, d_ctx_tweak);
 		exit_if_cudaerror(thr_id, __FUNCTION__, __LINE__);

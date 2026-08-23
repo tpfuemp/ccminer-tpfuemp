@@ -168,14 +168,21 @@ uint32_t cuda_check_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, 
 /* --------------------------------------------------------------------------------------------- */
 
 __global__ __launch_bounds__(512, 4)
-void cuda_checkhash_64_suppl(uint32_t startNounce, uint32_t *hash, uint32_t *resNonces)
+void cuda_checkhash_64_suppl(uint32_t threads, uint32_t startNounce, uint32_t *hash, uint32_t *resNonces)
 {
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
+
+	// Grid is rounded up to a multiple of 512; without this the tail threads read
+	// hashes outside the batch and report nonces beyond the scan range.
+	if (thread >= threads)
+		return;
 
 	uint32_t *inpHash = &hash[thread << 4];
 
 	if (hashbelowtarget(inpHash, pTarget)) {
-		int resNum = ++resNonces[0];
+		// Must be atomic: concurrent candidates otherwise lose increments and
+		// overwrite each other's slots.
+		uint32_t resNum = atomicAdd(&resNonces[0], 1) + 1;
 		__threadfence();
 		if (resNum < 8)
 			resNonces[resNum] = (startNounce + thread);
@@ -199,7 +206,7 @@ uint32_t cuda_check_hash_suppl(int thr_id, uint32_t threads, uint32_t startNounc
 	// first element stores the count of found nonces
 	cudaMemset(d_resNonces[thr_id], 0, sizeof(uint32_t));
 
-	cuda_checkhash_64_suppl <<<grid, block>>> (startNounce, d_inputHash, d_resNonces[thr_id]);
+	cuda_checkhash_64_suppl <<<grid, block>>> (threads, startNounce, d_inputHash, d_resNonces[thr_id]);
 	cudaDeviceSynchronize();
 
 	cudaMemcpy(h_resNonces[thr_id], d_resNonces[thr_id], 32, cudaMemcpyDeviceToHost);
@@ -213,6 +220,16 @@ uint32_t cuda_check_hash_suppl(int thr_id, uint32_t threads, uint32_t startNounc
 	}
 
 	return result;
+}
+
+// Candidate count from the last cuda_check_hash_suppl() call. Lets a caller tell
+// "retrieved them all" from "there are more" before advancing the nonce cursor.
+__host__
+uint32_t cuda_check_hash_count(int thr_id)
+{
+	if (!init_done)
+		return 0;
+	return h_resNonces[thr_id][0];
 }
 
 /* --------------------------------------------------------------------------------------------- */
