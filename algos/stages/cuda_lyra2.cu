@@ -20,6 +20,8 @@
 
 __device__ uint2 *DMatrix;
 
+#define LYRA2_TPB TPB52   // launch shape shared with the header
+#define LYRA2_CONST_IDX          // measured +2.0% here (see the header)
 #include "cuda/lyra2_device.cuh"
 
 static __device__ __forceinline__
@@ -116,14 +118,14 @@ __global__
 __launch_bounds__(TPB52, 1)
 void lyra2_gpu_hash_32_2(const uint32_t threads, uint64_t *g_hash)
 {
-	const uint32_t thread = blockDim.y * blockIdx.x + threadIdx.y;
+	const uint32_t thread = LYRA2_IDX_Y * blockIdx.x + threadIdx.y;
 	if (thread < threads)
 	{
 		uint2 state[4];
-		state[0] = __ldg(&DMatrix[(0 * threads + thread) * blockDim.x + threadIdx.x]);
-		state[1] = __ldg(&DMatrix[(1 * threads + thread) * blockDim.x + threadIdx.x]);
-		state[2] = __ldg(&DMatrix[(2 * threads + thread) * blockDim.x + threadIdx.x]);
-		state[3] = __ldg(&DMatrix[(3 * threads + thread) * blockDim.x + threadIdx.x]);
+		state[0] = __ldg(&DMatrix[(0 * threads + thread) * LYRA2_IDX_X + threadIdx.x]);
+		state[1] = __ldg(&DMatrix[(1 * threads + thread) * LYRA2_IDX_X + threadIdx.x]);
+		state[2] = __ldg(&DMatrix[(2 * threads + thread) * LYRA2_IDX_X + threadIdx.x]);
+		state[3] = __ldg(&DMatrix[(3 * threads + thread) * LYRA2_IDX_X + threadIdx.x]);
 
 		reduceDuplex(state, thread, threads);
 		reduceDuplexRowSetup(1, 0, 2, state, thread, threads);
@@ -150,10 +152,10 @@ void lyra2_gpu_hash_32_2(const uint32_t threads, uint64_t *g_hash)
 		rowa = WarpShuffle(state[0].x, 0, 4) & 7;
 		reduceDuplexRowt_8(rowa, state, thread, threads);
 
-		DMatrix[(0 * threads + thread) * blockDim.x + threadIdx.x] = state[0];
-		DMatrix[(1 * threads + thread) * blockDim.x + threadIdx.x] = state[1];
-		DMatrix[(2 * threads + thread) * blockDim.x + threadIdx.x] = state[2];
-		DMatrix[(3 * threads + thread) * blockDim.x + threadIdx.x] = state[3];
+		DMatrix[(0 * threads + thread) * LYRA2_IDX_X + threadIdx.x] = state[0];
+		DMatrix[(1 * threads + thread) * LYRA2_IDX_X + threadIdx.x] = state[1];
+		DMatrix[(2 * threads + thread) * LYRA2_IDX_X + threadIdx.x] = state[2];
+		DMatrix[(3 * threads + thread) * LYRA2_IDX_X + threadIdx.x] = state[3];
 	}
 }
 
@@ -237,7 +239,7 @@ void lyra2_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix)
 }
 
 __host__
-void lyra2_cpu_hash_32(int thr_id, uint32_t threads, uint64_t *d_hash, bool gtx750ti)
+void lyra2_cpu_hash_32(int thr_id, uint32_t threads, uint64_t *d_hash)
 {
 	const uint32_t tpb = TPB52;
 
@@ -246,7 +248,7 @@ void lyra2_cpu_hash_32(int thr_id, uint32_t threads, uint64_t *d_hash, bool gtx7
 	const size_t shared_mem = memshift * Ncol * (Nrow - BUF_COUNT) * sizeof(uint2) * tpb;
 
 	dim3 grid1((threads * 4 + tpb - 1) / tpb);
-	dim3 block1(4, tpb >> 2);
+	dim3 block1(LYRA2_BDIMX, LYRA2_BDIMY);
 
 	dim3 grid2((threads + 64 - 1) / 64);
 	dim3 block2(64);
@@ -257,13 +259,13 @@ void lyra2_cpu_hash_32(int thr_id, uint32_t threads, uint64_t *d_hash, bool gtx7
 }
 
 __host__
-void lyra2_cuda_hash_64(int thr_id, const uint32_t threads, uint64_t* d_hash_256, uint32_t* d_hash_512, bool gtx750ti)
+void lyra2_cuda_hash_64(int thr_id, const uint32_t threads, uint64_t* d_hash_256, uint32_t* d_hash_512)
 {
 	const uint32_t tpb = TPB52;
 	const size_t shared_mem = memshift * Ncol * (Nrow - BUF_COUNT) * sizeof(uint2) * tpb; // 49152
 
 	dim3 grid1((size_t(threads) * 4 + tpb - 1) / tpb);
-	dim3 block1(4, tpb >> 2);
+	dim3 block1(LYRA2_BDIMX, LYRA2_BDIMY);
 
 	dim3 grid2((threads + 64 - 1) / 64);
 	dim3 block2(64);

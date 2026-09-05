@@ -93,7 +93,7 @@
       <MaxRegCount>80</MaxRegCount>
       <PtxAsOptionV>true</PtxAsOptionV>
       <Keep>true</Keep>
-      <CodeGeneration>compute_50,sm_50</CodeGeneration>
+      <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
       <Include>$(NVTOOLSEXT_PATH)\include;..\..\..\Common\C99</Include>
     </CudaCompile>
   </ItemDefinitionGroup>
@@ -125,7 +125,7 @@
       <MaxRegCount>80</MaxRegCount>
       <PtxAsOptionV>true</PtxAsOptionV>
       <Keep>true</Keep>
-      <CodeGeneration>compute_52,sm_52</CodeGeneration>
+      <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
       <Include>$(NVTOOLSEXT_PATH)\include;..\..\..\Common\C99</Include>
       <TargetMachinePlatform>64</TargetMachinePlatform>
     </CudaCompile>
@@ -168,7 +168,7 @@
       <MaxRegCount>80</MaxRegCount>
       <PtxAsOptionV>true</PtxAsOptionV>
       <Keep>true</Keep>
-      <CodeGeneration>75,sm_75;compute_61,sm_61;compute_52,sm_52;compute_50,sm_50</CodeGeneration>
+      <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
       <AdditionalOptions>--ptxas-options="-O2" --Wno-deprecated-gpu-targets %(AdditionalOptions)</AdditionalOptions>
       <Optimization>O2</Optimization>
     </CudaCompile>
@@ -663,10 +663,13 @@
     <CudaCompile Include="algos\qubit\luffa.cu" />
     <CudaCompile Include="algos\qubit\qubit.cu" />
     <CudaCompile Include="algos\stages\cuda_luffa512_80.cu" />
+    <CudaCompile Include="algos\lyra2\cuda_lyra2_selftest.cu" />
     <CudaCompile Include="algos\lyra2\lyra2RE.cu" />
     <CudaCompile Include="algos\stages\cuda_lyra2.cu" />
+    <CudaCompile Include="algos\lyra2\cuda_lyra2v2_selftest.cu" />
     <CudaCompile Include="algos\lyra2\lyra2REv2.cu" />
     <CudaCompile Include="algos\stages\cuda_lyra2v2.cu" />
+    <CudaCompile Include="algos\lyra2\cuda_lyra2Z_selftest.cu" />
     <CudaCompile Include="algos\lyra2\lyra2Z.cu" />
     <CudaCompile Include="algos\lyra2\lyra2Z330.cu" />
     <CudaCompile Include="algos\stages\cuda_lyra2Z330.cu" />

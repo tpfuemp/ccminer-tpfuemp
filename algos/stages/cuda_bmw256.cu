@@ -239,9 +239,13 @@ void bmw256_gpu_hash_32(uint32_t threads, uint32_t startNounce, uint64_t *g_hash
 
 		if (((uint64_t*)message)[7] <= pTarget[3])
 		{
-			uint32_t tmp = atomicExch(&nonceVector[0], startNounce + thread);
-			if (tmp != 0)
-				nonceVector[1] = tmp;
+			// Keep the two LOWEST candidates in one pass, so the caller's max()+1 cursor
+			// cannot skip an unreported candidate below it. Slot 1 only ever takes the
+			// value displaced out of slot 0, so both writes stay atomic.
+			const uint32_t nonce = startNounce + thread;
+			const uint32_t prev = atomicMin(&nonceVector[0], nonce);
+			if (prev != UINT32_MAX)
+				atomicMin(&nonceVector[1], max(prev, nonce));
 		}
 	}
 }
@@ -253,7 +257,7 @@ void bmw256_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint
 	dim3 grid((threads + threadsperblock - 1) / threadsperblock);
 	dim3 block(threadsperblock);
 
-	cudaMemset(d_GNonce[thr_id], 0, 2 * sizeof(uint32_t));
+	cudaMemset(d_GNonce[thr_id], 0xff, 2 * sizeof(uint32_t));   // UINT32_MAX = "none"
 
 	bmw256_gpu_hash_32 << <grid, block >> >(threads, startNounce, g_hash, d_GNonce[thr_id]);
 	cudaMemcpy(d_gnounce[thr_id], d_GNonce[thr_id], 2 * sizeof(uint32_t), cudaMemcpyDeviceToHost);

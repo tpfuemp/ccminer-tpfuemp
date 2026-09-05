@@ -39,9 +39,12 @@ ops, and **lyra2z330** streams a global matrix, so its accessors take the matrix
 pointer and interleave by thread. The `blake2b_IV` tables likewise stay per-TU —
 v1/v2 `__constant__`, Z kernel-local `const`, z330 a lane-indexed `uint2` view.
 
-The build floor is sm_61, so the stages carry no arch guards, no pre-`__shfl`
-shuffle emulation and no `cuda_arch`/`device_sm` dispatch. `lyra2_cpu_hash_32` /
-`lyra2_cuda_hash_64` keep a vestigial `gtx750ti` parameter (public signature).
+The build floor is sm_61, so the family carries no arch guards, no pre-`__shfl`
+shuffle emulation and no `cuda_arch`/`device_sm` dispatch — the hosts, the stages
+and `cuda_lyra2_vectors.h` alike. The vestigial `gtx750ti` parameter is gone from
+`lyra2_cpu_hash_32` / `lyra2_cuda_hash_64` / `lyra2Z_cpu_hash_32` and from their
+callers. The one remaining arch read is `lyra2REv2.cu`'s `cuda_get_arch()`, which
+is there for `cubehash256`, not for lyra2.
 
 The 256-bit primitives this family shares with Algo256
 (`blake256`/`bmw256`/`cubehash256`/`groestl256`/`skein256`) are still family-branded;

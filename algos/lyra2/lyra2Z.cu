@@ -15,10 +15,11 @@ extern void blake256_cpu_setBlock_80(uint32_t *pdata);
 
 extern void lyra2Z_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix);
 extern void lyra2Z_cpu_free(int thr_id);
-extern uint32_t lyra2Z_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNonce, uint64_t *d_outputHash, bool gtx750ti);
+extern uint32_t lyra2Z_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNonce, uint64_t *d_outputHash);
 
 extern void lyra2Z_setTarget(const void *ptarget);
 extern uint32_t lyra2Z_getSecNonce(int thr_id, int num);
+extern bool lyra2Z_device_selftest(int thr_id);
 
 extern "C" void lyra2Z_hash(void *state, const void *input)
 {
@@ -37,7 +38,6 @@ extern "C" void lyra2Z_hash(void *state, const void *input)
 
 static bool init[MAX_GPUS] = { 0 };
 static __thread uint32_t throughput = 0;
-static __thread bool gtx750ti = false;
 
 extern "C" int scanhash_lyra2Z(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done)
 {
@@ -64,13 +64,12 @@ extern "C" int scanhash_lyra2Z(int thr_id, struct work* work, uint32_t max_nonce
 		throughput = cuda_default_throughput(thr_id, 1U << 18);
 		if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
-		cudaDeviceProp props;
-		cudaGetDeviceProperties(&props, dev_id);
-		gtx750ti = (strstr(props.name, "750 Ti") != NULL);
-
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
 		blake256_cpu_init(thr_id, throughput);
+
+		// before lyra2Z_cpu_init / lyra2Z_setTarget: the self-test borrows both symbols
+		lyra2Z_device_selftest(thr_id);
 
 		// the wander matrix is shared-resident, so DMatrix only carries the
 		// 4 x uint2x4 state the init/final kernels stage per nonce
@@ -96,7 +95,7 @@ extern "C" int scanhash_lyra2Z(int thr_id, struct work* work, uint32_t max_nonce
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
 
-		work->nonces[0] = lyra2Z_cpu_hash_32(thr_id, throughput, pdata[19], d_hash[thr_id], gtx750ti);
+		work->nonces[0] = lyra2Z_cpu_hash_32(thr_id, throughput, pdata[19], d_hash[thr_id]);
 
 		if (work->nonces[0] != UINT32_MAX)
 		{
@@ -126,7 +125,8 @@ extern "C" int scanhash_lyra2Z(int thr_id, struct work* work, uint32_t max_nonce
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)	gpulog(LOG_WARNING, thr_id,
 					"result for %08x does not validate on CPU!", work->nonces[0]);
-				pdata[19] = work->nonces[0];
+				// + 1 or the rescan re-finds the same failing nonce and never advances
+				pdata[19] = work->nonces[0] + 1;
 				continue;
 			}
 		}

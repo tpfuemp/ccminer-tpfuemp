@@ -23,6 +23,8 @@ extern "C" {
 #include <miner.h>
 #include <cuda_helper.h>
 
+#include "cuda/selftest_gate.cuh"
+
 #define LYRA2Z330_TIMECOST 2
 #define LYRA2Z330_ROWS     330
 #define LYRA2Z330_COLS     256
@@ -184,8 +186,13 @@ extern "C" int scanhash_lyra2z330(int thr_id, struct work* work, uint32_t max_no
 
 	if (!selftested[thr_id]) {
 		selftested[thr_id] = true;
-		if (lyra2z330_cpu_selftest(thr_id) && lyra2z330_gpu_selftest(thr_id) && !opt_quiet)
+		// Both legs return false ONLY for a wrong answer: the CPU leg touches no CUDA and
+		// the GPU leg uses CUDA_SAFE_CALL, which exits on a resource failure. So the verdict
+		// is safe to gate on -- a KAT mismatch must refuse to start, not just warn.
+		const bool st_ok = lyra2z330_cpu_selftest(thr_id) && lyra2z330_gpu_selftest(thr_id);
+		if (st_ok && !opt_quiet)
 			gpulog(LOG_INFO, thr_id, "lyra2z330: self-test OK (GPU == CPU reference)");
+		selftest_gate(thr_id, "lyra2z330", st_ok);
 	}
 
 	const uint32_t throughput = s_throughput[thr_id];

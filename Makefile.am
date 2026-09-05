@@ -77,9 +77,9 @@ algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh algos/y
 			  algos/groestlcoin/groestlcoin.cpp algos/groestlcoin/cuda_groestlcoin.cu algos/groestlcoin/cuda_groestlcoin.h \
 			  algos/myriadgroestl/myriadgroestl.cpp algos/myriadgroestl/cuda_myriadgroestl.cu \
 			  algos/lyra2/Lyra2.c algos/lyra2/Sponge.c \
-			  algos/lyra2/lyra2RE.cu algos/stages/cuda_lyra2.cu \
-			  algos/lyra2/lyra2REv2.cu algos/stages/cuda_lyra2v2.cu \
-			  algos/lyra2/Lyra2Z.c algos/lyra2/lyra2Z.cu algos/stages/cuda_lyra2Z.cu \
+			  algos/lyra2/cuda_lyra2_selftest.cu algos/lyra2/lyra2RE.cu algos/stages/cuda_lyra2.cu \
+			  algos/lyra2/cuda_lyra2v2_selftest.cu algos/lyra2/lyra2REv2.cu algos/stages/cuda_lyra2v2.cu \
+			  algos/lyra2/Lyra2Z.c algos/lyra2/cuda_lyra2Z_selftest.cu algos/lyra2/lyra2Z.cu algos/stages/cuda_lyra2Z.cu \
 			  algos/lyra2/lyra2Z330.cu algos/stages/cuda_lyra2Z330.cu \
 			  cuda/blake2b_device.cuh cuda/lyra2_device.cuh \
 			  algos/stages/cuda_bmw256.cu algos/stages/cuda_cubehash256.cu \

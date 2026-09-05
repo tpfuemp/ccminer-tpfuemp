@@ -30,7 +30,7 @@ extern void cubehash256_cpu_hash_32(int thr_id, uint32_t threads, uint32_t start
 extern void skein256_cpu_init(int thr_id, uint32_t threads);
 
 extern void lyra2_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix);
-extern void lyra2_cpu_hash_32(int thr_id, uint32_t threads, uint64_t *d_outputHash, bool gtx750ti);
+extern void lyra2_cpu_hash_32(int thr_id, uint32_t threads, uint64_t *d_outputHash);
 
 extern void groestl256_cpu_init(int thr_id, uint32_t threads);
 extern void groestl256_cpu_free(int thr_id);
@@ -90,7 +90,6 @@ extern "C" int scanhash_allium(int thr_id, struct work* work, uint32_t max_nonce
 	if (opt_benchmark)
 		ptarget[7] = 0x00ff;
 
-	static __thread bool gtx750ti;
 	if (!init[thr_id])
 	{
 		int dev_id = device_map[thr_id];
@@ -104,12 +103,6 @@ extern "C" int scanhash_allium(int thr_id, struct work* work, uint32_t max_nonce
 		// Bottom of the throughput plateau; -i overrides.
 		throughput = cuda_default_throughput(thr_id, 1U << 20);
 		if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
-
-		cudaDeviceProp props;
-		cudaGetDeviceProperties(&props, dev_id);
-
-		if (strstr(props.name, "750 Ti")) gtx750ti = true;
-		else gtx750ti = false;
 
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
@@ -144,9 +137,9 @@ extern "C" int scanhash_allium(int thr_id, struct work* work, uint32_t max_nonce
 		//blake256_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
 		//keccak256_sm3_hash_32(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
 		blakeKeccak256_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
-		lyra2_cpu_hash_32(thr_id, throughput, d_hash[thr_id], gtx750ti);
+		lyra2_cpu_hash_32(thr_id, throughput, d_hash[thr_id]);
 		cubehash256_cpu_hash_32(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
-		lyra2_cpu_hash_32(thr_id, throughput, d_hash[thr_id], gtx750ti);
+		lyra2_cpu_hash_32(thr_id, throughput, d_hash[thr_id]);
 		skein256_cpu_hash_32(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
 
 		*hashes_done = pdata[19] - first_nonce + throughput;

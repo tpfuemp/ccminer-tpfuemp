@@ -8,8 +8,13 @@
  *     #define Ncol      8
  *     #define memshift  3
  *     #define BUF_COUNT 0     // rows kept in DMatrix instead of shared memory
+ *     #define LYRA2_TPB 32    // the wander kernel's threads/block
  *
- * Layout: 4 lanes per hash (blockDim.x == 4), lane L holding BLAKE2b state
+ * The wander kernel always runs block(4, LYRA2_TPB/4), so the includer must
+ * launch it as block(LYRA2_BDIMX, LYRA2_BDIMY) rather than repeating the
+ * numbers -- that is what keeps launcher and kernel in step.
+ *
+ * Layout: 4 lanes per hash (LYRA2_BDIMX == 4), lane L holding BLAKE2b state
  * column L, so one 96-byte matrix column is memshift uint2 per lane. LD4S/ST4S
  * address either dynamic shared memory or DMatrix depending on BUF_COUNT, which
  * is why they are macro-driven rather than templated.
@@ -21,6 +26,27 @@
 #ifndef CUDA_LYRA2_DEVICE_CUH
 #define CUDA_LYRA2_DEVICE_CUH
 
+#ifndef LYRA2_TPB
+#error "lyra2_device.cuh: define LYRA2_TPB (the wander kernel's threads/block) first"
+#endif
+
+/* 4 lanes per hash, so the block is always (4, LYRA2_TPB/4). ptxas cannot
+ * strength-reduce the index multiplies unless these are compile-time. */
+#define LYRA2_BDIMX 4
+#define LYRA2_BDIMY (LYRA2_TPB / LYRA2_BDIMX)
+
+/* Whether the index math uses those constants is opt-in per includer: it measured
+ * faster for the v1 stage and slower for Lyra2Z, where a compile-time index lets
+ * ptxas fully unroll the wander kernel several times over (a source #pragma unroll
+ * does not suppress that). cuda_lyra2.cu opts in; cuda_lyra2Z.cu does not. */
+#ifdef LYRA2_CONST_IDX
+#define LYRA2_IDX_X LYRA2_BDIMX
+#define LYRA2_IDX_Y LYRA2_BDIMY
+#else
+#define LYRA2_IDX_X blockDim.x
+#define LYRA2_IDX_Y blockDim.y
+#endif
+
 __device__ __forceinline__ void LD4S(uint2 res[3], const int row, const int col, const int thread, const int threads)
 {
 #if BUF_COUNT != 8
@@ -28,29 +54,29 @@ __device__ __forceinline__ void LD4S(uint2 res[3], const int row, const int col,
 	const int s0 = (Ncol * (row - BUF_COUNT) + col) * memshift;
 #endif
 #if BUF_COUNT != 0
-	const int d0 = (memshift *(Ncol * row + col) * threads + thread)*blockDim.x + threadIdx.x;
+	const int d0 = (memshift *(Ncol * row + col) * threads + thread)*LYRA2_IDX_X + threadIdx.x;
 #endif
 
 #if BUF_COUNT == 8
 	#pragma unroll
 	for (int j = 0; j < 3; j++)
-		res[j] = *(DMatrix + d0 + j * threads * blockDim.x);
+		res[j] = *(DMatrix + d0 + j * threads * LYRA2_IDX_X);
 #elif BUF_COUNT == 0
 	#pragma unroll
 	for (int j = 0; j < 3; j++)
-		res[j] = shared_mem[((s0 + j) * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x];
+		res[j] = shared_mem[((s0 + j) * LYRA2_IDX_Y + threadIdx.y) * LYRA2_IDX_X + threadIdx.x];
 #else
 	if (row < BUF_COUNT)
 	{
 		#pragma unroll
 		for (int j = 0; j < 3; j++)
-			res[j] = *(DMatrix + d0 + j * threads * blockDim.x);
+			res[j] = *(DMatrix + d0 + j * threads * LYRA2_IDX_X);
 	}
 	else
 	{
 	#pragma unroll
 		for (int j = 0; j < 3; j++)
-			res[j] = shared_mem[((s0 + j) * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x];
+			res[j] = shared_mem[((s0 + j) * LYRA2_IDX_Y + threadIdx.y) * LYRA2_IDX_X + threadIdx.x];
 	}
 #endif
 }
@@ -62,31 +88,31 @@ __device__ __forceinline__ void ST4S(const int row, const int col, const uint2 d
 	const int s0 = (Ncol * (row - BUF_COUNT) + col) * memshift;
 #endif
 #if BUF_COUNT != 0
-	const int d0 = (memshift *(Ncol * row + col) * threads + thread)*blockDim.x + threadIdx.x;
+	const int d0 = (memshift *(Ncol * row + col) * threads + thread)*LYRA2_IDX_X + threadIdx.x;
 #endif
 
 #if BUF_COUNT == 8
 	#pragma unroll
 	for (int j = 0; j < 3; j++)
-		*(DMatrix + d0 + j * threads * blockDim.x) = data[j];
+		*(DMatrix + d0 + j * threads * LYRA2_IDX_X) = data[j];
 
 #elif BUF_COUNT == 0
 	#pragma unroll
 	for (int j = 0; j < 3; j++)
-		shared_mem[((s0 + j) * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x] = data[j];
+		shared_mem[((s0 + j) * LYRA2_IDX_Y + threadIdx.y) * LYRA2_IDX_X + threadIdx.x] = data[j];
 
 #else
 	if (row < BUF_COUNT)
 	{
 	#pragma unroll
 		for (int j = 0; j < 3; j++)
-			*(DMatrix + d0 + j * threads * blockDim.x) = data[j];
+			*(DMatrix + d0 + j * threads * LYRA2_IDX_X) = data[j];
 	}
 	else
 	{
 	#pragma unroll
 		for (int j = 0; j < 3; j++)
-			shared_mem[((s0 + j) * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x] = data[j];
+			shared_mem[((s0 + j) * LYRA2_IDX_Y + threadIdx.y) * LYRA2_IDX_X + threadIdx.x] = data[j];
 	}
 #endif
 }

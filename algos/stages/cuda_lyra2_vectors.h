@@ -12,19 +12,7 @@
 
 #include "cuda_helper.h"
 
-#if __CUDA_ARCH__ < 300
-#define __shfl(x, y, z) (x)
-#endif
-
-#if CUDA_VERSION >= 9000 && __CUDA_ARCH__ >= 300
 #define __shfl2(var, srcLane) __shfl_sync(0xFFFFFFFFu, var, srcLane)
-#else
-#define __shfl2 __shfl
-#endif
-
-#if __CUDA_ARCH__ < 320 && !defined(__ldg4)
-#define __ldg4(x) (*(x))
-#endif
 
 typedef struct __align__(32) uint8 {
 	unsigned int s0, s1, s2, s3, s4, s5, s6, s7;
@@ -393,13 +381,6 @@ static __forceinline__ __device__ void operator^= (ulonglong32to64 &a, const ulo
 static __forceinline__ __device__ void operator+= (ulonglonglong &a, const ulonglonglong &b) { a = a + b; }
 static __forceinline__ __device__ void operator^= (ulonglonglong &a, const ulonglonglong &b) { a = a ^ b; }
 
-#if __CUDA_ARCH__ < 320
-
-#define rotate ROTL32
-#define rotateR ROTR32
-
-#else
-
 static __forceinline__ __device__ uint4 rotate4(uint4 vec4, uint32_t shift)
 {
 	uint4 ret;
@@ -478,8 +459,6 @@ static __device__ __inline__ void ldg4(const uint28 *ptr, uint28 *ret)
 	asm("ld.global.nc.v4.u32 {%0,%1,%2,%3}, [%4+80];" : "=r"(ret[2].z.x), "=r"(ret[2].z.y), "=r"(ret[2].w.x), "=r"(ret[2].w.y) : __LDG_PTR(ptr));
 }
 
-#endif /* __CUDA_ARCH__ < 320 */
-
 
 static __forceinline__ __device__ uint8 swapvec(const uint8 &buf)
 {
@@ -555,7 +534,6 @@ static __forceinline__ __device__ uint16 swapvec(const uint16 &buf)
 
 static __device__ __forceinline__ uint28 shuffle4(const uint28 &var, int lane)
 {
-#if __CUDA_ARCH__ >= 300
 	uint28 res;
 	res.x.x = __shfl2(var.x.x, lane);
 	res.x.y = __shfl2(var.x.y, lane);
@@ -566,14 +544,10 @@ static __device__ __forceinline__ uint28 shuffle4(const uint28 &var, int lane)
 	res.w.x = __shfl2(var.w.x, lane);
 	res.w.y = __shfl2(var.w.y, lane);
 	return res;
-#else
-	return var;
-#endif
 }
 
 static __device__ __forceinline__ ulonglong4 shuffle4(ulonglong4 var, int lane)
 {
-#if __CUDA_ARCH__ >= 300
 	ulonglong4 res;
 	uint2 temp;
 	temp = vectorize(var.x);
@@ -593,9 +567,6 @@ static __device__ __forceinline__ ulonglong4 shuffle4(ulonglong4 var, int lane)
 	temp.y = __shfl2(temp.y, lane);
 	res.w = devectorize(temp);
 	return res;
-#else
-	return var;
-#endif
 }
 
 #endif // #ifndef CUDA_LYRA_VECTOR_H
