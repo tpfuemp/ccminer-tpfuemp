@@ -1,16 +1,16 @@
 # Miner REST API — contract v1
 
-**Status: implemented.** The GPU miner serves every route below; the CPU miner does not implement
-it yet. Call `GET /api/v1/` and read the capability list rather than assuming — that is what it is
-for, and section 10 lists the differences.
+**Status: implemented by both miners.** The GPU miner serves every route below; the CPU miner
+serves all but three, which it answers `501` by design. Call `GET /api/v1/` and read the capability
+list rather than assuming — that is what it is for, and section 10 lists the differences.
 
 This document is the contract both implementations are built against, and it was written before
 either grew handlers: it is the interface an external manager, dashboard or monitoring agent codes
 against, so it had to be agreed first.
 
-This file is duplicated verbatim in both miner trees. If you change one copy, change both in the
-same session — a checked-in hash of this file plus `openapi.yaml` is compared by the test suite,
-and a divergence fails the run.
+This file is duplicated verbatim in both miner trees, together with `openapi.yaml`. If you change
+one copy, change both in the same session; keeping them identical is a maintainer process and needs
+no action from a consumer of this document.
 
 Examples below are normative for shape and field names. They are **real captured output** from a
 running miner against a live pool, reformatted for width, with the operator's wallet replaced by
@@ -103,6 +103,26 @@ privilege. Correct token from an unprivileged source is `403`.
 Authorization: Bearer <token>
 ```
 
+The token is matched **exactly**: `Bearer <token>trailing` is refused, not accepted as a prefix, and
+a value longer than the miner accepts is refused rather than compared truncated.
+
+**The legacy WebSocket compatibility path is covered by the token too.** That path lifts a command
+out of the request URL, so without this it would reach the command table without the token check.
+An upgrade request that does not carry a valid token is answered **`401`** and the connection is
+closed; it is never upgraded and no command runs. It **answers rather than hanging up silently**,
+because a client cannot tell silence from a network stall. Upgrade requests only — a plain binary
+command on the same port is the legacy protocol and is unaffected.
+
+**The write flag is required for every caller, loopback included.** This API has no
+local-machine exemption: without the miner's write flag a `POST` to a write or control route
+answers `403 insufficient privilege` even from `127.0.0.1`, and `--api-control` alone is not
+enough — it upgrades an already-write-privileged caller to `control`, it does not grant write.
+A `403` carrying `insufficient privilege` means the write flag is missing; the distinct message
+`control API disabled (--api-control)` is the other case. Section 10 names each miner's flag.
+
+Do not generalise from a miner's **legacy binary protocol**, which is a separate surface with
+its own history and may exempt loopback there. It says nothing about this API.
+
 Status codes, and the stable `error.code` that goes with each:
 
 | Status | `code` | When |
@@ -112,7 +132,7 @@ Status codes, and the stable `error.code` that goes with each:
 | 403 | `forbidden` | unprivileged source, or `/control/*` without `--api-control` |
 | 404 | `not_found` | unknown route, or index out of range |
 | 405 | `method_not_allowed` | known path, wrong verb |
-| 409 | `conflict` | a control mutation is already in progress, or one could not complete |
+| 409 | `conflict` | a control mutation is already in progress, or one could not complete — including a switch refused because the target algorithm's workspace does not fit in the memory available (section 7.5) |
 | 413 | `payload_too_large` | body over 8 KiB |
 | 429 | `too_many_requests` | control mutation inside `--api-control-min-interval` |
 | 501 | `not_implemented` | this miner cannot serve this route |
@@ -149,8 +169,9 @@ routed `control.*` capability still answers `403` when the miner was started wit
 not as a missing feature. A client must read the list rather than assume the full set — that is the
 whole point of calling this endpoint first.
 
-The list is derived from the server's route table and the `--api-control` gate, so it cannot drift
-from actual behaviour. A capability absent here answers `501` (or `403` for control) if called.
+The list is derived from the server's route table, so it cannot drift from what this build routes.
+A capability absent here answers `501` if called. A routed `control.*` capability is listed even
+when `--api-control` is off, and answers `403` in that case, as described above.
 
 `miner` is present on **every** response, including errors:
 
@@ -173,7 +194,7 @@ Availability by `miner.kind`: yes served · `501` answered but not implemented �
 | GET | `/api/v1/system` | read | yes | yes |
 | GET | `/api/v1/pools` · `/pools/{n}` | read | yes | yes (index `0` only) |
 | GET | `/api/v1/health` | read | yes | yes |
-| GET | `/api/v1/history` | read | yes | `501` |
+| GET | `/api/v1/history` | read | yes | yes |
 | GET | `/api/v1/scanlog` | read | yes | `501` |
 | GET | `/api/v1/meminfo` | read | yes | `501` |
 | GET | `/api/v1/config` | read | yes | yes |
@@ -254,7 +275,9 @@ come from the optional monitoring sampler, which was not running in that capture
 capability ×10 (860 = 8.6), not ×1.
 
 A `cpu` miner emits one `"type": "cpu"` entry with a `cpu` sub-object (`cores`, `threads`,
-`features`) and no `gpu` key. **Clients must tolerate either sub-object being absent.**
+`features`) and no `gpu` key. **Clients must tolerate either sub-object being absent.** `features`
+is an **array of strings** (`["AES", "SHA256", "NEON"]`), never a delimited string, and `null` when
+the miner cannot determine the instruction set.
 
 This is the **expensive** route — it queries the vendor telemetry libraries. Poll `/summary` or
 `/health` instead if you only need rates. `404` for an unknown `{id}`.
@@ -277,12 +300,11 @@ This is the **expensive** route — it queries the vendor telemetry libraries. P
   "shares": { "accepted": 41, "rejected": 1, "stale": 0, "solved": 0 },
   "difficulty": 0.5, "best_share": 3.21,
   "job": { "id": "6a1f", "height": 812345, "extranonce2_size": 4, "extranonce2": "0x00000000" },
-  "ping_ms": 42, "disconnects": 0, "wait_time_s": 12, "uptime_s": 3600, "last_share_age_s": 8 }
+  "ping_ms": 42, "disconnects": 0, "wait_time_s": 12, "session_s": 3600, "last_share_age_s": 8 }
 ```
 
 `user` is exposed as the binary API already exposes it (stratum only); the **password is never
-returned by any endpoint**. `stale` is `null` on a `cpu` miner, whose array always has
-length 1 so that only index `0` exists.
+returned by any endpoint**. A `cpu` miner's array always has length 1, so only index `0` exists.
 
 ### 6.6 `GET /api/v1/health`
 
@@ -298,14 +320,19 @@ stop is not a fault. Ask `/control/state` for *why* mining is off.
 
 ### 6.7 `GET /api/v1/history`, `/scanlog`, `/meminfo`
 
-`gpu`-only for now (`501` on a `cpu` miner). `history` returns the last 50 scan records per thread;
-`scanlog` is available only in debug builds / with `-D`; `meminfo` reports the
-miner's own bookkeeping allocations.
+`history` returns the last 50 scan records per worker and is served by both miners. `scanlog` and
+`meminfo` are `gpu`-only and answer `501` on a `cpu` miner (section 10); `scanlog` is available only
+in debug builds / with `-D`, and `meminfo` reports the miner's own bookkeeping allocations.
 
 ### 6.8 `GET /api/v1/config`
 
 Effective options after config file + command line, **with credentials masked** (`user`, `pass`, and
 any userinfo inside a URL). Use it to confirm what a rig is actually running.
+
+**Its key set mirrors each miner's own options, so unlike every other response body it is not
+identical across miners** — a `gpu` miner exports `intensity`, a `cpu` miner does not. Read the keys
+that are present rather than expecting a fixed shape, and do not treat a missing key as an error.
+This is the one documented exception to section 10's "everything else is identical".
 
 ### 6.9 `GET /api/v1/algos`
 
@@ -437,7 +464,34 @@ Legal bodies: `algo`+`pool` (± `params`, `run`) for a full switch; `pool` alone
 same algorithm; `params` alone to retune the current algorithm; `run` alone as a synonym for
 `start`/`pause`.
 
-### 7.5 Worked profit-switch sequence
+### 7.5 Memory-hungry algorithms are refused, not attempted
+
+A switch whose target needs more memory than is available is rejected with `409` and a `last_error`
+naming the arithmetic, rather than attempted and left to fail:
+
+```
+equihash144 needs 24.3 GB for 8 threads (3106 MB each) but only 14.0 GB is free
+-- 3 thread(s) would fit. Restart with -t 3 to mine it here.
+```
+
+The check runs after the target algorithm registers — its workspace is sized from the parameters
+read at registration, so it is not knowable earlier — and before any thread allocates. Threads are
+parked and the previous algorithm is restored, so a refusal costs a brief pause and nothing else.
+
+The worker count cannot be lowered to fit: workers are parked for a switch, not destroyed, so their
+number is a property of the process. **A manager that wants a high-memory algorithm on a small
+machine must start the miner sized for it** — or run one miner process per algorithm class. The
+refusal exists because the alternative is not a failed allocation but an OOM kill: the workspaces
+are touched, so overcommit cannot absorb them, and the kernel takes the whole process down along
+with its session stats and any queued shares.
+
+NOTE: this is the one control-path failure a manager cannot retry its way out of. Treat a `409`
+mentioning `needs … GB` as permanent for that combination of algorithm, parameters and worker count.
+
+**Availability:** `cpu` only — see section 10. A `gpu` miner performs no such pre-check, so a
+target that does not fit device memory fails later and by another route.
+
+### 7.6 Worked profit-switch sequence
 
 ```
 GET  /api/v1/                     → capabilities; confirm "control.profile" is present
@@ -519,6 +573,7 @@ One alphabetical table so a name cannot mean two things in two places. `n` = nul
 | `reasons` | array | — | yes | why health is `degraded` |
 | `rejected` | int | — | yes | rejected shares |
 | `serial` | string | — | yes | device serial |
+| `session_s` | int | s | yes | **pool scope**: seconds since the current pool connection was established, reset by a reconnect. `null` when this pool is not connected. Read `uptime_s` for the process |
 | `shares` | object | — | | `{accepted,rejected,stale,solved[,accepted_per_min]}` |
 | `since_s` | int | s | | seconds in the current control state |
 | `sm` | int | — | yes | CUDA compute capability ×10 |
@@ -533,7 +588,7 @@ One alphabetical table so a name cannot mean two things in two places. `n` = nul
 | `throughput` | int | — | yes | nonces per launch |
 | `timestamp` | int | unix s | | when the response was generated |
 | `type` | string | — | | `gpu` \| `cpu` (device), `stratum` \| `getwork` (pool) |
-| `uptime_s` | int | s | | process uptime, or pool session length by scope |
+| `uptime_s` | int | s | | **process uptime**, at every scope it appears. Never a pool session length — that is `session_s` |
 | `url` | string | — | | pool URL, never containing a password |
 | `user` | string | — | yes | pool username/wallet |
 | `vendor_id` | string | — | yes | PCI vendor id |
@@ -561,7 +616,7 @@ Some algorithms take parameters beyond their name (`n`, `r`, `key`, a data file,
   that algorithm.
 - **Two tiers.** `fast` parameters take effect within the park window like an algorithm switch.
   `slow` parameters need file or network I/O (`data_file` for verthash, `scratchpad_url` for
-  wildkeccak) and take seconds to minutes; those return `202` and are polled (section 7.5). Failure
+  wildkeccak) and take seconds to minutes; those return `202` and are polled (section 7.6). Failure
   leaves the previous configuration running and populates `last_error`.
 - A parameter accepted by one miner and not the other is listed in section 10.
 
@@ -571,16 +626,20 @@ The table integrators actually need. Everything else is identical.
 
 | Path / field | `gpu` | `cpu` | Why |
 |---|---|---|---|
-| `/history`, `/scanlog`, `/meminfo` | yes | `501` | the statistics and hash-log subsystems exist only on the GPU side; `/scanlog` is additionally debug-build-only |
+| `/scanlog`, `/meminfo` | yes | **`501`, permanently** | both describe a hash log — a per-job record of scanned nonce ranges, kept for resume and dedup. A `cpu` miner gives its workers disjoint ranges by construction and keeps no such log, so there is nothing to report. `/scanlog` is additionally debug-build-only on `gpu` |
 | `POST /pools/switch` | yes | **`501`, permanently** | a `cpu` miner has no pool array; pool selection belongs to the manager, which supplies a pool with every `/control/profile` call |
 | `/pools` array length | `0..n` | always `1` | single-pool miner |
-| `threads[].accepted` / `.rejected` | yes | `null` | per-thread share accounting not tracked |
+| `threads[].accepted` / `.rejected` | yes | yes | both track it; on `cpu` they are `null` until that worker has had a share attributed to it |
+| `threads[].hw_errors` | yes | `null` | no per-worker hardware-error counter |
+| `summary.shares.stale` | `null` | yes | on `gpu` stale shares are counted per pool only, so read them from `/pools/{n}`; on `cpu` a process-wide counter exists and is reported in both places |
 | `threads[].intensity` / `.throughput` | yes | `null` | GPU-only concepts |
-| `pools[].stale` | yes | `null` | not tracked |
+| `memory pre-check on switch` (section 7.5) | absent | `409` | only the `cpu` miner refuses a target whose workspace does not fit; see section 7.5 |
 | `devices[].gpu` | present | absent | — |
 | `devices[].cpu` | absent | present | — |
 | `system.driver` | yes | `null` | no GPU driver |
-| Write gate | group `W` via `--api-allow` | `--api-remote` | pre-existing option semantics, unchanged |
+| Write gate | group `W` via `--api-allow` | `--api-remote` | different pre-existing option models, each unchanged by this API |
+| Write gate, **remote** caller | requires `W:` in `--api-allow`, or a custom group whose command list names the command | requires `--api-remote` | on `gpu` the `R:`/`W:` distinction is enforced on **every** protocol on the port, not only on REST |
+| Write gate, **loopback** caller | same as a remote caller: requires `W:` | same as a remote caller: requires `--api-remote` | **neither miner exempts loopback on this API.** The `gpu` miner does exempt it on its legacy binary protocol only |
 
 Out of scope for v1 on both miners, stated so it is not mistaken for an omission: no process
 restart or self-update, no overclock/fan/power control, no profitability logic inside the miner, no
@@ -671,7 +730,7 @@ The binary protocol is unchanged and stays the default. Mapping for existing con
 | `pool` → `POOL`, `URL`, `USER`, `DIFF`, `BEST` | `/pools/{n}` → `name`, `url`, `user`, `difficulty`, `best_share` |
 | `pool` → `JOB`, `H`, `N2SZ`, `N2` | `/pools/{n}` → `job.id`, `job.height`, `job.extranonce2_size`, `job.extranonce2` |
 | `pool` → `ACC`, `REJ`, `STALE`, `SOLV` | `/pools/{n}` → `shares.accepted`, `.rejected`, `.stale`, `.solved` |
-| `pool` → `PING`, `DISCO`, `WAIT`, `UPTIME`, `LAST` | `/pools/{n}` → `ping_ms`, `disconnects`, `wait_time_s`, `uptime_s`, `last_share_age_s` |
+| `pool` → `PING`, `DISCO`, `WAIT`, `UPTIME`, `LAST` | `/pools/{n}` → `ping_ms`, `disconnects`, `wait_time_s`, **`session_s`**, `last_share_age_s`. The binary key is `UPTIME` but the value is the **pool session**, which is why the REST name differs |
 | `histo`, `scanlog`, `meminfo` | `/history`, `/scanlog`, `/meminfo` |
 | `histo` → `KHS` | `/history[]` → `hashrate_hs`. **The binary key is mislabelled**: `histo`'s `KHS` already carries **H/s**, not kH/s, so this is the one mapping where the value does *not* change by 1000. Unchanged in the binary API for compatibility. |
 | `switchpool\|n`, `seturl\|url`, `quit` | `POST /pools/switch`, `POST /pools/url`, `POST /quit` |
@@ -684,3 +743,9 @@ unavailable values are `null` instead of `0` or an empty string.
 | Revision | Change |
 |---|---|
 | 1.0 (unreleased) | Initial contract: read surface, write surface, control API, metrics. |
+| 1.0 (unreleased) | Reconciled the two copies. New section 7.5 (a switch is refused with `409` when the target's workspace does not fit, `cpu` only). `features` is an array, not a delimited string. Section 10 corrected against both implementations: `/history`, `threads[].accepted`/`.rejected` and `summary.shares.stale` are served on `cpu`; `/scanlog` and `/meminfo` are permanently `501` there. |
+| 1.0 (unreleased) | Section 4: the token is matched exactly; the legacy WebSocket path is token-covered and a refused upgrade answers `401` rather than closing silently. Section 10: the write gate is split into remote and loopback rows, because the two miners differ on the local caller. |
+| 1.0 (unreleased) | **Correction.** Sections 4 and 10 claimed a `gpu` miner grants loopback callers full access regardless of the write flag. That is true only of its legacy binary protocol; on this API every caller needs the write flag, measured. |
+| 1.0 (unreleased) | Section 5 corrected: it claimed in one sentence that a routed `control.*` capability is listed and answers `403` without `--api-control`, and in the next that the capability list is derived from the `--api-control` gate. The first is what both miners do; the second is withdrawn. **A client must not infer that control is unavailable from `control.*` being listed, nor expect it to disappear when the gate is off.** |
+| 1.0 (unreleased) | Section 6.8: `/config` is now stated to be the one response body whose **key set differs by miner kind**, because it mirrors each miner's own options. Found by running the first cross-miner conformance check with both miners live; every other endpoint's shape matched, or differed only where sections 9 and 10 already said it would. |
+| 1.0 (unreleased) | **`uptime_s` split.** It meant *process uptime* at summary scope and *pool session length* at pool scope — one name, two meanings, one nullability column, and the two contract files disagreed on whether the pool one could be `null`. The pool field is now **`session_s`** (nullable, resets on reconnect) and `uptime_s` means process uptime at every scope. **Both times are now queryable independently**, and a client reading `pools[].uptime_s` must move to `pools[].session_s`. |

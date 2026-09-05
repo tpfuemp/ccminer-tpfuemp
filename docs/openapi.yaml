@@ -2,8 +2,8 @@ openapi: 3.1.0
 
 # Machine-readable form of docs/api-rest.md. That document is the authority;
 # this file must not add, rename or contradict anything in it. Both files are
-# byte-identical in the GPU and CPU miner repositories and are covered by
-# docs/api-rest.sha256 (see api/tests/check-docs-sync.sh).
+# byte-identical in the GPU and CPU miner repositories; keeping them so is a
+# maintainer process and needs no action from a consumer of this file.
 #
 # Status: specification. Read the capability list from `GET /api/v1/` to learn
 # what a given miner and configuration actually serve — implementations are
@@ -890,7 +890,12 @@ components:
           properties:
             cores:    { type: [integer, "null"] }
             threads:  { type: [integer, "null"] }
-            features: { type: [string, "null"] }
+            features:
+              type: [array, "null"]
+              items: { type: string }
+              description: |
+                Instruction-set features, one per element. An array rather than
+                a delimited string so a client never has to guess a separator.
 
     System:
       type: object
@@ -929,7 +934,7 @@ components:
         ping_ms:          { type: [integer, "null"] }
         disconnects:      { type: [integer, "null"] }
         wait_time_s:      { type: [integer, "null"] }
-        uptime_s:         { type: [integer, "null"] }
+        session_s:        { type: [integer, "null"] }
         last_share_age_s: { type: [integer, "null"] }
 
     Health:

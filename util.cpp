@@ -1640,6 +1640,9 @@ static bool stratum_notify(struct stratum_ctx *sctx, json_t *params)
 	if (is_progpow_algo(opt_algo)) {
 		return kawpow_stratum_notify(sctx, params);
 	}
+	/* Set-only in kawpow_stratum_notify(): reaching here means this job is not a
+	 * ProgPoW one, so the flag must not outlive the algo that set it. */
+	sctx->job.is_kawpow = false;
 
 	if (sctx->is_equihash) {
 		return equi_stratum_notify(sctx, params);

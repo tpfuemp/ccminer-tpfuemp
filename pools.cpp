@@ -368,8 +368,15 @@ bool pool_switch_url_algo(char *params, int algo)
 	nextn = cur_pooln;
 	// and to handle the "hot swap" from current one...
 	cur_pooln = prevn;
-	if (nextn == prevn)
+	if (nextn == prevn) {
+		/* parse_arg('o') only rotates when the current slot is in use, so an
+		 * unused slot is filled in place -- and pool_switch()'s reconnect block is
+		 * gated on prevn != cur_pooln, so switching there would swap rpc_url while
+		 * keeping the old connection. */
+		applog(LOG_WARNING, "pool switch: url filled the current slot %d in place "
+			"(no free slot rotated), refusing a switch that would not reconnect", prevn);
 		return false;
+	}
 	if (algo >= 0)
 		pools[nextn].algo = algo;
 	return pool_switch(-1, nextn);

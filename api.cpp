@@ -206,6 +206,7 @@ static bool api_ws_token_ok(const char *buf, int len)
 
 	if (!opt_api_token || !*opt_api_token)
 		return true;
+	if (n < 0) return false;
 
 	memcpy(tmp, buf, (size_t) n);
 	tmp[n] = '\0';

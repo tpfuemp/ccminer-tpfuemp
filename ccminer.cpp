@@ -439,7 +439,7 @@ Options:\n\
       --api-cors=ORIG   value for Access-Control-Allow-Origin, enables OPTIONS\n\
       --api-http-port=P serve HTTP on its own port instead of sniffing one port\n\
       --user-agent=NAME override the miner name sent to the pool (default: " USER_AGENT ")\n\
-      --api-remote      Allow remote control, like pool switching, imply --api-allow=0/0\n\
+      --api-remote      Allow remote control, like pool switching, imply --api-allow=W:0/0\n\
       --api-allow=...   IP/mask of the allowed api client(s), 0/0 for all\n\
       --api-control     Allow the API to pause/resume/stop mining at runtime\n\
       --api-control-min-interval=N  Seconds between accepted state changes (default: 15)\n\
@@ -1792,6 +1792,10 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 
 	// also store the block number
 	work->height = sctx->job.height;
+	/* Set true only by the ProgPoW branch below. sctx->job.is_kawpow is set-only
+	 * and the stratum struct survives a pool switch, so leaving it alone let a
+	 * ProgPoW scan accept another algo's job and size its DAG from that height. */
+	work->is_kawpow = false;
 	// and the pool of the current stratum
 	work->pooln = sctx->pooln;
 
@@ -2436,6 +2440,18 @@ static void *miner_thread(void *userdata)
 			}
 		}
 		loopcnt++;
+
+		/* Park before the wait-for-work paths below: the park site in the
+		 * !wanna_mine() branch is unreachable from their `continue`s, so a thread
+		 * waiting for a job never acknowledged a park and every control mutation
+		 * timed out against it. */
+		if (api_ctl_wants_pause()) {
+			algo_free_all(thr_id);
+			cuda_clear_lasterror();
+			global_hashrate = 0;
+			api_ctl_park(thr_id);
+			continue;
+		}
 
 		// prevent gpu scans before a job is received
 		if (opt_algo == ALGO_SIA) nodata_check_oft = 7; // no stratum version
@@ -3752,7 +3768,9 @@ void parse_arg(int key, char *arg)
 		break;
 	case 1030: /* --api-remote */
 		if (opt_api_allow) free(opt_api_allow);
-		opt_api_allow = strdup("0/0");
+		/* W: is required: without a group prefix setup_ipaccess() files this as
+		 * group R, which grants read only -- not the control this option enables. */
+		opt_api_allow = strdup("W:0/0");
 		break;
 	case 1031: /* --api-allow */
 		// --api-allow 0/0 means opened to all, so assume -b 0.0.0.0

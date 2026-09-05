@@ -491,7 +491,10 @@ json_t *api_build_pool_json(int index, bool active, const struct api_pool_snapsh
 	json_object_set_new(o, "ping_ms", jint_or_null(s->ping_ms, s->ping_ms > 0));
 	json_object_set_new(o, "disconnects", json_integer(s->disconnects));
 	json_object_set_new(o, "wait_time_s", json_integer(s->wait_time));
-	json_object_set_new(o, "uptime_s", json_integer(s->work_time));
+	/* Pool session length; process uptime is `uptime_s` on /summary. */
+	/* null rather than a climbing number while the pool is down: work_time keeps
+	 * counting through an outage, which reported a live session for a dead socket. */
+	json_object_set_new(o, "session_s", jint_or_null(s->work_time, s->connected));
 	json_object_set_new(o, "last_share_age_s", jint_or_null(s->last_share_age, s->last_share_age > 0));
 	return o;
 }

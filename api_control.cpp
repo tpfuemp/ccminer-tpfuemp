@@ -985,10 +985,15 @@ static bool profile_apply(const ctl_profile_req *p, char *err, size_t errlen)
 				"pool selected but not connected after %dms", waited);
 	}
 
-	if (algo_changed)
+	if (algo_changed) {
+		/* pool_switch() bumps this only when it changes opt_algo itself, which it
+		 * cannot here: opt_algo was assigned above. Miner threads free their device
+		 * buffers when the counter moves. Last, after every rollback path. */
+		algo_switch_gen++;
 		applog(LOG_NOTICE, "control: algo %s -> %s",
 			algo_names[old_algo] ? algo_names[old_algo] : "?",
 			algo_names[opt_algo] ? algo_names[opt_algo] : "?");
+	}
 	return true;
 }
 
