@@ -1150,7 +1150,13 @@
     <CudaCompile Include="algos\stages\cuda_lyra2v2.cu">
       <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
+    <CudaCompile Include="algos\lyra2\cuda_lyra2_selftest.cu">
+      <Filter>Source Files\CUDA\lyra2</Filter>
+    </CudaCompile>
     <CudaCompile Include="algos\lyra2\lyra2RE.cu">
+      <Filter>Source Files\CUDA\lyra2</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\lyra2\cuda_lyra2v2_selftest.cu">
       <Filter>Source Files\CUDA\lyra2</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\lyra2\lyra2REv2.cu">
@@ -1158,6 +1164,9 @@
     </CudaCompile>
     <CudaCompile Include="algos\stages\cuda_lyra2Z.cu">
       <Filter>Source Files\CUDA\stages</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\lyra2\cuda_lyra2Z_selftest.cu">
+      <Filter>Source Files\CUDA\lyra2</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\lyra2\lyra2Z.cu">
       <Filter>Source Files\CUDA\lyra2</Filter>

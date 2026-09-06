@@ -15,11 +15,6 @@ static uint64_t* d_matrix[MAX_GPUS];
 
 extern void blake256_cpu_init(int thr_id, uint32_t threads);
 extern void blake256_cpu_setBlock_80(uint32_t *pdata);
-//extern void blake256_cpu_hash_80(const int thr_id, const uint32_t threads, const uint32_t startNonce, uint64_t *Hash, int order);
-
-//extern void keccak256_sm3_hash_32(int thr_id, uint32_t threads, uint32_t startNonce, uint64_t *d_outputHash, int order);
-//extern void keccak256_sm3_init(int thr_id, uint32_t threads);
-//extern void keccak256_sm3_free(int thr_id);
 
 extern void blakeKeccak256_cpu_hash_80(const int thr_id, const uint32_t threads, const uint32_t startNonce, uint64_t *Hash, int order);
 
@@ -31,6 +26,7 @@ extern void skein256_cpu_init(int thr_id, uint32_t threads);
 
 extern void lyra2_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix);
 extern void lyra2_cpu_hash_32(int thr_id, uint32_t threads, uint64_t *d_outputHash);
+extern bool lyra2_device_selftest(int thr_id);
 
 extern void groestl256_cpu_init(int thr_id, uint32_t threads);
 extern void groestl256_cpu_free(int thr_id);
@@ -102,22 +98,19 @@ extern "C" int scanhash_allium(int thr_id, struct work* work, uint32_t max_nonce
 
 		// Bottom of the throughput plateau; -i overrides.
 		throughput = cuda_default_throughput(thr_id, 1U << 20);
-		if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
 		blake256_cpu_init(thr_id, throughput);
-		//keccak256_sm3_init(thr_id, throughput);
 		skein256_cpu_init(thr_id, throughput);
 		groestl256_cpu_init(thr_id, throughput);
 
-		//cuda_get_arch(thr_id);
-		if (device_sm[dev_id] >= 500)
-		{
-			size_t matrix_sz = device_sm[dev_id] > 500 ? sizeof(uint64_t) * 4 * 4 : sizeof(uint64_t) * 8 * 8 * 3 * 4;
-			CUDA_SAFE_CALL(cudaMalloc(&d_matrix[thr_id], matrix_sz * throughput));
-			lyra2_cpu_init(thr_id, throughput, d_matrix[thr_id]);
-		}
+		// before lyra2_cpu_init: the self-test borrows the DMatrix symbol
+		lyra2_device_selftest(thr_id);
+
+		const size_t matrix_sz = sizeof(uint64_t) * 4 * 4;
+		CUDA_SAFE_CALL(cudaMalloc(&d_matrix[thr_id], matrix_sz * throughput));
+		lyra2_cpu_init(thr_id, throughput, d_matrix[thr_id]);
 
 		CUDA_SAFE_CALL(cudaMalloc(&d_hash[thr_id], (size_t)32 * throughput));
 
@@ -134,8 +127,6 @@ extern "C" int scanhash_allium(int thr_id, struct work* work, uint32_t max_nonce
 	do {
 		int order = 0;
 
-		//blake256_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
-		//keccak256_sm3_hash_32(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
 		blakeKeccak256_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
 		lyra2_cpu_hash_32(thr_id, throughput, d_hash[thr_id]);
 		cubehash256_cpu_hash_32(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
@@ -202,7 +193,6 @@ extern "C" void free_allium(int thr_id)
 	cudaFree(d_hash[thr_id]);
 	cudaFree(d_matrix[thr_id]);
 
-	//keccak256_sm3_free(thr_id);
 	groestl256_cpu_free(thr_id);
 
 	init[thr_id] = false;

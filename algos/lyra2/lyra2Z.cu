@@ -62,7 +62,6 @@ extern "C" int scanhash_lyra2Z(int thr_id, struct work* work, uint32_t max_nonce
 		cuda_get_arch(thr_id);
 		// Saturated, and a short enough batch to stay responsive to new work; -i overrides.
 		throughput = cuda_default_throughput(thr_id, 1U << 18);
-		if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 

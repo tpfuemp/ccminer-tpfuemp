@@ -348,23 +348,13 @@ void cubehash256_gpu_hash_32(uint32_t threads, uint32_t startNounce, uint2 *g_ha
 __host__
 void cubehash256_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint64_t *d_hash, int order)
 {
+	// cuda_arch[] is indexed by device, not by thread
+	const int dev_id = device_map[thr_id];
 	uint32_t tpb = TPB35;
-	if (cuda_arch[thr_id] >= 500) tpb = TPB50;
+	if (cuda_arch[dev_id] >= 500) tpb = TPB50;
 
 	dim3 grid((threads + tpb - 1) / tpb);
 	dim3 block(tpb);
 
 	cubehash256_gpu_hash_32 <<<grid, block >>> (threads, startNounce, (uint2*)d_hash);
-}
-
-__host__
-void cubehash256_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint64_t *d_hash, int order, cudaStream_t stream)
-{
-	uint32_t tpb = TPB35;
-	if (cuda_arch[thr_id] >= 500) tpb = TPB50;
-
-	dim3 grid((threads + tpb - 1) / tpb);
-	dim3 block(tpb);
-
-	cubehash256_gpu_hash_32 <<<grid, block, 0, stream >>> (threads, startNounce, (uint2*)d_hash);
 }
