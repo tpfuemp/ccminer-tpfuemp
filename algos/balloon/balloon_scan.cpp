@@ -15,7 +15,8 @@
 extern void balloon_gpu_init(int thr_id);
 extern void balloon_setBlock_80(int thr_id, void *pdata, const void *ptarget);
 uint32_t balloon_cpu_hash(int thr_id, unsigned char *input, uint32_t threads,
-	uint32_t startNounce, uint32_t *h_nounce, uint32_t max_nonce);
+	uint32_t max_nonce);
+extern "C" bool balloon_selftest(int thr_id);
 
 int scanhash_balloon(int thr_id, struct work *work, uint32_t max_nonce,
 	unsigned long *hashes_done)
@@ -25,7 +26,6 @@ int scanhash_balloon(int thr_id, struct work *work, uint32_t max_nonce,
 
 	uint32_t _ALIGN(128) endiandata[20];
 	uint32_t _ALIGN(64) vhash[8];
-	uint32_t h_nounce[2] = { 0, 0 };
 
 	// benchmark-only: 0x0000ff still yields ~0 candidates at a kH/s rate
 	if (opt_benchmark)
@@ -35,13 +35,17 @@ int scanhash_balloon(int thr_id, struct work *work, uint32_t max_nonce,
 	const uint32_t first_nonce = pdata[19];
 	uint32_t n = first_nonce;
 
-	// 'batch' is the number of nonces scanned per kernel launch (one GPU thread
-	// per nonce), so the host cursor advances by the same amount. This is the
-	// main throughput tunable: larger batches keep the GPU saturated (balloon is
-	// memory-latency bound, so more in-flight threads hide stalls) at the cost of
-	// ~128 KB of device memory per resident nonce. Tunable at runtime via
-	// -i / --intensity (a power of two); default 1<<14 = 16384. Rounded down to a
-	// multiple of 64 (the kernel launches 64 threads/block).
+	// Nonces per launch, one GPU thread each; the host cursor advances by the same
+	// amount. Runtime-tunable with -i / --intensity, default 1<<14. Rounded down to
+	// a multiple of 64 (the block size) so the grid covers the batch exactly.
+	//
+	// Do not raise this casually. The card is already saturated at the default, so a
+	// larger batch adds no throughput, only launch duration: the kernel is not
+	// chunked, so one launch runs batch/hashrate seconds (~0.43 s at -i 14 on an RTX
+	// 3060, ~1.7 s at -i 16, and ~18% longer again once the card throttles). Past
+	// ~2 s Windows resets a display-attached GPU; and since a launch cannot be
+	// interrupted, that same figure is how long the miner keeps hashing a job the
+	// pool has already replaced. The first launch is timed below and reported.
 	static THREAD volatile bool init = false;
 	static THREAD uint32_t batch = 0;
 	if (!init)
@@ -52,6 +56,8 @@ int scanhash_balloon(int thr_id, struct work *work, uint32_t max_nonce,
 			cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
 		}
 		balloon_gpu_init(thr_id);
+		// Consensus gate; fails closed inside balloon_selftest().
+		balloon_selftest(thr_id);
 		batch = cuda_default_throughput(thr_id, 1U << 14) & ~0x3fU;
 		if (batch < 64) batch = 64;
 		gpulog(LOG_INFO, thr_id, "intensity %.2f, %u nonces/launch",
@@ -72,11 +78,36 @@ int scanhash_balloon(int thr_id, struct work *work, uint32_t max_nonce,
 	// Upload the target (and padded header) to device constant memory.
 	balloon_setBlock_80(thr_id, endiandata, ptarget);
 
+	// See the batch-size note above.
+	static THREAD bool launch_timed = false;
+
 	do {
 		be32enc(&endiandata[19], n);
 
+		struct timeval tv_a, tv_b, tv_d;
+		const bool time_it = (!launch_timed || opt_debug);
+		if (time_it) gettimeofday(&tv_a, NULL);
+
 		uint32_t winning_nonce = balloon_cpu_hash(thr_id, (unsigned char *)endiandata,
-			batch, n, h_nounce, max_nonce);
+			batch, max_nonce);
+
+		if (time_it) {
+			gettimeofday(&tv_b, NULL);
+			timeval_subtract(&tv_d, &tv_b, &tv_a);
+			const double secs = (double)tv_d.tv_sec + (double)tv_d.tv_usec / 1e6;
+			const bool first = !launch_timed;
+			launch_timed = true;
+			if (first && secs > 1.5) {
+				gpulog(LOG_WARNING, thr_id,
+					"a single launch takes %.2fs at intensity %.2f; it cannot be interrupted, "
+					"so that is both the driver-reset window and the job-switch delay. "
+					"Lower -i -- throughput does not improve above the default.",
+					secs, throughput2intensity(batch));
+			} else if (opt_debug) {
+				gpulog(LOG_DEBUG, thr_id, "launch %.3fs at intensity %.2f (%u nonces)",
+					secs, throughput2intensity(batch), batch);
+			}
+		}
 
 		if (work_restart[thr_id].restart)
 			break;
@@ -91,7 +122,9 @@ int scanhash_balloon(int thr_id, struct work *work, uint32_t max_nonce,
 				work_set_target_ratio(work, vhash);
 				work->valid_nonces = 1;
 				*hashes_done = winning_nonce - first_nonce + 1;
-				pdata[19] = winning_nonce;
+				// Resume PAST the accepted nonce: without the +1 a re-entry on the
+				// same work re-finds and re-submits it.
+				pdata[19] = winning_nonce + 1;
 				return 1;
 			}
 			else if (vhash[7] > Htarg) {

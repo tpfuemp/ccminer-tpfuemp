@@ -26,6 +26,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/equihash/equihash.cpp algos/equihash/cuda_equi.cu algos/equihash/cuda_equi_tromp.cu \
 			  algos/allium/allium.cu \
 			  algos/balloon/balloon.cpp algos/balloon/balloon_scan.cpp \
+			  algos/balloon/balloon_selftest.cpp \
 			  algos/balloon/sha256-ref.c algos/balloon/cuda_balloon.cu \
 			  algos/balloon/balloon.h algos/balloon/sha256.h \
 			  algos/rinhash/rinhash_scanhash.cpp algos/rinhash/rinhash.cu \

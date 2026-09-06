@@ -235,6 +235,7 @@
     <ClCompile Include="algos\x25x\lane.c" />
     <ClCompile Include="algos\balloon\balloon.cpp" />
     <ClCompile Include="algos\balloon\balloon_scan.cpp" />
+    <ClCompile Include="algos\balloon\balloon_selftest.cpp" />
     <ClCompile Include="algos\rinhash\rinhash_scanhash.cpp" />
     <ClCompile Include="algos\odocrypt\odocrypt_host.cpp" />
     <ClCompile Include="algos\odocrypt\odocrypt_jit.cpp" />

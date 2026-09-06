@@ -5,7 +5,17 @@
 #include "cuda_helper.h"
 #include "balloon.h"
 #include "sha256.h"
-__global__ void cudaized_multi (struct hash_state *hs, uint64_t *prebuf_le, uint8_t *input, uint32_t len, uint8_t *output, uint32_t max_nonce, int gpuid, uint32_t *winning_nonce, uint32_t num_threads, uint32_t *device_target, uint32_t *is_winning, uint32_t num_blocks);
+// The mined header is always 80 bytes. Compile-time, so nvcc folds the copy
+// lengths and drops the length check (which otherwise emits a device printf).
+#define BALLOON_INLEN 80
+
+// Mix pass count; 4 is consensus. A macro only so a timing build can compare
+// reduced-round arms. The default is unchanged and compiles SASS-identical.
+#ifndef BALLOON_MIXROUNDS
+#define BALLOON_MIXROUNDS 4
+#endif
+
+__global__ void balloon_gpu_hash(struct hash_state *hs, uint64_t *prebuf_le, const uint8_t *input, uint32_t max_nonce, uint32_t *resNonce, const uint32_t *device_target);
 __device__ void cuda_hash_state_mix(struct hash_state *s, int32_t mixrounds, uint64_t *prebuf_le);
 __device__ void device_sha256_osol(const __sha256_block_t blk, __sha256_hash_t ctx);
 __device__ void device_sha256_168byte(uint8_t *data, uint8_t *outhash);
@@ -29,7 +39,6 @@ void update_device_data(int gpuid);
 #endif
 
 void update_device_data(int gpuid);
-static uint32_t *d_KNonce[MAX_GPUS];
 __constant__ const uint32_t __sha256_init[] = {
 	0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
 	0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19
@@ -42,11 +51,8 @@ uint8_t host_prebuf_filled[20] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
 
 uint64_t *device_prebuf_le[20];
 uint32_t *device_winning_nonce[20];
-uint8_t *device_sbuf[20];
 struct hash_state *device_s[20];
 uint32_t *device_target[20];
-uint32_t *device_is_winning[20];
-uint8_t *device_out[20];
 uint8_t *device_input[20];
 
 uint8_t balloon_inited[20] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
@@ -71,7 +77,10 @@ void fill_prebuf(struct hash_state *s, int gpuid) {
 	}
 }
 
-uint32_t balloon_cpu_hash(int thr_id, unsigned char *input, uint32_t threads, uint32_t startNounce, uint32_t *h_nounce, uint32_t max_nonce)
+// Scans `threads` consecutive nonces from the one encoded in input[76..79]
+// (big-endian) and returns the LOWEST passing the on-device screen, or
+// UINT32_MAX. The caller re-verifies on the CPU.
+uint32_t balloon_cpu_hash(int thr_id, unsigned char *input, uint32_t threads, uint32_t max_nonce)
 {
 	struct balloon_options opts;
 	struct hash_state s;
@@ -85,44 +94,36 @@ uint32_t balloon_cpu_hash(int thr_id, unsigned char *input, uint32_t threads, ui
 	balloon_init(&opts, (int64_t)128, (int32_t)4);
 	hash_state_init(&s, &opts, input);
 	fill_prebuf(&s, thr_id);
-	uint8_t *pc_sbuf = s.buffer;
 
-	uint32_t first_nonce = ((input[76] << 24) | (input[77] << 16) | (input[78] << 8) | input[79]);
+	// hash_state_init() allocates host scratch for the CPU path. The kernel rebuilds
+	// its own local buffer before reading it, so nothing consumes the scratch here:
+	// free it instead of uploading 128 KB per launch that no one dereferences.
+	free(s.buffer);
+	s.buffer = NULL;
 
-	//printf("cuda_ballon, gpu %d, start_nonce: %d, max_nonce: %d\n", gpuid, first_nonce, max_nonce);
-
-	CUDA_SAFE_CALL(cudaMemcpy((void**)device_sbuf[thr_id], (void**)s.buffer, s.n_blocks * BLOCK_SIZE, cudaMemcpyHostToDevice));
-
-	s.buffer = device_sbuf[thr_id];
 	CUDA_SAFE_CALL(cudaMemcpy((void**)device_s[thr_id], (void**)&s, sizeof(struct hash_state), cudaMemcpyHostToDevice));
 
-	CUDA_SAFE_CALL(cudaMemcpy((void**)device_input[thr_id], (void**)input, 80, cudaMemcpyHostToDevice));
-	uint32_t host_winning_nonce = 0;
-	uint32_t host_is_winning = 0;
+	CUDA_SAFE_CALL(cudaMemcpy((void**)device_input[thr_id], (void**)input, BALLOON_INLEN, cudaMemcpyHostToDevice));
+
+	// UINT32_MAX is the "no candidate" sentinel AND atomicMin's identity, so the
+	// kernel needs no separate found-flag. 0 would not do: 0 is a legal nonce.
+	uint32_t host_winning_nonce = UINT32_MAX;
 
 	// device_target is uploaded per work unit by balloon_setBlock_80(); never source
 	// it from a device symbol (reads as garbage on the host).
 
 	CUDA_SAFE_CALL(cudaMemcpy((void**)device_winning_nonce[thr_id], (void**)&host_winning_nonce, sizeof(uint32_t), cudaMemcpyHostToDevice));
-	CUDA_SAFE_CALL(cudaMemcpy((void**)device_is_winning[thr_id], (void**)&host_is_winning, sizeof(uint32_t), cudaMemcpyHostToDevice));
-	cudaized_multi << <num_blocks, num_threads >> > (device_s[thr_id], device_prebuf_le[thr_id], device_input[thr_id], 80, device_out[thr_id], max_nonce, thr_id, device_winning_nonce[thr_id], num_threads, device_target[thr_id], device_is_winning[thr_id], num_blocks);
-	
-	//<<<num_blocks, num_threads>>> 
+	balloon_gpu_hash << <num_blocks, num_threads >> > (device_s[thr_id], device_prebuf_le[thr_id], device_input[thr_id], max_nonce, device_winning_nonce[thr_id], device_target[thr_id]);
+
 	CUDA_SAFE_CALL(cudaPeekAtLastError());
 
 	//wait for cuda device
 	CUDA_SAFE_CALL(cudaDeviceSynchronize());
 	CUDA_SAFE_CALL(cudaMemcpy((void*)&host_winning_nonce, (void*)device_winning_nonce[thr_id], sizeof(uint32_t), cudaMemcpyDeviceToHost));
-	CUDA_SAFE_CALL(cudaMemcpy((void*)&host_is_winning, (void*)device_is_winning[thr_id], sizeof(uint32_t), cudaMemcpyDeviceToHost));
 
-	s.buffer = pc_sbuf;
 	hash_state_free(&s);
 
-	
 	// UINT32_MAX = no candidate (distinct from "found one that fails to re-verify")
-	if (host_is_winning == 0)
-		return UINT32_MAX;
-
 	return host_winning_nonce;
 }
 
@@ -139,14 +140,10 @@ extern "C" void reset_host_prebuf(int thr_id)
 void balloon_gpu_init(int thr_id)
 {
 	CUDA_SAFE_CALL(cudaMalloc((void**)&device_prebuf_le[thr_id], (PREBUF_LEN / 8) * sizeof(uint64_t)));
-	CUDA_SAFE_CALL(cudaMalloc((void**)&device_sbuf[thr_id], /*s.n_blocks*/4096 * BLOCK_SIZE));
-	CUDA_SAFE_CALL(cudaMalloc((void**)&device_is_winning[thr_id], sizeof(uint32_t)));
 	CUDA_SAFE_CALL(cudaMalloc((void**)&device_winning_nonce[thr_id], sizeof(uint32_t)));
 	CUDA_SAFE_CALL(cudaMalloc((void**)&device_s[thr_id], sizeof(struct hash_state)));
 	CUDA_SAFE_CALL(cudaMalloc((void**)&device_target[thr_id], 8 * sizeof(uint32_t)));
-	CUDA_SAFE_CALL(cudaMalloc((void**)&device_out[thr_id], BLOCK_SIZE * sizeof(uint8_t)));
-	CUDA_SAFE_CALL(cudaMalloc((void**)&device_input[thr_id], /*len*/80));
-
+	CUDA_SAFE_CALL(cudaMalloc((void**)&device_input[thr_id], BALLOON_INLEN));
 }
 
 __host__ void balloon_setBlock_80(int thr_id, void *pdata, const void *pTargetIn)
@@ -167,20 +164,22 @@ void update_device_data(int thr_id) {
 
 }
 
-__global__ void cudaized_multi(struct hash_state *hs, uint64_t *prebuf_le, uint8_t *input, uint32_t len, uint8_t *output, uint32_t max_nonce, int gpuid, uint32_t *winning_nonce, uint32_t num_threads, uint32_t *device_target, uint32_t *is_winning, uint32_t num_blocks) {
+__global__ void balloon_gpu_hash(struct hash_state *hs, uint64_t *prebuf_le, const uint8_t *input, uint32_t max_nonce, uint32_t *resNonce, const uint32_t *device_target) {
 
 	int64_t s_cost = (int64_t)128;
-	int32_t mixrounds = (int32_t)4;
+	int32_t mixrounds = (int32_t)BALLOON_MIXROUNDS;
 
 	uint32_t id = blockDim.x*blockIdx.x + threadIdx.x;
 	uint32_t nonce = ((input[76] << 24) | (input[77] << 16) | (input[78] << 8) | input[79]) + id;
-	if (nonce > max_nonce || *is_winning) {
+	// Range guard only, deliberately: a "has anyone won yet" poll would let blocks
+	// scheduled after a candidate exit without hashing while the host still advances
+	// its cursor over the whole batch, silently skipping nonces.
+	if (nonce > max_nonce)
+		return;
 
-		asm("exit;");
-	}
-	uint8_t local_input[80];
+	uint8_t local_input[BALLOON_INLEN];
 	struct hash_state local_s;
-	memcpy(local_input, input, len);
+	memcpy(local_input, input, BALLOON_INLEN);
 	memcpy(&local_s, hs, sizeof(struct hash_state));
 
 	uint8_t local_sbuf[4096 * BLOCK_SIZE];
@@ -191,16 +190,15 @@ __global__ void cudaized_multi(struct hash_state *hs, uint64_t *prebuf_le, uint8
 	// per thread (~384 MB/launch of dead global<->local traffic).
 
 	local_s.buffer = local_sbuf;
-	((uint32_t*)local_input)[19] = ((nonce & 0xff000000) >> 24) | ((nonce & 0xff0000) >> 8) | ((nonce & 0xff00) << 8) | ((nonce & 0xff) << 24);
+	((uint32_t*)local_input)[19] = cuda_swab32(nonce);
 	local_s.counter = 0;
-	cuda_hash_state_fill(&local_s, local_input, len, mixrounds, s_cost);
+	cuda_hash_state_fill(&local_s, local_input, BALLOON_INLEN, mixrounds, s_cost);
 	cuda_hash_state_mix(&local_s, mixrounds, prebuf_le);
 	if (((uint32_t*)(local_sbuf + (4095 << 5)))[7] < device_target[7]) {
-		// Assume winning nonce
-		*winning_nonce = nonce;
-		*is_winning = 1;
-		__threadfence();
-		asm("exit;");
+		// Lowest candidate of the batch, atomically: a plain store lets two
+		// concurrent candidates race and loses one. With atomicMin the survivor
+		// is the lowest, and the host's "+1" resume re-finds any higher one.
+		atomicMin(resNonce, nonce);
 	}
 	}
 
@@ -232,10 +230,7 @@ __device__ void cuda_hash_state_fill(struct hash_state *s, const uint8_t *in, si
 	uint8_t data[132];
 	//uint32_t shalen = 8+SALT_LEN+inlen+8+4;
 	uint8_t *dp = (uint8_t*)data;
-	if (inlen != 80) {
-		printf("inlen != 128 (inlen = %d)!!\n", inlen);
-		if (inlen > 80) inlen = 80;
-	}
+	// inlen is BALLOON_INLEN at every call site.
 	memcpy(dp, &s->counter, 8);
 	dp += 8;
 	memcpy(dp, in, SALT_LEN);
@@ -260,7 +255,7 @@ __device__ void cuda_hash_state_mix(struct hash_state *s, int32_t mixrounds, uin
 
 	//int32_t n_blocks = s->n_blocks;
 	const int32_t n_blocks = 4096;
-	mixrounds = 4;
+	mixrounds = BALLOON_MIXROUNDS;
 	uint8_t *last_block = (sbuf + (BLOCK_SIZE*(n_blocks - 1)));
 	uint8_t *blocks[5];
 	unsigned char data[8 + BLOCK_SIZE * 5];
@@ -371,10 +366,8 @@ __device__ void device_sha256_168byte(uint8_t *data, uint8_t *outhash) {
 }
 
 __device__ void device_sha256_generic(uint8_t *data, uint8_t *outhash, uint32_t len) {
-	if (len > 184) {
-		printf("Longer than 3 blocks (184bytes), sha256_generic not made for this..\n");
-		len = 184;
-	}
+	// Invariant: len <= 184 (three SHA-256 blocks minus the length field). Both call
+	// sites are compile-time bounded (132 and 40), so no runtime clamp is needed.
 	uint8_t num_blocks = len / 64 + 1;
 	uint32_t tot_len = num_blocks * 512 - 65; // 64bit header
 	uint32_t num_padding = (tot_len - len * 8) / 8;

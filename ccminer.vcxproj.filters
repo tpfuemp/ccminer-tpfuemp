@@ -451,6 +451,9 @@
     <ClCompile Include="algos\balloon\balloon_scan.cpp">
       <Filter>Source Files\balloon</Filter>
     </ClCompile>
+    <ClCompile Include="algos\balloon\balloon_selftest.cpp">
+      <Filter>Source Files\balloon</Filter>
+    </ClCompile>
     <ClCompile Include="algos\rinhash\rinhash_scanhash.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
