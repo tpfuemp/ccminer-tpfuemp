@@ -31,6 +31,9 @@ extern "C" {
 #define TPB 768
 #define NPT 384
 #define NBN 2
+/* slot 0 = atomicInc count, slots 1.. = nonces (the blake2s.cu shape). Sized
+ * above the 2 the host submits so the flood warning stays meaningful. */
+#define MAX_RESULTS 8
 
 __constant__ uint32_t _ALIGN(16) d_data[21];
 
@@ -254,7 +257,10 @@ loopstart:
 		v[7]  = ROTR32(v[7] ^ v[8], 7);
 
 		// only compute h6 & 7
-		if((v[15]^h7)==v[7]){
+		/* h6 is only needed if h7 already passes, so keep the tail behind a test
+		 * on h7 alone. Derived from the target, not hard-coded to zero. */
+		const uint32_t hh7 = cuda_swab32(h7^v[7]^v[15]);
+		if (hh7 <= (uint32_t) (highTarget >> 32)) {
 			v[ 1] += (m[15] ^ z[ 4]) + v[6];
 			v[ 3] += (m[2] ^ z[10]) + v[4];
 			v[12]  = __byte_perm(v[12] ^ v[ 1],0, 0x1032);
@@ -271,19 +277,15 @@ loopstart:
 			v[11] += v[12];
 			v[ 6] = ROTR32(v[ 6] ^ v[11], 7);
 
-			if(cuda_swab32(h6^v[6]^v[14]) <= highTarget) {
-#if NBN == 2
-				/* keep the smallest nonce, + extra one if found */
-				if (m[3] < resNonce[0]){
-					resNonce[1] = resNonce[0];
-					resNonce[0] = m[3];
-				}
-				else
-					resNonce[1] = m[3];
-#else
-				resNonce[0] = m[3];
-#endif
-				return; //<-- this may cause a problem on extranonce if the extranonce is on position current_nonce + X * step where X=[1,2,3..,N]
+			const uint64_t high = ((uint64_t) hh7 << 32) | cuda_swab32(h6^v[6]^v[14]);
+			if (high <= highTarget) {
+				/* slot 0 is the count; the slot write must stay bounded. Order does
+				 * not matter, the host picks the better nonce by target ratio. */
+				const uint32_t pos = atomicInc(&resNonce[0], UINT32_MAX) + 1;
+				if (pos < MAX_RESULTS)
+					resNonce[pos] = (uint32_t) m[3];
+				/* No return: keep scanning this thread's remaining strided nonces,
+				 * or a better one later in the stride is never examined. */
 			}
 		}
 	m3+=step;
@@ -375,10 +377,21 @@ extern "C" int scanhash_vanilla(int thr_id, struct work* work, uint32_t max_nonc
 	uint32_t *pdata = work->data;
 	uint32_t *ptarget = work->target;
 	const uint32_t first_nonce  = pdata[19];
-	const uint32_t targetHigh   = ptarget[6];
+	uint64_t targetHigh = ((uint64_t*) ptarget)[3];
+
+	if (opt_benchmark) {
+		/* Loosen the target itself, not just the device bound, and keep the low
+		 * word wide so fulltest() still accepts everything the screen passes. */
+		ptarget[7] = 0x000000ffu;
+		ptarget[6] = 0xffffffffu;
+		targetHigh = ((uint64_t*) ptarget)[3];
+	}
 	int dev_id = device_map[thr_id];
 
-	int intensity = (device_sm[dev_id] > 500 && !is_windows()) ? 30 : 24;
+	/* NPT*TPB is large, so a low intensity leaves too few blocks to fill the
+	 * device and per-launch cost dominates. 27 is the smallest size on the
+	 * throughput plateau; going higher only lengthens the batch. */
+	int intensity = (device_sm[dev_id] > 500 && !is_windows()) ? 30 : 27;
 	if (device_sm[dev_id] < 350) intensity = 22;
 	uint32_t throughput = cuda_default_throughput(thr_id, 1U << intensity);
 	if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
@@ -396,8 +409,9 @@ extern "C" int scanhash_vanilla(int thr_id, struct work* work, uint32_t max_nonc
 
 		cuda_get_arch(thr_id);
 
-		CUDA_CALL_OR_RET_X(cudaMalloc(&d_resNonce[thr_id], NBN * sizeof(uint32_t)), -1);
-		CUDA_CALL_OR_RET_X(cudaMallocHost(&h_resNonce[thr_id], NBN * sizeof(uint32_t)), -1);
+		CUDA_CALL_OR_RET_X(cudaMalloc(&d_resNonce[thr_id], MAX_RESULTS * sizeof(uint32_t)), -1);
+		CUDA_CALL_OR_RET_X(cudaMallocHost(&h_resNonce[thr_id], MAX_RESULTS * sizeof(uint32_t)), -1);
+		CUDA_CALL_OR_RET_X(cudaMemset(d_resNonce[thr_id], 0x00, MAX_RESULTS * sizeof(uint32_t)), -1);
 		cudaStreamCreate(&streams[thr_id]);
 		init[thr_id] = true;
 	}
@@ -407,8 +421,6 @@ extern "C" int scanhash_vanilla(int thr_id, struct work* work, uint32_t max_nonc
 	for (int k = 0; k < 16; k++)
 		be32enc(&endiandata[k], pdata[k]);
 
-	cudaMemsetAsync(d_resNonce[thr_id], 0xff, sizeof(uint32_t),streams[thr_id]);
-
 	vanilla_cpu_setBlock_16(thr_id,endiandata,&pdata[16]);
 
 	const dim3 grid((throughput + (NPT*TPB)-1)/(NPT*TPB));
@@ -416,35 +428,51 @@ extern "C" int scanhash_vanilla(int thr_id, struct work* work, uint32_t max_nonc
 	int rc = 0;
 
 	do {
+		/* Only the count needs clearing; the slots are armed once at init. */
+		cudaMemsetAsync(d_resNonce[thr_id], 0x00, sizeof(uint32_t),streams[thr_id]);
 		vanilla_gpu_hash_16_8<<<grid,block, 0, streams[thr_id]>>>(throughput, pdata[19], d_resNonce[thr_id], targetHigh);
-		cudaMemcpyAsync(h_resNonce[thr_id], d_resNonce[thr_id], NBN*sizeof(uint32_t), cudaMemcpyDeviceToHost,streams[thr_id]);
+		cudaMemcpyAsync(h_resNonce[thr_id], d_resNonce[thr_id], MAX_RESULTS*sizeof(uint32_t), cudaMemcpyDeviceToHost,streams[thr_id]);
 		*hashes_done = pdata[19] - first_nonce + throughput;
 		cudaStreamSynchronize(streams[thr_id]);
 
-		if (h_resNonce[thr_id][0] != UINT32_MAX){
+		uint32_t count = h_resNonce[thr_id][0];	/* slot 0 is the atomicInc count */
+		if (count >= MAX_RESULTS) {
+			gpulog(LOG_WARNING, thr_id, "candidates flood: %u", count);
+			count = MAX_RESULTS - 1;
+		}
+		if (count > 0){
 			uint32_t vhashcpu[8];
-			uint32_t Htarg = (uint32_t)targetHigh;
 
 			for (int k=0; k < 19; k++)
 				be32enc(&endiandata[k], pdata[k]);
 
-			be32enc(&endiandata[19], h_resNonce[thr_id][0]);
+			be32enc(&endiandata[19], h_resNonce[thr_id][1]);
 			vanillahash(vhashcpu, endiandata, blakerounds);
 
-			if (vhashcpu[6] <= Htarg && fulltest(vhashcpu, ptarget)) {
+			/* fulltest() alone is authoritative; the old vhashcpu[6] <= Htarg
+			 * prefix repeated the device's narrowing and dropped the same shares. */
+			if (fulltest(vhashcpu, ptarget)) {
 				work->valid_nonces = 1;
-				work->nonces[0] = h_resNonce[thr_id][0];
+				work->nonces[0] = h_resNonce[thr_id][1];
 				work_set_target_ratio(work, vhashcpu);
 #if NBN > 1
-				if (h_resNonce[thr_id][1] != UINT32_MAX) {
-					work->nonces[1] = h_resNonce[thr_id][1];
-					be32enc(&endiandata[19], h_resNonce[thr_id][1]);
+				if (count > 1) {
+					work->nonces[1] = h_resNonce[thr_id][2];
+					be32enc(&endiandata[19], h_resNonce[thr_id][2]);
 					vanillahash(vhashcpu, endiandata, blakerounds);
-					if (bn_hash_target_ratio(vhashcpu, ptarget) > work->shareratio[0]) {
-						work_set_target_ratio(work, vhashcpu);
-						xchg(work->nonces[0], work->nonces[1]);
+					/* The second nonce needs the same re-verify as the first, or a
+					 * kernel fault here becomes a bad share instead of a reject. */
+					if (fulltest(vhashcpu, ptarget)) {
+						if (bn_hash_target_ratio(vhashcpu, ptarget) > work->shareratio[0]) {
+							work_set_target_ratio(work, vhashcpu);
+							xchg(work->nonces[0], work->nonces[1]);
+						} else {
+							bn_set_target_ratio(work, vhashcpu, 1);
+						}
+						work->valid_nonces = 2;
 					}
-					work->valid_nonces = 2;
+					/* Cursor stays outside the guard: a rejected second nonce is still
+					 * ground the scan covered, and re-scanning it would stall. */
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				} else {
 					pdata[19] = work->nonces[0] + 1; // cursor
@@ -452,10 +480,10 @@ extern "C" int scanhash_vanilla(int thr_id, struct work* work, uint32_t max_nonc
 #endif
 				return work->valid_nonces;
 			}
-			else if (vhashcpu[6] > Htarg) {
+			else { /* terminal: never drop a candidate silently */
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
-					gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", h_resNonce[thr_id][0]);
+					gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", h_resNonce[thr_id][1]);
 				pdata[19] = work->nonces[0] + 1;
 				continue;
 			}

@@ -45,6 +45,10 @@ static uint32_t *h_resNonce[MAX_GPUS];
 
 /* max count of found nonces in one call */
 #define NBN 2
+/* Result buffer: slot 0 is an atomicInc count, slots 1..NBN are nonces. A
+ * count rather than an in-band nonce means 0 stays a legal nonce, and the
+ * bounded slot write below keeps a flood inside the buffer. */
+#define MAX_RESULTS 8
 static __thread uint32_t extra_results[NBN] = { UINT32_MAX };
 
 #define GSPREC(a,b,c,d,x,y) { \
@@ -260,23 +264,55 @@ void blake256_gpu_hash_16(const uint32_t threads, const uint32_t startNonce, uin
 
 		blake256_compress_14(h, ending, 640);
 
-		if (h[7] == 0 && cuda_swab32(h[6]) <= highTarget) {
-#if NBN == 2
-			if (resNonce[0] != UINT32_MAX)
-				resNonce[1] = nonce;
-			else
-				resNonce[0] = nonce;
-#else
-			resNonce[0] = nonce;
-#endif
+		/* Real 64-bit compare on the top two target words. The old
+		 * (h[7] == 0 && ...) form dropped valid shares below share diff 1. */
+		const uint64_t high = ((uint64_t) cuda_swab32(h[7]) << 32) | cuda_swab32(h[6]);
+		if (high <= highTarget) {
+			const uint32_t pos = atomicInc(&resNonce[0], UINT32_MAX) + 1;
+			if (pos < MAX_RESULTS)
+				resNonce[pos] = nonce;
 		}
 	}
 }
 
+/* Diagnostic checksum over a nonce range: two order-independent
+ * accumulators over the (h7,h6) pair the mining kernel screens. Calls the
+ * same compress body as the mining kernel, so it validates the shipping
+ * arithmetic. See blake256_differential() for why acc[1] is needed. */
 __global__
-#if __CUDA_ARCH__ >= 500
+void blake256_gpu_checksum_14(const uint32_t threads, const uint32_t startNonce, uint64_t *acc)
+{
+	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
+	if (thread < threads)
+	{
+		const uint32_t nonce = startNonce + thread;
+		uint32_t _ALIGN(16) h[8];
+
+		#pragma unroll
+		for (int i = 0; i < 8; i++)
+			h[i] = d_data[i];
+
+		uint32_t _ALIGN(16) ending[4];
+		ending[0] = d_data[8];
+		ending[1] = d_data[9];
+		ending[2] = d_data[10];
+		ending[3] = nonce;
+
+		blake256_compress_14(h, ending, 640);
+
+		const uint64_t w = ((uint64_t) h[7] << 32) | h[6];
+		/* Cast to unsigned long long, not uint64_t: on Linux uint64_t is
+		 * unsigned long and would not match the CUDA atomic overload. */
+		atomicXor((unsigned long long*) &acc[0], (unsigned long long) w);
+		atomicXor((unsigned long long*) &acc[1],
+			(unsigned long long) (w * (2ULL * (uint64_t) nonce + 1ULL)));
+	}
+}
+
+__global__
+/* The bounds are load-bearing: they are what earns this kernel 100%
+ * occupancy where its 14-round sibling gets 66.7%. */
 __launch_bounds__(512, 3) /* 40 regs */
-#endif
 void blake256_gpu_hash_16_8(const uint32_t threads, const uint32_t startNonce, uint32_t *resNonce, const uint64_t highTarget)
 {
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
@@ -400,18 +436,17 @@ void blake256_gpu_hash_16_8(const uint32_t threads, const uint32_t startNonce, u
 		//h[6] ^= v[6] ^ v[14];
 		//h[7] ^= v[7] ^ v[15];
 
-		if ((h[7]^v[7]^v[15]) == 0) // h7
+		/* Target-derived early-out, then a real 64-bit compare: the final GSPREC is
+		 * only needed for h6, so it stays behind a test on h7 alone. */
+		const uint32_t h7 = cuda_swab32(h[7]^v[7]^v[15]);
+		if (h7 <= (uint32_t) (highTarget >> 32))
 		{
 			GSPREC(3, 4, 0x9, 0xE, 2, 10);
-			if (cuda_swab32(h[6]^v[6]^v[14]) <= highTarget) {
-#if NBN == 2
-				if (resNonce[0] != UINT32_MAX)
-					resNonce[1] = nonce;
-				else
-					resNonce[0] = nonce;
-#else
-				resNonce[0] = nonce;
-#endif
+			const uint64_t high = ((uint64_t) h7 << 32) | cuda_swab32(h[6]^v[6]^v[14]);
+			if (high <= highTarget) {
+				const uint32_t pos = atomicInc(&resNonce[0], UINT32_MAX) + 1;
+				if (pos < MAX_RESULTS)
+					resNonce[pos] = nonce;
 			}
 		}
 	}
@@ -426,8 +461,10 @@ static uint32_t blake256_cpu_hash_16(const int thr_id, const uint32_t threads, c
 	dim3 grid((threads + TPB-1)/TPB);
 	dim3 block(TPB);
 
-	/* Check error on Ctrl+C or kill to prevent segfaults on exit */
-	if (cudaMemset(d_resNonce[thr_id], 0xff, NBN*sizeof(uint32_t)) != cudaSuccess)
+	/* Only the count needs clearing per launch - the host reads slots 1..count,
+	 * so stale nonces in the tail are never looked at. The full buffer is armed
+	 * once at init. Errors are checked so Ctrl+C cannot segfault on exit. */
+	if (cudaMemset(d_resNonce[thr_id], 0x00, sizeof(uint32_t)) != cudaSuccess)
 		return result;
 
 	if (rounds == 8)
@@ -435,10 +472,19 @@ static uint32_t blake256_cpu_hash_16(const int thr_id, const uint32_t threads, c
 	else
 		blake256_gpu_hash_16  <<<grid, block>>> (threads, startNonce, d_resNonce[thr_id], highTarget);
 
-	if (cudaSuccess == cudaMemcpy(h_resNonce[thr_id], d_resNonce[thr_id], NBN*sizeof(uint32_t), cudaMemcpyDeviceToHost)) {
-		result = h_resNonce[thr_id][0];
-		for (int n=0; n < (NBN-1); n++)
-			extra_results[n] = h_resNonce[thr_id][n+1];
+	if (cudaSuccess == cudaMemcpy(h_resNonce[thr_id], d_resNonce[thr_id], MAX_RESULTS*sizeof(uint32_t), cudaMemcpyDeviceToHost)) {
+		uint32_t count = h_resNonce[thr_id][0];
+		if (count >= MAX_RESULTS) {
+			/* Logged, not swallowed: a flood means the target is far looser than
+			 * the buffer was sized for, which is worth knowing. */
+			gpulog(LOG_WARNING, thr_id, "candidates flood: %u", count);
+			count = MAX_RESULTS - 1;
+		}
+		if (count > 0)
+			result = h_resNonce[thr_id][1];
+		/* Always reset the extra slot. Leaving it stale is how a nonce from an
+		 * earlier launch gets submitted against the current job. */
+		extra_results[0] = (count > 1) ? h_resNonce[thr_id][2] : UINT32_MAX;
 	}
 	return result;
 }
@@ -467,6 +513,85 @@ void blake256_cpu_setBlock_16(uint32_t *penddata, const uint32_t *midstate, cons
 	CUDA_SAFE_CALL(cudaMemcpyToSymbol(d_data, data, 32 + 12, 0, cudaMemcpyHostToDevice));
 }
 
+extern bool blake256_device_selftest(int thr_id);
+
+/* Host side of the differential. Allocates its own scratch so it cannot disturb
+ * the mining result buffer, and is safe to call before scanhash has run once. */
+__host__
+void blake256_differential(int thr_id, uint32_t threads, uint32_t startNonce, uint64_t *acc)
+{
+	uint64_t *d_acc = NULL;
+	acc[0] = acc[1] = 0;
+
+	if (cudaMalloc(&d_acc, 2 * sizeof(uint64_t)) != cudaSuccess)
+		return;
+	if (cudaMemset(d_acc, 0, 2 * sizeof(uint64_t)) == cudaSuccess) {
+		const dim3 grid((threads + TPB - 1) / TPB);
+		const dim3 block(TPB);
+		blake256_gpu_checksum_14 <<<grid, block>>> (threads, startNonce, d_acc);
+		if (cudaDeviceSynchronize() == cudaSuccess)
+			cudaMemcpy(acc, d_acc, 2 * sizeof(uint64_t), cudaMemcpyDeviceToHost);
+	}
+	cudaFree(d_acc);
+}
+
+/* Upload the job words the kernels read, from a raw pdata[] - the self-test needs
+ * this because blake256mid() is static and the midstate must match the rounds. */
+__host__
+void blake256_setBlock_selftest(const uint32_t *pdata_words, int8_t rounds)
+{
+	uint32_t _ALIGN(64) ed[16], mid[8], pend[3];
+
+	for (int k = 0; k < 16; k++)
+		be32enc(&ed[k], pdata_words[k]);
+	blake256mid(mid, ed, rounds);
+
+	pend[0] = pdata_words[16];
+	pend[1] = pdata_words[17];
+	pend[2] = pdata_words[18];
+	blake256_cpu_setBlock_16(pend, mid, NULL);
+}
+
+/* Permanent -D consistency check over a bounded nonce range, using the job
+ * words already uploaded for the live job. Costs `count` CPU hashes, so it
+ * runs once per job rather than per launch. 14 rounds only: d_data[0..7] is
+ * a midstate computed with the job's own round count. */
+__host__
+static void blake256_check_range(int thr_id, const uint32_t *pdata, uint32_t startNonce, uint32_t count)
+{
+	uint32_t _ALIGN(64) ed[20], vhash[8];
+	uint64_t gpu[2] = { 0, 0 }, cpu[2] = { 0, 0 };
+
+	blake256_differential(thr_id, count, startNonce, gpu);
+
+	/* Build the header from pdata directly: scanhash fills endiandata[16..19]
+	 * only inside its candidate branch. */
+	for (int k = 0; k < 19; k++)
+		be32enc(&ed[k], pdata[k]);
+
+	for (uint32_t i = 0; i < count; i++) {
+		const uint32_t nonce = startNonce + i;
+		be32enc(&ed[19], nonce);
+		blake256hash(vhash, ed, 14);
+		/* un-swap to the device's state-word order: sph writes the digest
+		 * big-endian, so a little-endian host reads back swab32(H[k]). */
+		const uint64_t w = ((uint64_t) swab32(vhash[7]) << 32) | swab32(vhash[6]);
+		cpu[0] ^= w;
+		cpu[1] ^= w * (2ull * (uint64_t) nonce + 1ull);
+	}
+
+	if (gpu[0] != cpu[0] || gpu[1] != cpu[1]) {
+		gpulog(LOG_ERR, thr_id, "differential MISMATCH over %u nonces from %08x",
+			count, startNonce);
+		gpulog(LOG_ERR, thr_id, "  gpu %016llx / %016llx  cpu %016llx / %016llx",
+			(unsigned long long) gpu[0], (unsigned long long) gpu[1],
+			(unsigned long long) cpu[0], (unsigned long long) cpu[1]);
+	} else {
+		gpulog(LOG_DEBUG, thr_id, "differential OK: %u nonces from %08x (xor %016llx)",
+			count, startNonce, (unsigned long long) gpu[0]);
+	}
+}
+
 static bool init[MAX_GPUS] = { 0 };
 
 extern "C" int scanhash_blake256(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done, int8_t blakerounds=14)
@@ -490,8 +615,17 @@ extern "C" int scanhash_blake256(int thr_id, struct work* work, uint32_t max_non
 	int rc = 0;
 
 	if (opt_benchmark) {
-		targetHigh = 0x1ULL << 32;
-		ptarget[6] = swab32(0xff);
+		/* Loosen the target itself, then derive the device's 64-bit bound from it,
+		 * so the screen and fulltest() are governed by the same words. ptarget[7]
+		 * must be non-zero, both to exercise the region the old screen discarded
+		 * and to lift the hit rate off 2^-32 - at 2^-32 a single swept window most
+		 * likely finds nothing at all. Keep the LOWER word wide: a narrow
+		 * ptarget[6] under a loose ptarget[7] would make fulltest()'s accept region
+		 * a strict subset of the screen's, and the same boundary nonce would then
+		 * be re-found and re-rejected for ever. */
+		ptarget[7] = 0x000000ffu;
+		ptarget[6] = 0xffffffffu;
+		targetHigh = ((uint64_t*) ptarget)[3];
 	}
 
 	if (!init[thr_id])
@@ -508,8 +642,12 @@ extern "C" int scanhash_blake256(int thr_id, struct work* work, uint32_t max_non
 
 		cuda_get_arch(thr_id);
 
-		CUDA_CALL_OR_RET_X(cudaMalloc(&d_resNonce[thr_id], NBN * sizeof(uint32_t)), -1);
-		CUDA_CALL_OR_RET_X(cudaMallocHost(&h_resNonce[thr_id], NBN * sizeof(uint32_t)), -1);
+		CUDA_CALL_OR_RET_X(cudaMalloc(&d_resNonce[thr_id], MAX_RESULTS * sizeof(uint32_t)), -1);
+		CUDA_CALL_OR_RET_X(cudaMallocHost(&h_resNonce[thr_id], MAX_RESULTS * sizeof(uint32_t)), -1);
+		/* Arm the whole buffer once, so the tail slots the per-launch readback
+		 * copies are never uninitialised (initcheck sees that immediately). */
+		CUDA_CALL_OR_RET_X(cudaMemset(d_resNonce[thr_id], 0x00, MAX_RESULTS * sizeof(uint32_t)), -1);
+		blake256_device_selftest(thr_id); // fail-closed, exits on mismatch
 		init[thr_id] = true;
 	}
 
@@ -518,6 +656,11 @@ extern "C" int scanhash_blake256(int thr_id, struct work* work, uint32_t max_non
 
 	blake256mid(midstate, endiandata, blakerounds);
 	blake256_cpu_setBlock_16(&pdata[16], midstate, ptarget);
+
+	/* After setBlock, never before: the differential reads the job words the
+	 * device already holds. */
+	if (opt_debug && blakerounds == 14)
+		blake256_check_range(thr_id, pdata, pdata[19], 2048);
 
 	do {
 		// GPU HASH (second block only, first is midstate)
@@ -528,7 +671,6 @@ extern "C" int scanhash_blake256(int thr_id, struct work* work, uint32_t max_non
 		if (work->nonces[0] != UINT32_MAX)
 		{
 			uint32_t _ALIGN(64) vhashcpu[8];
-			const uint32_t Htarg = ptarget[6];
 
 			for (int k=16; k < 19; k++)
 				be32enc(&endiandata[k], pdata[k]);
@@ -536,7 +678,9 @@ extern "C" int scanhash_blake256(int thr_id, struct work* work, uint32_t max_non
 			be32enc(&endiandata[19], work->nonces[0]);
 			blake256hash(vhashcpu, endiandata, blakerounds);
 
-			if (vhashcpu[6] <= Htarg && fulltest(vhashcpu, ptarget))
+			/* fulltest() alone is the authoritative check - MSW-first over all eight
+			 * words. A `vhashcpu[6] <= Htarg &&` prefix would repeat the narrowing. */
+			if (fulltest(vhashcpu, ptarget))
 			{
 				work->valid_nonces = 1;
 				work_set_target_ratio(work, vhashcpu);
@@ -545,7 +689,7 @@ extern "C" int scanhash_blake256(int thr_id, struct work* work, uint32_t max_non
 					work->nonces[1] = extra_results[0];
 					be32enc(&endiandata[19], work->nonces[1]);
 					blake256hash(vhashcpu, endiandata, blakerounds);
-					if (vhashcpu[6] <= Htarg && fulltest(vhashcpu, ptarget)) {
+					if (fulltest(vhashcpu, ptarget)) {
 						if (bn_hash_target_ratio(vhashcpu, ptarget) > work->shareratio[0]) {
 							work_set_target_ratio(work, vhashcpu);
 							xchg(work->nonces[0], work->nonces[1]);
@@ -562,10 +706,13 @@ extern "C" int scanhash_blake256(int thr_id, struct work* work, uint32_t max_non
 #endif
 				return work->valid_nonces;
 			}
-			else if (vhashcpu[6] > Htarg) {
+			else {
+				/* Terminal, not `else if`: testing vhashcpu[6] again leaves a third, silent
+				 * path where a candidate is neither accepted nor rejected and the cursor
+				 * then skips a whole throughput. */
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
-				gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
+					gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
 				pdata[19] = work->nonces[0] + 1;
 				continue;
 			}

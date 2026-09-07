@@ -87,7 +87,9 @@ algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh algos/y
 			  algos/stages/cuda_blake256.cu algos/stages/cuda_groestl256.cu \
 			  algos/stages/cuda_skein256.cu \
 			  algos/blake256/blake256.cu algos/blake256/decred.cu algos/blake256/vanilla.cu \
+			  algos/blake256/cuda_blake256_selftest.cu \
 			  algos/blake2s/blake2s.cu sph/blake2s.c \
+			  algos/blake2s/cuda_blake2s_selftest.cu \
 			  algos/bmw/bmw.cu algos/bmw/bmw512.cu algos/stages/cuda_bmw.cu \
 			  algos/gost/cuda_gosthash.cu algos/gost/gost.cu \
 			  algos/cryptonight/xmr-rpc.cpp algos/cryptonight/wildkeccak-cpu.cpp algos/cryptonight/wildkeccak.cu \
@@ -110,6 +112,7 @@ algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh algos/y
 			  algos/sha512256d/cuda_sha512256d_selftest.cu cuda/sha512_device.cuh \
 			  algos/sha256dv/sha256dv.cu \
 			  algos/blake2b/blake2b.cu \
+			  algos/blake2b/cuda_blake2b_selftest.cu \
 			  algos/keccak/keccak256.cu algos/keccak/cuda_keccak256.cu \
 			  algos/keccak/cuda_keccak_selftest.cu cuda/keccak_device.cuh \
 			  cuda/xfamily_selftest.cu cuda/selftest_gate.cuh cuda/blake512_device.cuh \

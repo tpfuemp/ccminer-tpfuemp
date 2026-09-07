@@ -514,12 +514,12 @@ static void gr_screen_audit(int thr_id, uint32_t throughput, uint32_t start_nonc
 	const char *ctl = (mode >= 2) ? "  [negative control armed - a MISS here is EXPECTED]" : "";
 
 	if (gpucnt != hostcnt)
-		gpulog(LOG_ERR, thr_id, "gr V-12 MISS: screen counted %u, host counted %u over [%08x,+%u) first=%08x%s",
+		gpulog(LOG_ERR, thr_id, "gr screen/host MISS: screen counted %u, host counted %u over [%08x,+%u) first=%08x%s",
 			gpucnt, hostcnt, start_nonce, throughput, hostfirst, ctl);
 	else if (!sawreported)
-		gpulog(LOG_ERR, thr_id, "gr V-12: screen reported %08x which the host does not find%s", reported, ctl);
+		gpulog(LOG_ERR, thr_id, "gr screen/host: screen reported %08x which the host does not find%s", reported, ctl);
 	else if (opt_debug)
-		gpulog(LOG_DEBUG, thr_id, "gr V-12 ok: %u candidates over [%08x,+%u)", hostcnt, start_nonce, throughput);
+		gpulog(LOG_DEBUG, thr_id, "gr screen/host ok: %u candidates over [%08x,+%u)", hostcnt, start_nonce, throughput);
 }
 
 extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done)

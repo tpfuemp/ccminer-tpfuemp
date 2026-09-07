@@ -385,6 +385,7 @@
     <CudaCompile Include="algos\ghostrider\ghostrider.cu" />
     <CudaCompile Include="algos\odocrypt\cuda_odocrypt.cu" />
     <CudaCompile Include="algos\blake2b\blake2b.cu" />
+    <CudaCompile Include="algos\blake2b\cuda_blake2b_selftest.cu" />
     <CudaCompile Include="algos/heavyhash/heavyhash.cu" />
     <CudaCompile Include="algos/heavyhash/cuda_heavyhash.cu" />
     <CudaCompile Include="algos\cryptonight\cryptolight.cu" />
@@ -594,14 +595,14 @@
     </CudaCompile>
     <CudaCompile Include="algos\blake256\blake256.cu">
       <MaxRegCount>64</MaxRegCount>
-      <AdditionalOptions Condition="'$(Configuration)'=='Release'">--ptxas-options="-dlcm=cg" %(AdditionalOptions)</AdditionalOptions>
-      <FastMath>true</FastMath>
     </CudaCompile>
     <CudaCompile Include="algos\blake2s\blake2s.cu" />
+    <CudaCompile Include="algos\blake2s\cuda_blake2s_selftest.cu" />
     <CudaCompile Include="algos\blake256\decred.cu">
       <MaxRegCount>128</MaxRegCount>
     </CudaCompile>
     <CudaCompile Include="algos\blake256\vanilla.cu" />
+    <CudaCompile Include="algos\blake256\cuda_blake256_selftest.cu" />
     <CudaCompile Include="algos\keccak\keccak256.cu" />
     <CudaCompile Include="algos\keccak\cuda_keccak_selftest.cu" />
     <CudaCompile Include="algos\sha3d\sha3d.cu" />

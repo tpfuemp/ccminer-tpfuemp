@@ -1183,6 +1183,12 @@
     <CudaCompile Include="algos\blake2s\blake2s.cu">
       <Filter>Source Files\CUDA\blake2s</Filter>
     </CudaCompile>
+    <CudaCompile Include="algos\blake2s\cuda_blake2s_selftest.cu">
+      <Filter>Source Files\CUDA\blake2s</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\blake256\cuda_blake256_selftest.cu">
+      <Filter>Source Files\CUDA\blake256</Filter>
+    </CudaCompile>
     <CudaCompile Include="algos\lbry\cuda_lbry_merged.cu">
       <Filter>Source Files\CUDA\lbry</Filter>
     </CudaCompile>
@@ -1341,6 +1347,9 @@
     <CudaCompile Include="algos\argon2d\argon2d_fill.cu" />
     <CudaCompile Include="algos\argon2d\blake2b_kernels.cu" />
     <CudaCompile Include="algos\blake2b\blake2b.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\blake2b\cuda_blake2b_selftest.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\balloon\cuda_balloon.cu">

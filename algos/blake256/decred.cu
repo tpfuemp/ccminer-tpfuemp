@@ -16,7 +16,9 @@ extern "C" {
 #define TPB 640
 
 /* max count of found nonces in one call (like sgminer) */
-#define MAX_RESULTS 4
+/* Sized above the 2 nonces the host can submit, so a flood warning means an
+ * unusual launch rather than every launch. */
+#define MAX_RESULTS 8
 
 /* hash by cpu with blake 256 */
 extern "C" void decred_hash(void *output, const void *input)
@@ -116,7 +118,7 @@ static uint32_t *h_resNonce[MAX_GPUS];
 }
 
 __global__ __launch_bounds__(TPB,1)
-void decred_gpu_hash_nonce(const uint32_t threads, const uint32_t startNonce, uint32_t *resNonce, const uint32_t highTarget)
+void decred_gpu_hash_nonce(const uint32_t threads, const uint32_t startNonce, uint32_t *resNonce, const uint64_t highTarget)
 {
 	const uint32_t thread = blockDim.x * blockIdx.x + threadIdx.x;
 
@@ -160,16 +162,23 @@ void decred_gpu_hash_nonce(const uint32_t threads, const uint32_t startNonce, ui
 		pxorGS2(   0, 4, 8, 12, 1, 5, 9, 13); pxorGS2(   2, 6, 10, 14, 3, 7, 11, 15); pxorx1GS2( 0, 5, 10, 15, 1, 6, 11, 12); pxorGS2(   2, 7, 8, 13, 3, 4, 9, 14);
 		pxorx1GS2( 0, 4, 8, 12, 1, 5, 9, 13); pxorGS2(   2, 6, 10, 14, 3, 7, 11, 15); pxorGS2(   0, 5, 10, 15, 1, 6, 11, 12); pxorGS(    2, 7, 8, 13);
 
-		if ((c_h[1]^v[15]) == v[7]) {
+		/* Target-derived early-out on h7 alone; the block below is only needed
+		 * for h6. At ptarget[7] == 0 this reduces to the old equality test. */
+		const uint32_t hh7 = cuda_swab32(c_h[1]^v[15]^v[7]);
+		if (hh7 <= (uint32_t) (highTarget >> 32)) {
 			v[ 3] += c_xors[i++] + v[4];
 			v[14] = ROL16(v[14] ^ v[3]);
 			v[ 9] += v[14];
 			v[ 4] = ROTR32(v[4] ^ v[9], 12);
 			v[ 3] += c_xors[i++] + v[4];
 			v[14] = ROR8(v[14] ^ v[3]);
-			if(cuda_swab32((c_h[0]^v[6]^v[14])) <= highTarget) {
+			const uint64_t high = ((uint64_t) hh7 << 32) | cuda_swab32(c_h[0]^v[6]^v[14]);
+			if (high <= highTarget) {
+				/* The counter is deliberately unbounded so the host can see a
+				 * flood, so the slot write must be bounded instead. */
 				uint32_t pos = atomicInc(&resNonce[0], UINT32_MAX)+1;
-				resNonce[pos] = nonce;
+				if (pos < MAX_RESULTS)
+					resNonce[pos] = nonce;
 				return;
 			}
 		}
@@ -351,7 +360,15 @@ extern "C" int scanhash_decred(int thr_id, struct work* work, uint32_t max_nonce
 	uint32_t *pnonce = &pdata[DCR_NONCE_OFT32];
 
 	const uint32_t first_nonce = *pnonce;
-	const uint32_t targetHigh = opt_benchmark ? 0x1ULL : ptarget[6];
+	uint64_t targetHigh = ((uint64_t*) ptarget)[3];
+
+	if (opt_benchmark) {
+		/* Loosen both target words and derive the device bound from them, or the
+		 * screen still demands a near-zero top word and never fires. */
+		ptarget[7] = 0x000000ffu;
+		ptarget[6] = 0xffffffffu;
+		targetHigh = ((uint64_t*) ptarget)[3];
+	}
 
 	const int dev_id = device_map[thr_id];
 	int intensity = (device_sm[dev_id] > 500 && !is_windows()) ? 29 : 25;
@@ -375,6 +392,12 @@ extern "C" int scanhash_decred(int thr_id, struct work* work, uint32_t max_nonce
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
 		cuda_get_arch(thr_id);
+
+		/* Decred's proof-of-work moved to BLAKE3 with DCP-0011. This kernel is
+		 * the pre-fork BLAKE-256, so a pool following consensus cannot accept its
+		 * shares. Kept for benchmarking only; mining it needs a BLAKE3 port. */
+		gpulog(LOG_WARNING, thr_id, "decred: this is pre-DCP-0011 BLAKE-256;"
+			" Decred now uses BLAKE3, so shares WILL be rejected. Benchmark only.");
 
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_resNonce[thr_id], MAX_RESULTS*sizeof(uint32_t)), -1);
 		CUDA_CALL_OR_RET_X(cudaMallocHost(&h_resNonce[thr_id], MAX_RESULTS*sizeof(uint32_t)), -1);
@@ -402,11 +425,19 @@ extern "C" int scanhash_decred(int thr_id, struct work* work, uint32_t max_nonce
 		{
 			uint32_t _ALIGN(64) vhash[8];
 
-			cudaMemcpy(resNonces, d_resNonce[thr_id], (resNonces[0]+1)*sizeof(uint32_t), cudaMemcpyDeviceToHost);
+			/* Clamp into a local and restore it after the copy: the copy overwrites
+			 * slot 0 with the unbounded device counter. */
+			uint32_t count = resNonces[0];
+			if (count >= MAX_RESULTS) {
+				gpulog(LOG_WARNING, thr_id, "candidates flood: %u", count);
+				count = MAX_RESULTS - 1;
+			}
+			cudaMemcpy(resNonces, d_resNonce[thr_id], (count+1)*sizeof(uint32_t), cudaMemcpyDeviceToHost);
+			resNonces[0] = count;
 
 			be32enc(&endiandata[DCR_NONCE_OFT32], resNonces[1]);
 			decred_hash(vhash, endiandata);
-			if (vhash[6] <= ptarget[6] && fulltest(vhash, ptarget))
+			if (fulltest(vhash, ptarget))
 			{
 				work->valid_nonces = 1;
 				work_set_target_ratio(work, vhash);
@@ -418,7 +449,7 @@ extern "C" int scanhash_decred(int thr_id, struct work* work, uint32_t max_nonce
 				{
 					be32enc(&endiandata[DCR_NONCE_OFT32], resNonces[n]);
 					decred_hash(vhash, endiandata);
-					if (vhash[6] <= ptarget[6] && fulltest(vhash, ptarget)) {
+					if (fulltest(vhash, ptarget)) {
 						work->nonces[1] = swab32(resNonces[n]);
 						if (bn_hash_target_ratio(vhash, ptarget) > work->shareratio[0]) {
 							// we really want the best first ? depends...
@@ -436,7 +467,7 @@ extern "C" int scanhash_decred(int thr_id, struct work* work, uint32_t max_nonce
 						gpulog(LOG_DEBUG, thr_id, "multiple nonces 1:%08x (%g) %u:%08x (%g)",
 							work->nonces[0], work->sharediff[0], n, work->nonces[1], work->sharediff[1]);
 
-					} else if (vhash[6] > ptarget[6]) {
+					} else { /* terminal: never drop a candidate silently */
 						gpu_increment_reject(thr_id);
 						if (!opt_quiet)
 						gpulog(LOG_WARNING, thr_id, "result %u for %08x does not validate on CPU!", n, resNonces[n]);
@@ -444,7 +475,7 @@ extern "C" int scanhash_decred(int thr_id, struct work* work, uint32_t max_nonce
 				}
 				return work->valid_nonces;
 
-			} else if (vhash[6] > ptarget[6]) {
+			} else { /* terminal: never drop a candidate silently */
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
 					gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", resNonces[1]);
