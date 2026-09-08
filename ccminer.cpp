@@ -3098,7 +3098,12 @@ static void *miner_thread(void *userdata)
 
 
 		default:
-			/* should never happen */
+			/* An algo whose scanhash case is compiled out lands here (heavy and
+			 * mjollnir need WITH_HEAVY_ALGO). Must not exit quietly: that leaves
+			 * the process alive and idle, looking like it is mining. */
+			applog(LOG_ERR, "algo '%s' is not available in this build",
+				algo_names[opt_algo]);
+			proper_exit(EXIT_CODE_USAGE);
 			goto out;
 		}
 

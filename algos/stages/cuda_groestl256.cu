@@ -7,7 +7,6 @@
 
 static uint32_t *h_GNonces[MAX_GPUS];
 static uint32_t *d_GNonces[MAX_GPUS];
-static unsigned int* d_textures[MAX_GPUS][8];
 
 __constant__ uint32_t pTarget[8];
 
@@ -31,50 +30,19 @@ __constant__ uint32_t pTarget[8];
 #define B32_3(x)    __byte_perm(x, 0, 0x4443)
 //((x) >> 24)
 
-#define MAXWELL_OR_FERMI 1
-#if MAXWELL_OR_FERMI
-	#define USE_SHARED 1
-	// Maxwell and Fermi cards get the best speed with SHARED access it seems.
-	#if USE_SHARED
-	#define T0up(x) (*((uint32_t*)mixtabs + (    (x))))
-	#define T0dn(x) (*((uint32_t*)mixtabs + (256+(x))))
-	#define T1up(x) (*((uint32_t*)mixtabs + (512+(x))))
-	#define T1dn(x) (*((uint32_t*)mixtabs + (768+(x))))
-	#define T2up(x) (*((uint32_t*)mixtabs + (1024+(x))))
-	#define T2dn(x) (*((uint32_t*)mixtabs + (1280+(x))))
-	#define T3up(x) (*((uint32_t*)mixtabs + (1536+(x))))
-	#define T3dn(x) (*((uint32_t*)mixtabs + (1792+(x))))
-	#else
-	#define T0up(x) tex1Dfetch(t0up2, x)
-	#define T0dn(x) tex1Dfetch(t0dn2, x)
-	#define T1up(x) tex1Dfetch(t1up2, x)
-	#define T1dn(x) tex1Dfetch(t1dn2, x)
-	#define T2up(x) tex1Dfetch(t2up2, x)
-	#define T2dn(x) tex1Dfetch(t2dn2, x)
-	#define T3up(x) tex1Dfetch(t3up2, x)
-	#define T3dn(x) tex1Dfetch(t3dn2, x)
-	#endif
-#else
-	#define USE_SHARED 1
-	// a healthy mix between shared and textured access provides the highest speed on Compute 3.0 and 3.5!
-	#define T0up(x) (*((uint32_t*)mixtabs + (    (x))))
-	#define T0dn(x) tex1Dfetch(t0dn2, x)
-	#define T1up(x) tex1Dfetch(t1up2, x)
-	#define T1dn(x) (*((uint32_t*)mixtabs + (768+(x))))
-	#define T2up(x) tex1Dfetch(t2up2, x)
-	#define T2dn(x) (*((uint32_t*)mixtabs + (1280+(x))))
-	#define T3up(x) (*((uint32_t*)mixtabs + (1536+(x))))
-	#define T3dn(x) tex1Dfetch(t3dn2, x)
-#endif
+/* All eight tables are read from shared memory; each block stages them in
+ * once. */
+#define T0up(x) (*((uint32_t*)mixtabs + (    (x))))
+#define T0dn(x) (*((uint32_t*)mixtabs + (256+(x))))
+#define T1up(x) (*((uint32_t*)mixtabs + (512+(x))))
+#define T1dn(x) (*((uint32_t*)mixtabs + (768+(x))))
+#define T2up(x) (*((uint32_t*)mixtabs + (1024+(x))))
+#define T2dn(x) (*((uint32_t*)mixtabs + (1280+(x))))
+#define T3up(x) (*((uint32_t*)mixtabs + (1536+(x))))
+#define T3dn(x) (*((uint32_t*)mixtabs + (1792+(x))))
 
-static texture<unsigned int, 1, cudaReadModeElementType> t0up2;
-static texture<unsigned int, 1, cudaReadModeElementType> t0dn2;
-static texture<unsigned int, 1, cudaReadModeElementType> t1up2;
-static texture<unsigned int, 1, cudaReadModeElementType> t1dn2;
-static texture<unsigned int, 1, cudaReadModeElementType> t2up2;
-static texture<unsigned int, 1, cudaReadModeElementType> t2dn2;
-static texture<unsigned int, 1, cudaReadModeElementType> t3up2;
-static texture<unsigned int, 1, cudaReadModeElementType> t3dn2;
+/* The tables, resident in device memory, in T0up..T3dn order. */
+static __device__ uint32_t d_T[8][256];
 
 #define RSTT(d0, d1, a, b0, b1, b2, b3, b4, b5, b6, b7) do { \
 	t[d0] = T0up(B32_0(a[b0])) \
@@ -180,22 +148,20 @@ void groestl256_perm_Q(uint32_t thread, uint32_t *a, char *mixtabs)
 __global__ __launch_bounds__(256,1)
 void groestl256_gpu_hash_32(uint32_t threads, uint32_t startNounce, uint64_t *outputHash, uint32_t *resNonces)
 {
-#if USE_SHARED
 	extern __shared__ char mixtabs[];
 
 	if (threadIdx.x < 256) {
-		*((uint32_t*)mixtabs + (threadIdx.x)) = tex1Dfetch(t0up2, threadIdx.x);
-		*((uint32_t*)mixtabs + (256 + threadIdx.x)) = tex1Dfetch(t0dn2, threadIdx.x);
-		*((uint32_t*)mixtabs + (512 + threadIdx.x)) = tex1Dfetch(t1up2, threadIdx.x);
-		*((uint32_t*)mixtabs + (768 + threadIdx.x)) = tex1Dfetch(t1dn2, threadIdx.x);
-		*((uint32_t*)mixtabs + (1024 + threadIdx.x)) = tex1Dfetch(t2up2, threadIdx.x);
-		*((uint32_t*)mixtabs + (1280 + threadIdx.x)) = tex1Dfetch(t2dn2, threadIdx.x);
-		*((uint32_t*)mixtabs + (1536 + threadIdx.x)) = tex1Dfetch(t3up2, threadIdx.x);
-		*((uint32_t*)mixtabs + (1792 + threadIdx.x)) = tex1Dfetch(t3dn2, threadIdx.x);
+		*((uint32_t*)mixtabs + (threadIdx.x)) = __ldg(&d_T[0][threadIdx.x]);
+		*((uint32_t*)mixtabs + (256 + threadIdx.x)) = __ldg(&d_T[1][threadIdx.x]);
+		*((uint32_t*)mixtabs + (512 + threadIdx.x)) = __ldg(&d_T[2][threadIdx.x]);
+		*((uint32_t*)mixtabs + (768 + threadIdx.x)) = __ldg(&d_T[3][threadIdx.x]);
+		*((uint32_t*)mixtabs + (1024 + threadIdx.x)) = __ldg(&d_T[4][threadIdx.x]);
+		*((uint32_t*)mixtabs + (1280 + threadIdx.x)) = __ldg(&d_T[5][threadIdx.x]);
+		*((uint32_t*)mixtabs + (1536 + threadIdx.x)) = __ldg(&d_T[6][threadIdx.x]);
+		*((uint32_t*)mixtabs + (1792 + threadIdx.x)) = __ldg(&d_T[7][threadIdx.x]);
 	}
 
 	__syncthreads();
-#endif
 
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
@@ -223,24 +189,14 @@ void groestl256_gpu_hash_32(uint32_t threads, uint32_t startNounce, uint64_t *ou
 
 		// Perm
 
-#if USE_SHARED
 		groestl256_perm_P(thread, state, mixtabs);
 		state[15] ^= 0x10000;
 		groestl256_perm_Q(thread, message, mixtabs);
-#else
-		groestl256_perm_P(thread, state, NULL);
-		state[15] ^= 0x10000;
-		groestl256_perm_P(thread, message, NULL);
-#endif
 		#pragma unroll 16
 		for (int u = 0; u<16; u++) state[u] ^= message[u];
 		#pragma unroll 16
 		for (int u = 0; u<16; u++) message[u] = state[u];
-#if USE_SHARED
 		groestl256_perm_P(thread, message, mixtabs);
-#else
-		groestl256_perm_P(thread, message, NULL);
-#endif
 		state[14] ^= message[14];
 		state[15] ^= message[15];
 
@@ -255,31 +211,20 @@ void groestl256_gpu_hash_32(uint32_t threads, uint32_t startNounce, uint64_t *ou
 	}
 }
 
-#define texDef(id, texname, texmem, texsource, texsize) { \
-	unsigned int *texmem; \
-	cudaMalloc(&texmem, texsize); \
-	d_textures[thr_id][id] = texmem; \
-	cudaMemcpy(texmem, texsource, texsize, cudaMemcpyHostToDevice); \
-	texname.normalized = 0; \
-	texname.filterMode = cudaFilterModePoint; \
-	texname.addressMode[0] = cudaAddressModeClamp; \
-	{ cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<unsigned int>(); \
-	  cudaBindTexture(NULL, &texname, texmem, &channelDesc, texsize ); \
-	} \
-}
 
 __host__
 void groestl256_cpu_init(int thr_id, uint32_t threads)
 {
-	// Texturen mit obigem Makro initialisieren
-	texDef(0, t0up2, d_T0up, T0up_cpu, sizeof(uint32_t) * 256);
-	texDef(1, t0dn2, d_T0dn, T0dn_cpu, sizeof(uint32_t) * 256);
-	texDef(2, t1up2, d_T1up, T1up_cpu, sizeof(uint32_t) * 256);
-	texDef(3, t1dn2, d_T1dn, T1dn_cpu, sizeof(uint32_t) * 256);
-	texDef(4, t2up2, d_T2up, T2up_cpu, sizeof(uint32_t) * 256);
-	texDef(5, t2dn2, d_T2dn, T2dn_cpu, sizeof(uint32_t) * 256);
-	texDef(6, t3up2, d_T3up, T3up_cpu, sizeof(uint32_t) * 256);
-	texDef(7, t3dn2, d_T3dn, T3dn_cpu, sizeof(uint32_t) * 256);
+	/* Upload the tables once per device, in T0up..T3dn order. */
+	const size_t tab = sizeof(uint32_t) * 256;
+	cudaMemcpyToSymbol(d_T, T0up_cpu, tab, 0 * tab, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(d_T, T0dn_cpu, tab, 1 * tab, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(d_T, T1up_cpu, tab, 2 * tab, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(d_T, T1dn_cpu, tab, 3 * tab, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(d_T, T2up_cpu, tab, 4 * tab, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(d_T, T2dn_cpu, tab, 5 * tab, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(d_T, T3up_cpu, tab, 6 * tab, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(d_T, T3dn_cpu, tab, 7 * tab, cudaMemcpyHostToDevice);
 
 	cudaMalloc(&d_GNonces[thr_id], 2*sizeof(uint32_t));
 	cudaMallocHost(&h_GNonces[thr_id], 2*sizeof(uint32_t));
@@ -288,9 +233,6 @@ void groestl256_cpu_init(int thr_id, uint32_t threads)
 __host__
 void groestl256_cpu_free(int thr_id)
 {
-	for (int i=0; i<8; i++)
-		cudaFree(d_textures[thr_id][i]);
-
 	cudaFree(d_GNonces[thr_id]);
 	cudaFreeHost(h_GNonces[thr_id]);
 }
@@ -306,11 +248,7 @@ uint32_t groestl256_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNoun
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
 	dim3 block(threadsperblock);
 
-#if USE_SHARED
 	size_t shared_size = 8 * 256 * sizeof(uint32_t);
-#else
-	size_t shared_size = 0;
-#endif
 	groestl256_gpu_hash_32<<<grid, block, shared_size>>>(threads, startNounce, d_outputHash, d_GNonces[thr_id]);
 
 	MyStreamSynchronize(NULL, order, thr_id);

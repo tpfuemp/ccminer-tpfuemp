@@ -204,9 +204,6 @@
     <ClCompile Include="sph\blake.c">
       <Filter>Source Files\sph</Filter>
     </ClCompile>
-    <ClCompile Include="sph\blake2b.c">
-      <Filter>Source Files\sph</Filter>
-    </ClCompile>
     <ClCompile Include="sph\blake2s.c">
       <Filter>Source Files\sph</Filter>
     </ClCompile>

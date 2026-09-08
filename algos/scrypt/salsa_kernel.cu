@@ -48,10 +48,9 @@ uint32_t* h_V[MAX_GPUS][TOTAL_WARP_LIMIT*64];          // NOTE: the *64 prevents
 uint32_t  h_V_extra[MAX_GPUS][TOTAL_WARP_LIMIT*64];    //       with really large kernel launch configurations
 
 /*
- * Only the two texture-free kernels are wired up; the four others target
- * sm_2x/sm_30, below this build's floor, and use texture references that CUDA
- * 12 removed. The split is by register pressure: scrypt and low-N scrypt-jane
- * take the high-register kernel, high-N scrypt-jane the low-register one.
+ * Only two kernels exist, both texture-free. The split is by register pressure:
+ * scrypt and low-N scrypt-jane take the high-register kernel, high-N
+ * scrypt-jane the low-register one.
  */
 KernelInterface *Best_Kernel_Heuristics(cudaDeviceProp *props)
 {
@@ -344,7 +343,7 @@ int find_optimal_blockcount(int thr_id, KernelInterface* &kernel, bool &concurre
 	//applog(LOG_INFO, "WU_PER_WARP=%u, THREADS_PER_WU=%u, LOOKUP_GAP=%u, BACKOFF=%u, SCRATCH=%u", WU_PER_WARP, THREADS_PER_WU, LOOKUP_GAP, BACKOFF, SCRATCH);
 	applog(LOG_INFO, "GPU #%d: %d hashes / %.1f MB per warp.", device_map[thr_id], WU_PER_WARP, szPerWarp / (1024.0 * 1024.0));
 
-	// compute highest MAXWARPS numbers for kernels allowing cudaBindTexture to succeed
+	// upper MAXWARPS bounds retained from the texture-cache era of this driver
 	int MW_1D_4 = 134217728 / (SCRATCH * WU_PER_WARP / 4); // for uint4_t textures
 	int MW_1D_2 = 134217728 / (SCRATCH * WU_PER_WARP / 2); // for uint2_t textures
 	int MW_1D = kernel->get_texel_width() == 2 ? MW_1D_2 : MW_1D_4;

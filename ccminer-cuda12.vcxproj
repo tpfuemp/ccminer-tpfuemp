@@ -19,8 +19,8 @@
     </ProjectConfiguration>
   </ItemGroup>
   <PropertyGroup Label="Globals">
-    <ProjectGuid>{36DC07F9-A4A6-4877-A146-1B960083CF6F}</ProjectGuid>
-    <RootNamespace>ccminer</RootNamespace>
+    <ProjectGuid>{9E513CFE-919D-4C4E-B783-3D15C5106DBD}</ProjectGuid>
+    <RootNamespace>ccminercuda12</RootNamespace>
     <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
@@ -51,8 +51,15 @@
     <UseOfMfc>false</UseOfMfc>
   </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <!-- Separate from the CUDA 11.8 project: sharing x64\Release\ would mix
+       objects from two toolkits, with fresh timestamps and stale content. -->
+  <PropertyGroup>
+    <OutDir>$(Platform)\$(Configuration)-cuda12\</OutDir>
+    <IntDir>$(Platform)\$(Configuration)-cuda12\</IntDir>
+    <TargetName>ccminer-cuda12</TargetName>
+  </PropertyGroup>
   <ImportGroup Label="ExtensionSettings">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 11.8.props" />
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.9.props" />
   </ImportGroup>
   <ImportGroup Label="PropertySheets" Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">
     <Import Project="$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props" Condition="exists('$(UserRootDir)\Microsoft.Cpp.$(Platform).user.props')" Label="LocalAppDataPlatform" />
@@ -169,7 +176,7 @@
       <PtxAsOptionV>true</PtxAsOptionV>
       <Keep>true</Keep>
       <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
-      <AdditionalOptions>--ptxas-options="-O2" --Wno-deprecated-gpu-targets %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>--ptxas-options="-O2" --Wno-deprecated-gpu-targets -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_75,code=compute_75 -gencode=arch=compute_86,code=sm_86 -gencode=arch=compute_86,code=compute_86 %(AdditionalOptions)</AdditionalOptions>
       <Optimization>O2</Optimization>
     </CudaCompile>
     <CudaLink>
@@ -215,7 +222,7 @@
       <Include>$(NVTOOLSEXT_PATH)\include</Include>
       <Optimization>O3</Optimization>
       <TargetMachinePlatform>64</TargetMachinePlatform>
-      <AdditionalOptions>-allow-unsupported-compiler --Wno-deprecated-gpu-targets %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>-allow-unsupported-compiler --Wno-deprecated-gpu-targets -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_75,code=compute_75 -gencode=arch=compute_86,code=sm_86 -gencode=arch=compute_86,code=compute_86 %(AdditionalOptions)</AdditionalOptions>
       <Defines>_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH</Defines>
     </CudaCompile>
     <CudaLink>
@@ -773,7 +780,7 @@
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 11.8.targets" />
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 12.9.targets" />
   </ImportGroup>
   <!-- Copy the required dlls -->
   <Target Name="AfterBuild">

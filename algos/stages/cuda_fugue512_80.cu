@@ -41,15 +41,12 @@
 
 #ifdef __INTELLISENSE__
 #define __byte_perm(x, y, m) (x|y)
-#define tex1Dfetch(t, n) (n)
 #define __CUDACC__
-#include <cuda_texture_types.h>
 #endif
 
-// store allocated textures device addresses
-static unsigned int* d_textures[MAX_GPUS][1];
-
-static texture<unsigned int, 1, cudaReadModeElementType> mixTab0Tex;
+/* The mixing table, resident in device memory. Each block stages it into
+ * shared memory once, so a plain cached load is enough. */
+static __device__ uint32_t d_mixTab0[256];
 
 static const uint32_t mixtab0[] = {
 	0x63633297, 0x7c7c6feb, 0x77775ec7, 0x7b7b7af7, 0xf2f2e8e5, 0x6b6b0ab7, 0x6f6f16a7, 0xc5c56d39,
@@ -104,7 +101,7 @@ void fugue512_gpu_hash_80(const uint32_t threads, const uint32_t startNonce, uin
 
 	// load shared mem (with 256 threads)
 	const uint32_t thr = threadIdx.x & 0xFF;
-	const uint32_t tmp = tex1Dfetch(mixTab0Tex, thr);
+	const uint32_t tmp = __ldg(&d_mixTab0[thr]);
 	mixtabs[thr] = tmp;
 	mixtabs[thr+256] = FUGUE_ROR8(tmp);
 	mixtabs[thr+512] = FUGUE_ROL16(tmp);
@@ -112,7 +109,7 @@ void fugue512_gpu_hash_80(const uint32_t threads, const uint32_t startNonce, uin
 #if TPB <= 256
 	if (blockDim.x < 256) {
 		const uint32_t thr = (threadIdx.x + 0x80) & 0xFF;
-		const uint32_t tmp = tex1Dfetch(mixTab0Tex, thr);
+		const uint32_t tmp = __ldg(&d_mixTab0[thr]);
 		mixtabs[thr] = tmp;
 		mixtabs[thr + 256] = FUGUE_ROR8(tmp);
 		mixtabs[thr + 512] = FUGUE_ROL16(tmp);
@@ -223,29 +220,16 @@ void fugue512_gpu_hash_80(const uint32_t threads, const uint32_t startNonce, uin
 	}
 }
 
-#define texDef(id, texname, texmem, texsource, texsize) { \
-	unsigned int *texmem; \
-	cudaMalloc(&texmem, texsize); \
-	d_textures[thr_id][id] = texmem; \
-	cudaMemcpy(texmem, texsource, texsize, cudaMemcpyHostToDevice); \
-	texname.normalized = 0; \
-	texname.filterMode = cudaFilterModePoint; \
-	texname.addressMode[0] = cudaAddressModeClamp; \
-	{ cudaChannelFormatDesc channelDesc = cudaCreateChannelDesc<unsigned int>(); \
-	  cudaBindTexture(NULL, &texname, texmem, &channelDesc, texsize ); \
-	} \
-}
 
 __host__
 void x16_fugue512_cpu_init(int thr_id, uint32_t threads)
 {
-	texDef(0, mixTab0Tex, mixTab0m, mixtab0, sizeof(uint32_t)*256);
+	cudaMemcpyToSymbol(d_mixTab0, mixtab0, sizeof(uint32_t) * 256, 0, cudaMemcpyHostToDevice);
 }
 
 __host__
 void x16_fugue512_cpu_free(int thr_id)
 {
-	cudaFree(d_textures[thr_id][0]);
 }
 
 __host__

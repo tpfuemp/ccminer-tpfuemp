@@ -40,6 +40,10 @@ Debug/
 Release/
 x64/Debug/
 x64/Release/
+Debug-cuda12/
+Release-cuda12/
+x64/Debug-cuda12/
+x64/Release-cuda12/
 *.suo
 *.user
 *.opensdf
