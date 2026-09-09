@@ -86,7 +86,8 @@ algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh algos/y
 			  algos/stages/cuda_bmw256.cu algos/stages/cuda_cubehash256.cu \
 			  algos/stages/cuda_blake256.cu algos/stages/cuda_groestl256.cu \
 			  algos/stages/cuda_skein256.cu \
-			  algos/blake256/blake256.cu algos/blake256/decred.cu algos/blake256/vanilla.cu \
+			  algos/blake256/blake256.cu algos/blake256/vanilla.cu \
+			  algos/decred/decred_blake3.cu \
 			  algos/blake256/cuda_blake256_selftest.cu \
 			  algos/blake2s/blake2s.cu sph/blake2s.c \
 			  algos/blake2s/cuda_blake2s_selftest.cu \

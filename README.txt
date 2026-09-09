@@ -47,7 +47,7 @@ its command line interface and options.
                           cryptolight         AEON CryptoNight (MEM/2)
                           cryptonight         Monero-style CryptoNight
                           curvehash           CurvehashCoin (secp256k1 EC)
-                          decred              Decred Blake-256
+                          decred              Decred BLAKE3 (DCP-0011)
                           deep                Deepcoin
                           dmd-gr              Diamond-Groestl
                           equihash            Zcash Equihash 200/9 (+ 144/5 Tromp)

@@ -12,6 +12,7 @@ extern uint32_t heavyhash_cpu_hash(int thr_id, uint32_t threads, uint32_t startN
 extern uint32_t heavyhash_getSecNonce(int thr_id, int num);
 extern void heavyhash_cpu_free(int thr_id);
 extern void heavyhash_init(int thr_id);
+extern void heavyhash_debug_differential(int thr_id, const uint32_t *pdata, uint32_t startNonce);
 
 
 extern "C" void heavyhash_hash(void *ohash, const void *input)
@@ -73,6 +74,9 @@ extern "C" int scanhash_heavyhash(int thr_id, struct work* work, uint32_t max_no
 
     heavyhash_cpu_setBlock_80(pdata);
     heavyhash_cpu_setTarget(ptarget);
+
+    if (opt_debug)
+        heavyhash_debug_differential(thr_id, pdata, pdata[19]);
 
     do {
 		int order = 0;

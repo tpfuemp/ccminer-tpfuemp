@@ -1,12 +1,10 @@
-# blake256 family (`-a blakecoin`, `-a blake`, `-a vanilla`, `-a decred`)
+# blake256 family (`-a blakecoin`, `-a blake`, `-a vanilla`)
 
 Blake-256 based coins (tpruvot lineage, GPLv3), relocated from `Algo256/`.
 
 - `blake256.cu` — `scanhash_blake256`: Blake-256 with the round count selected
   per algo (blakecoin = 8 rounds, blake = 14 rounds).
 - `vanilla.cu` — `scanhash_vanilla`: BlakeVanilla (VNL), Blake-256 8-round.
-- `decred.cu` — `scanhash_decred`: Decred, Blake-256 14-round over a 180-byte
-  header with its own midstate handling (built with `--maxrregcount=128`).
 
 ## Layout
 

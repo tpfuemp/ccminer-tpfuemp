@@ -604,7 +604,7 @@
     </CudaCompile>
     <CudaCompile Include="algos\blake2s\blake2s.cu" />
     <CudaCompile Include="algos\blake2s\cuda_blake2s_selftest.cu" />
-    <CudaCompile Include="algos\blake256\decred.cu">
+    <CudaCompile Include="algos\decred\decred_blake3.cu">
       <MaxRegCount>128</MaxRegCount>
     </CudaCompile>
     <CudaCompile Include="algos\blake256\vanilla.cu" />

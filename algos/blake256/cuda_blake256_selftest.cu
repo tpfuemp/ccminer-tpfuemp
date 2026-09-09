@@ -24,7 +24,7 @@
  *      perturbed on the host must fail. A gate whose trigger never occurs in
  *      normal operation is untested by construction.
  *
- * SCOPE: leg 4 covers the 14-round kernel only. The 8-round and decred GPU
+ * SCOPE: leg 4 covers the 14-round kernel only. The 8-round GPU
  * paths are covered by their KATs, not by the differential, and vanilla.cu /
  * decred.cu have their own kernels which this TU does not reach.
  */

@@ -292,7 +292,7 @@ Options:\n\
 			cryptolight	AEON cryptonight (MEM/2)\n\
 			cryptonight	XMR cryptonight\n\
 			c11/flax	X11 variant\n\
-			decred		Decred Blake256\n\
+			decred		Decred BLAKE3\n\
 			deep		Deepcoin\n\
 			equihash	Zcash Equihash\n\
 			dmd-gr		Diamond-Groestl\n\
@@ -1158,9 +1158,11 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 			le32enc(&nonce, work->data[19]);
 			break;
 		case ALGO_DECRED:
+			// Raw little-endian header bytes, hex-encoded verbatim: bin2hex prints
+			// memory order, so ntime/nonce must not be byte-swapped here.
 			be16enc(&nvote, *((uint16_t*)&work->data[25]));
-			be32enc(&ntime, work->data[34]);
-			be32enc(&nonce, work->data[35]);
+			le32enc(&ntime, work->data[34]);
+			le32enc(&nonce, work->data[35]);
 			break;
 		case ALGO_HEAVY:
 			le32enc(&ntime, work->data[17]);
@@ -1226,7 +1228,13 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 		ntimestr = bin2hex((const uchar*)(&ntime), 4);
 
 		if (opt_algo == ALGO_DECRED) {
-			xnonce2str = bin2hex((const uchar*)&work->data[36], stratum.xnonce1_size);
+			// extraNonce2 is header offset 148 = data[37], always 4 bytes. Offset 144
+			// (data[36]) is the pool's extranonce1 and goes back unchanged.
+			xnonce2str = bin2hex((const uchar*)&work->data[37], 4);
+			if (opt_debug)
+				applog(LOG_DEBUG, "decred submit: en1(d36)=%08x en2(d37)=%08x"
+					" ntime(d34)=%08x nonce(d35)=%08x",
+					work->data[36], work->data[37], work->data[34], work->data[35]);
 		} else if (opt_algo == ALGO_SIA) {
 			uint16_t high_nonce = swab32(work->data[9]) >> 16;
 			xnonce2str = bin2hex((unsigned char*)(&high_nonce), 2);
@@ -1864,10 +1872,15 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 
 	if (opt_algo == ALGO_DECRED) {
 		uint16_t vote;
-		for (i = 0; i < 8; i++) // reversed prevhash
-			work->data[1 + i] = swab32(work->data[1 + i]);
-		// decred header (coinb1) [merkle...nonce]
-		memcpy(&work->data[9], sctx->job.coinbase, 108);
+		// prevhash is used verbatim: stratum sends it in internal byte order.
+		// coinb1 is 144 B for decred -- the whole rest of the header, data[9..44].
+		if (sctx->job.coinbase_size < 144) {
+			applog(LOG_ERR, "decred: coinb1 is %u bytes, expected >= 144",
+				(uint32_t) sctx->job.coinbase_size);
+			pthread_mutex_unlock(&stratum_work_lock);
+			return false;
+		}
+		memcpy(&work->data[9], sctx->job.coinbase, 144);
 		// last vote bit should never be changed
 		memcpy(&vote, &work->data[25], 2);
 		vote = (opt_vote << 1) | (vote & 1);
@@ -1879,9 +1892,10 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 			sctx->xnonce1_size = sizeof(work->data)-(32*4);
 		}
 		memcpy(&work->data[36], sctx->xnonce1, sctx->xnonce1_size);
-		work->data[37] = (rand()*4) << 8; // random work data
-		// block header suffix from coinb2 (stake version)
-		memcpy(&work->data[44], &sctx->job.coinbase[sctx->job.coinbase_size-4], 4);
+		// data[36] (offset 144) is the pool's extranonce1, returned unchanged.
+		// data[37] (offset 148) is our extranonce2 and the field the submit echoes;
+		// the miner thread rolls it. data[38..43] stay zero; data[44] (stake
+		// version) comes from the coinb1 copy above.
 		sctx->job.height = work->data[32];
 		//applog_hex(work->data, 180);
 	} else if (opt_algo == ALGO_RINHASH) {
@@ -2274,9 +2288,16 @@ static void *miner_thread(void *userdata)
 		if (have_stratum) {
 			uint32_t sleeptime = 0;
 
+			// Out of nonce range? Decided once, used for both the wait and regen.
+			bool range_done = (nonceptr[0] >= end_nonce);
+			if (opt_algo == ALGO_SIA) {
+				range_done = ((nonceptr[1] & 0xFF00) >= 0xF000);
+			}
+
 			if (opt_algo == ALGO_DECRED || opt_algo == ALGO_WILDKECCAK /* getjob */)
 				work_done = true; // force "regen" hash
-			while (!work_done && time(NULL) >= (g_work_time + opt_scantime)) {
+			// An exhausted range regenerates below regardless, so waiting only idles.
+			while (!work_done && !range_done && time(NULL) >= (g_work_time + opt_scantime)) {
 				usleep(100*1000);
 				if (sleeptime > 4) {
 					extrajob = true;
@@ -2290,10 +2311,7 @@ static void *miner_thread(void *userdata)
 			pthread_mutex_lock(&g_work_lock);
 			extrajob |= work_done;
 
-			regen = (nonceptr[0] >= end_nonce);
-			if (opt_algo == ALGO_SIA) {
-				regen = ((nonceptr[1] & 0xFF00) >= 0xF000);
-			}
+			regen = range_done;
 			regen = regen || extrajob;
 
 			if (regen) {
@@ -2397,9 +2415,11 @@ static void *miner_thread(void *userdata)
 			// use the full range per loop
 			nonceptr[0] = 0;
 			end_nonce = UINT32_MAX;
-			// and make an unique work (extradata)
-			nonceptr[1] += 1;
-			nonceptr[2] |= thr_id;
+			// Roll OUR extranonce2 (data[37], offset 148) so each work unit differs;
+			// it is the field the submit echoes. data[36] (offset 144) is the pool's
+			// extranonce1 and must go back unchanged.
+			nonceptr[2] += 1;
+			nonceptr[2] = (nonceptr[2] & 0x00FFFFFFu) | ((uint32_t)thr_id << 24);
 
 		} else if (opt_algo == ALGO_EQUIHASH) {
 			nonceptr[1]++;

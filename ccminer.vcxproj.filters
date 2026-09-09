@@ -97,6 +97,9 @@
     <Filter Include="Source Files\CUDA\blake256">
       <UniqueIdentifier>{9762c92c-9677-4044-8292-ff6ba4bfdd89}</UniqueIdentifier>
     </Filter>
+    <Filter Include="Source Files\CUDA\decred">
+      <UniqueIdentifier>{bb3189a5-3e1d-47ef-a16a-486c4b9a88ba}</UniqueIdentifier>
+    </Filter>
     <Filter Include="Source Files\CUDA\blake2s">
       <UniqueIdentifier>{a1b2c3d4-0011-4a5b-8c6d-7e8f90123456}</UniqueIdentifier>
     </Filter>
@@ -1072,8 +1075,8 @@
     <CudaCompile Include="algos\blake256\blake256.cu">
       <Filter>Source Files\CUDA\blake256</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\blake256\decred.cu">
-      <Filter>Source Files\CUDA\blake256</Filter>
+    <CudaCompile Include="algos\decred\decred_blake3.cu">
+      <Filter>Source Files\CUDA\decred</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\blake256\vanilla.cu">
       <Filter>Source Files\CUDA\blake256</Filter>
