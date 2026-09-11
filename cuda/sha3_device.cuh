@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /*
- * Shared FIPS-202 SHA-3 primitive library (device side) for Verthash.
+ * Shared FIPS-202 SHA-3 primitive library (device side).
+ *
+ * Consumers: verthash (sha3_256_80 / sha3_512_80) and rinhash (sha3_256_32).
+ * Changing anything here needs every consumer re-gated on DIGESTS.
  *
  * Keccak-f[1600] permutation + SHA3-256 / SHA3-512 with 0x06 domain padding
  * (FIPS-202). This is DISTINCT from cuda/keccak_device.cuh (Keccak-256 with the
@@ -140,6 +143,42 @@ void sha3_256_80(const uint32_t in[20], uint32_t out[8])
 
 	// pad: byte[80] ^= 0x06 -> lane 10 low word; byte[135] ^= 0x80 -> lane 16 hi word
 	st[10].x ^= 0x00000006U;
+	st[16].y ^= 0x80000000U;
+
+	sha3_keccakf_1600(st);
+
+	#pragma unroll
+	for (int i = 0; i < 4; i++) { out[2 * i] = st[i].x; out[2 * i + 1] = st[i].y; }
+}
+
+// ---------------------------------------------------------------------------
+// SHA3-256 of a 32-byte message given as bytes. Rate 136 > 32, so this is a
+// single block: absorb 4 lanes, pad, one permutation. Writes 8 LE words.
+//
+// Byte input rather than uint32 (unlike sha3_256_80) because the caller's buffer
+// is a uint8_t[32] carrying another primitive's digest and is not guaranteed to
+// be 4-byte aligned; the loads below make no alignment assumption.
+__device__ __forceinline__
+void sha3_256_32(const uint8_t *in, uint32_t out[8])
+{
+	uint2 st[25];
+	#pragma unroll
+	for (int i = 0; i < 25; i++) st[i] = make_uint2(0, 0);
+
+	// absorb 32 bytes = 4 lanes, little-endian
+	#pragma unroll
+	for (int i = 0; i < 4; i++) {
+		uint32_t lo = 0, hi = 0;
+		#pragma unroll
+		for (int b = 0; b < 4; b++) {
+			lo |= (uint32_t)in[8 * i + b] << (8 * b);
+			hi |= (uint32_t)in[8 * i + 4 + b] << (8 * b);
+		}
+		st[i] = make_uint2(lo, hi);
+	}
+
+	// pad: byte[32] ^= 0x06 -> lane 4 low word; byte[135] ^= 0x80 -> lane 16 hi word
+	st[4].x ^= 0x00000006U;
 	st[16].y ^= 0x80000000U;
 
 	sha3_keccakf_1600(st);

@@ -196,7 +196,7 @@ void sha512_256_init_state(uint64_t *state, const uint64_t *hinit)
  * in the low half of w9 (the sha512256d shape). Rounds 0..8 consume only
  * the per-job constants w0..w8, and round 9's t1/t2 are nonce-independent
  * except for the `+ w9` term — so the host runs them once per job and the
- * kernel resumes at round 10 (sha256dv playbook).
+ * kernel resumes at round 10.
  * ------------------------------------------------------------------------ */
 
 /* Host side: from header words w0..w8 (w9 not read), produce

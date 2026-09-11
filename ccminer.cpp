@@ -87,7 +87,6 @@ bool opt_debug_diff = false;
 bool opt_debug_threads = false;
 bool opt_protocol = false;
 bool opt_benchmark = false;
-uint32_t opt_batch_size = 0; // RinHash: nonces per scanhash call (0 = default 2M)
 bool opt_showdiff = true;
 bool opt_hwmonitor = true;
 
@@ -2297,13 +2296,18 @@ static void *miner_thread(void *userdata)
 			if (opt_algo == ALGO_DECRED || opt_algo == ALGO_WILDKECCAK /* getjob */)
 				work_done = true; // force "regen" hash
 			// An exhausted range regenerates below regardless, so waiting only idles.
-			while (!work_done && !range_done && time(NULL) >= (g_work_time + opt_scantime)) {
+			// ONE 100 ms tick, not six. This is a poll for a fresher job and the GPU
+			// is idle for every tick of it, while the regen it ends with -- rolling
+			// xnonce2 on the job already in hand -- is work that could start at once.
+			// The window rarely lands a fresher job and idles the card the rest of
+			// the time.
+			// The tick is not removed: stratum_gen_work() fails while job_id is null
+			// and leaves g_work_time alone, so this condition stays true and a
+			// sleepless loop would spin on a pool that has not sent a job yet.
+			if (!work_done && !range_done && time(NULL) >= (g_work_time + opt_scantime)) {
 				usleep(100*1000);
-				if (sleeptime > 4) {
-					extrajob = true;
-					break;
-				}
-				sleeptime++;
+				sleeptime = 1;
+				extrajob = true;
 			}
 			if (sleeptime && opt_debug && !opt_quiet)
 				applog(LOG_DEBUG, "sleeptime: %u ms", sleeptime*100);

@@ -280,7 +280,7 @@ extern "C" int scanhash_anime(int thr_id, struct work* work, uint32_t max_nonce,
 			if (vhash[7] <= ptarget[7] && fulltest(vhash, ptarget)) {
 				work->valid_nonces = 1;
 				work_set_target_ratio(work, vhash);
-				if (work->nonces[1] != 0) {
+				if (work->nonces[1] != UINT32_MAX) {
 					be32enc(&endiandata[19], work->nonces[1]);
 					animehash(vhash, endiandata);
 					bn_set_target_ratio(work, vhash, 1);

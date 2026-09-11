@@ -576,7 +576,13 @@ void api_collect_metrics(api_metrics_input *in)
 	in->algo = algo_buf;
 	in->uptime_s = difftime(time(NULL), api_startup_time);
 	in->hashrate_hs = mining_is_parked() ? 0. : (double) global_hashrate;
+	/* A benchmark run has no chain and a fresh connection has no pool
+	 * difficulty; 0 is a difficulty no chain has, so the series is omitted
+	 * rather than fabricated. The input is memset above: without these two
+	 * flags this miner would publish neither. */
+	in->has_net_difficulty = net_diff > 0.;
 	in->net_difficulty = net_diff;
+	in->has_pool_difficulty = stratum_diff > 0.;
 	in->pool_difficulty = stratum_diff;
 
 	const ctl_state_t st = api_ctl_get_state();

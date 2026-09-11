@@ -472,6 +472,24 @@
     <ClCompile Include="algos\kawpow\kawpow.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="algos\progpow_multi\ppmulti_bridge.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="algos\progpow_multi\ppmulti_core.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="algos\progpow_multi\ppmulti_dag.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="algos\progpow_multi\ppmulti_epoch.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="algos\progpow_multi\ppmulti_jit.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="algos\progpow_multi\progpow_pp.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="algos\kawpow\kawpow_core.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -826,6 +844,7 @@
     <ClInclude Include="algos\argon2d\argon2ref\blake2\blamka-round-opt.h" />
     <ClInclude Include="algos\argon2d\argon2ref\blake2\blamka-round-ref.h" />
     <ClInclude Include="algos\argon2d\argon2d_kernel.h" />
+    <ClInclude Include="algos\argon2d\argon2d_blake2b_device.cuh" />
     <ClInclude Include="algos\argon2d\cudaexception.h" />
     <ClInclude Include="algos\balloon\balloon.h">
       <Filter>Source Files\balloon</Filter>
@@ -1355,7 +1374,7 @@
     <CudaCompile Include="algos\balloon\cuda_balloon.cu">
       <Filter>Source Files\CUDA\balloon</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\rinhash\rinhash.cu">
+    <CudaCompile Include="algos\rinhash\rinhash_coop.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\kawpow\cuda_kawpow.cu">
@@ -1380,6 +1399,9 @@
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\evohash\evohash.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\ghostrider\ghostrider.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
   </ItemGroup>

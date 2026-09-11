@@ -168,7 +168,7 @@ int scanhash_bastion(int thr_id, struct work *work, uint32_t max_nonce, unsigned
 				work_set_target_ratio(work, vhash);
 				work->nonces[0] = swab32(work->nonces[0]);
 				work->nonces[1] = cuda_check_hash_suppl(thr_id, throughput, pdata[19], d_hash[thr_id], 1);
-				if (work->nonces[1] != 0) {
+				if (work->nonces[1] != UINT32_MAX) {
 					endiandata[19] = work->nonces[1];
 					bastionhash(vhash, (uchar*) endiandata);
 					bn_set_target_ratio(work, vhash, 1);

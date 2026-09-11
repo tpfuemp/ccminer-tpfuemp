@@ -20,6 +20,7 @@
 #include <string.h>
 
 #include "algos/hoohash/hoohash_device.cuh"  // hoo_generateMatrix / hoo_matmul / bundled BLAKE3
+#include "cuda/selftest_gate.cuh"            // selftest_gate / selftest_cuda_fault
 
 // 80-byte header (be32enc'd consensus serialization); mining kernel overwrites nonce @76..79.
 __constant__ uint8_t c_hoohash_header[80];
@@ -39,7 +40,7 @@ __global__ void hoohash_gen_matrix_kernel()
 		masked[76] = masked[77] = masked[78] = masked[79] = 0;
 
 		uint8_t seed[32];
-		hoo_blake3_256(masked, 80, seed);
+		blake3_256(masked, 80, seed);
 		hoo_generateMatrix(seed, d_hoo_matrix);
 	}
 }
@@ -64,7 +65,7 @@ __global__ void hoohash_gpu_hash(uint32_t threads, uint32_t startNonce, uint32_t
 	header[79] = (uint8_t)(nonce);
 
 	uint8_t firstPass[32];
-	hoo_blake3_256(header, 80, firstPass);
+	blake3_256(header, 80, firstPass);
 
 	uint64_t non = (uint64_t)hoo_read_u32le(header + 76);
 
@@ -108,27 +109,62 @@ static const uint8_t hoohash_kat_expected[32] = {
 	0xaf,0x06,0xbc,0x1b, 0x9f,0x26,0xd6,0xa9, 0x94,0xb6,0x5e,0xb6, 0x6d,0x17,0x84,0x5d
 };
 
-// Exercises the ACTUAL mining path (gen kernel + mining kernel + digest reversal) so it
-// validates exactly what mines. KAT nonce 0x4d94e755 -> be32enc bytes 4d 94 e7 55.
-// Returns 1 on consensus match, else 0.
-extern "C" int hoohash_gpu_self_test(void)
+// One header through the ACTUAL mining path, so the legs below validate what
+// mines. Returns false only when CUDA itself failed -- not a wrong hash.
+static bool hoohash_kat_run(const uint8_t hdr[80], uint32_t nonce, uint8_t out_be[32])
 {
-	cudaMemcpyToSymbol(c_hoohash_header, hoohash_kat_header, 80, 0, cudaMemcpyHostToDevice);
+	if (cudaMemcpyToSymbol(c_hoohash_header, hdr, 80, 0, cudaMemcpyHostToDevice) != cudaSuccess)
+		return selftest_cuda_fault();
 	hoohash_gen_matrix_kernel<<<1, 1>>>();
 
 	uint32_t* d_out = NULL;
-	if (cudaMalloc(&d_out, 16 * sizeof(uint32_t)) != cudaSuccess) return 0;
-	hoohash_gpu_hash<<<1, 1>>>(1, 0x4d94e755u, d_out);
-	cudaDeviceSynchronize();
+	if (cudaMalloc(&d_out, 16 * sizeof(uint32_t)) != cudaSuccess)
+		return selftest_cuda_fault();
+	hoohash_gpu_hash<<<1, 1>>>(1, nonce, d_out);
+	if (cudaDeviceSynchronize() != cudaSuccess) {
+		cudaFree(d_out);
+		return selftest_cuda_fault();
+	}
 
 	uint32_t got16[16];
-	cudaMemcpy(got16, d_out, 16 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+	cudaError_t err = cudaMemcpy(got16, d_out, 16 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
 	cudaFree(d_out);
+	if (err != cudaSuccess)
+		return selftest_cuda_fault();
 
 	// First 32 bytes of the slot hold the REVERSED digest; un-reverse to big-endian.
 	const uint8_t* gr = (const uint8_t*)got16;
-	uint8_t got[32];
-	for (int i = 0; i < 32; i++) got[i] = gr[31 - i];
+	for (int i = 0; i < 32; i++) out_be[i] = gr[31 - i];
+	return true;
+}
 
-	return memcmp(got, hoohash_kat_expected, 32) == 0 ? 1 : 0;
+// Init self-test, fail-closed. This algo has no host re-verify (MSVC libm !=
+// consensus glibc), so these two legs are its entire consensus guard.
+//   kat - real block 0x4734dd through the shipping path, published on-chain.
+//   neg - a flipped header bit must change the digest, or a kernel ignoring
+//         the header would pass kat by luck.
+extern "C" bool hoohash_device_selftest(int thr_id)
+{
+	uint8_t got[32], neg[32];
+	bool kat_ok = false, neg_ok = false;
+
+	if (hoohash_kat_run(hoohash_kat_header, 0x4d94e755u, got))
+		kat_ok = (memcmp(got, hoohash_kat_expected, 32) == 0);
+
+	uint8_t bad[80];
+	memcpy(bad, hoohash_kat_header, 80);
+	bad[13] ^= 0x08;
+	if (hoohash_kat_run(bad, 0x4d94e755u, neg))
+		neg_ok = (memcmp(neg, got, 32) != 0);
+
+	// Never leave the flipped header or its matrix in the device symbols.
+	cudaMemcpyToSymbol(c_hoohash_header, hoohash_kat_header, 80, 0, cudaMemcpyHostToDevice);
+	hoohash_gen_matrix_kernel<<<1, 1>>>();
+
+	const bool passed = kat_ok && neg_ok;
+	if (!passed)
+		gpulog(LOG_ERR, thr_id, "HoohashV110 self-test FAILED (kat %d neg %d)"
+			" -- libdevice != consensus libm?", (int)kat_ok, (int)neg_ok);
+
+	return selftest_gate(thr_id, "HoohashV110", passed);
 }

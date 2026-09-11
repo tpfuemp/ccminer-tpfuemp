@@ -97,7 +97,7 @@ int scanhash_skein2(int thr_id, struct work* work, uint32_t max_nonce, unsigned 
 				work->valid_nonces = 1;
 				work->nonces[1] = cuda_check_hash_suppl(thr_id, throughput, pdata[19], d_hash[thr_id], 1);
 				work_set_target_ratio(work, vhash);
-				if (work->nonces[1] != 0) {
+				if (work->nonces[1] != UINT32_MAX) {
 					endiandata[19] = swab32(work->nonces[1]);
 					skein2hash(vhash, endiandata);
 					work->valid_nonces++;

@@ -809,7 +809,7 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 			work_set_target_ratio(work, vhash);
 			work->nonces[1] = cuda_check_hash_suppl(thr_id, throughput, pdata[19], dh, 1);
 			const uint32_t found = cuda_check_hash_count(thr_id);
-			if (work->nonces[1] != 0) {
+			if (work->nonces[1] != UINT32_MAX) {
 				be32enc(&endiandata[19], work->nonces[1]);
 				ghostrider_hash(vhash, endiandata);
 				// The GPU screen compares the top word only, so the second nonce

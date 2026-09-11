@@ -192,7 +192,10 @@ void cuda_checkhash_64_suppl(uint32_t threads, uint32_t startNounce, uint32_t *h
 __host__
 uint32_t cuda_check_hash_suppl(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_inputHash, uint8_t numNonce)
 {
-	uint32_t rescnt, result = 0;
+	/* UINT32_MAX = "no further candidate", matching cuda_check_hash().
+	 * 0 cannot serve: it is a legal nonce, and returning it here made a
+	 * candidate at nonce 0 indistinguishable from none. */
+	uint32_t rescnt, result = UINT32_MAX;
 
 	const uint32_t threadsperblock = 512;
 	dim3 grid((threads + threadsperblock - 1) / threadsperblock);
@@ -200,7 +203,7 @@ uint32_t cuda_check_hash_suppl(int thr_id, uint32_t threads, uint32_t startNounc
 
 	if (!init_done) {
 		applog(LOG_ERR, "missing call to cuda_check_cpu_init");
-		return 0;
+		return UINT32_MAX;
 	}
 
 	// first element stores the count of found nonces

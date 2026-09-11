@@ -228,7 +228,7 @@ extern "C" int scanhash_jackpot(int thr_id, struct work *work, uint32_t max_nonc
 				work_set_target_ratio(work, vhash);
 #if 0
 				work->nonces[1] = cuda_check_hash_suppl(thr_id, throughput, pdata[19], d_hash[thr_id], 1);
-				if (work->nonces[1] != 0) {
+				if (work->nonces[1] != UINT32_MAX) {
 					be32enc(&endiandata[19], work->nonces[1]);
 					jackpothash(vhash, endiandata);
 					bn_set_target_ratio(work, vhash, 1);

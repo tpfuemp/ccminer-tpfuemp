@@ -13,10 +13,8 @@
  * bytes, and a middle block carrying NO flags.
  *
  * NOT valid for input > 1024 bytes: that needs the chunk tree (chunk counters,
- * parent nodes). Lifted from algos/hoohash/blake3_hoo_device.cuh;
- * algos/rinhash/blake3_device.cuh cannot be shared because it defines
- * non-static host symbols and a global thrust::host_vector, so it links into
- * exactly one TU.
+ * parent nodes). This is the tree's ONLY BLAKE3: decred, hoohash and rinhash all
+ * use it, so a change here lands on three consensus algos at once.
  */
 #ifndef CUDA_BLAKE3_DEVICE_CUH
 #define CUDA_BLAKE3_DEVICE_CUH

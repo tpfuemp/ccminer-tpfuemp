@@ -29,7 +29,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/balloon/balloon_selftest.cpp \
 			  algos/balloon/sha256-ref.c algos/balloon/cuda_balloon.cu \
 			  algos/balloon/balloon.h algos/balloon/sha256.h \
-			  algos/rinhash/rinhash_scanhash.cpp algos/rinhash/rinhash.cu \
+			  algos/rinhash/rinhash_scanhash.cpp algos/rinhash/rinhash_coop.cu \
 			  algos/curvehash/curvehash_oracle.cpp algos/curvehash/curvehash.cu algos/curvehash/secp256k1_unity.c \
 			  algos/verthash/verthash.cu algos/verthash/cuda_verthash.cu \
 			  algos/verthash/verthash-cpu.c algos/verthash/verthash-data.cpp \
@@ -82,7 +82,7 @@ algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh algos/y
 			  algos/lyra2/cuda_lyra2v2_selftest.cu algos/lyra2/lyra2REv2.cu algos/stages/cuda_lyra2v2.cu \
 			  algos/lyra2/Lyra2Z.c algos/lyra2/cuda_lyra2Z_selftest.cu algos/lyra2/lyra2Z.cu algos/stages/cuda_lyra2Z.cu \
 			  algos/lyra2/lyra2Z330.cu algos/stages/cuda_lyra2Z330.cu \
-			  cuda/blake2b_device.cuh cuda/lyra2_device.cuh \
+			  cuda/blake2b_device.cuh cuda/blake3_device.cuh cuda/lyra2_device.cuh \
 			  algos/stages/cuda_bmw256.cu algos/stages/cuda_cubehash256.cu \
 			  algos/stages/cuda_blake256.cu algos/stages/cuda_groestl256.cu \
 			  algos/stages/cuda_skein256.cu \

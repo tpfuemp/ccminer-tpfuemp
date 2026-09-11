@@ -450,7 +450,7 @@ extern "C" int scanhash_zr5(int thr_id, struct work *work,
 				work->valid_nonces = 1;
 				work_set_target_ratio(work, vhash);
 				work->nonces[1] = cuda_check_hash_suppl(thr_id, throughput, oldp19, d_hash[thr_id], 1);
-				if (work->nonces[1] != 0) {
+				if (work->nonces[1] != UINT32_MAX) {
 					offset = work->nonces[1] - oldp19;
 					cudaMemcpy(&h_pok, d_poks[thr_id] + offset, sizeof(uint16_t), cudaMemcpyDeviceToHost);
 					pok = version | (0x10000UL * h_pok);

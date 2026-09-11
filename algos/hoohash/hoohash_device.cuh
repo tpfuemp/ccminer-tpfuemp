@@ -4,9 +4,8 @@
 // (Hoosat crypto/hoohash/hoohash.c,
 //  commit 9634f11410a2d71be21086e813263fa007fb6810, MIT).
 //
-// BLAKE3-256 is provided by the bundled, self-contained blake3_hoo_device.cuh
-// (static __device__, integer-only) so this path links into its own TU without
-// colliding with rinhash/blake3_device.cuh.
+// BLAKE3-256 comes from the shared cuda/blake3_device.cuh: single chunk,
+// integer-only, all static, so several TUs may include it.
 //
 // Consensus-critical notes:
 //  * The 64x64 double matmul is INHERENTLY SEQUENTIAL: the running scalar `sw`
@@ -27,7 +26,7 @@
 #pragma once
 #include <stdint.h>
 #include <math.h>
-#include "algos/hoohash/blake3_hoo_device.cuh"
+#include "cuda/blake3_device.cuh"
 
 #define HOO_PI  3.14159265358979323846
 #define HOO_EPS 1e-9
@@ -184,26 +183,5 @@ __device__ void hoo_matmul(double mat[64][64], const uint8_t* hashBytes,
     }
     for (int i = 0; i < 32; i++) result[i] = hashBytes[i] ^ scaledValues[i];
 
-    hoo_blake3_256(result, 32, output);
-}
-
-// Full HoohashV110 of an 80-byte header -> 32-byte digest (compared big-endian).
-__device__ void hoohashv110_device(const uint8_t* header80, uint8_t* output) {
-    uint8_t firstPass[32];
-    uint8_t matrixSeed[32];
-    uint8_t masked[80];
-
-    // firstPass = BLAKE3(full 80-byte header)
-    hoo_blake3_256(header80, 80, firstPass);
-
-    // matrixSeed = BLAKE3(header with nonce bytes [76..79] zeroed)
-    for (int i = 0; i < 80; i++) masked[i] = header80[i];
-    masked[76] = masked[77] = masked[78] = masked[79] = 0;
-    hoo_blake3_256(masked, 80, matrixSeed);
-
-    double mat[64][64];
-    hoo_generateMatrix(matrixSeed, mat);
-
-    uint64_t nonce = (uint64_t)hoo_read_u32le(header80 + 76);
-    hoo_matmul(mat, firstPass, output, nonce);
+    blake3_256(result, 32, output);
 }

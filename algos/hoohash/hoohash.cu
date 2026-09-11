@@ -15,8 +15,7 @@
  * the consensus libm (glibc) at large-arg sin/cos, so a CPU recheck would REJECT the
  * GPU's correct shares. Instead we trust the GPU digest (read it back from d_hash and
  * fulltest that). A GPU startup self-test against the real-block KAT verifies this
- * GPU's libdevice matches consensus. (A 1.2M-header GPU-vs-glibc sweep found zero
- * divergence; see memory hoohash-cuda-port.)
+ * GPU's libdevice matches consensus.
  */
 #include "miner.h"
 #include "cuda_helper.h"
@@ -28,7 +27,7 @@ static bool init[MAX_GPUS] = { 0 };
 extern "C" void hoohash_setBlock(const void* endiandata);
 extern "C" void hoohash_gen_matrix(void);
 extern "C" void hoohash_cpu_hash(uint32_t threads, uint32_t startNonce, uint32_t* d_hash, uint32_t tpb);
-extern "C" int  hoohash_gpu_self_test(void);
+extern "C" bool hoohash_device_selftest(int thr_id);
 
 #define HOOHASH_TPB 64u  // FP64-heavy: 64 threads/block
 
@@ -44,8 +43,10 @@ extern "C" int scanhash_hoohash(int thr_id, struct work* work, uint32_t max_nonc
 	if (init[thr_id])
 		throughput = min(throughput, max_nonce - first_nonce);
 
+	// 0x00ff is unreachable over the single window --benchmark scans, which
+	// left the candidate readback and fulltest dead. Loosened so they run.
 	if (opt_benchmark)
-		((uint32_t*)ptarget)[7] = 0x00ff;
+		((uint32_t*)ptarget)[7] = 0x0000ffff;
 
 	if (!init[thr_id])
 	{
@@ -57,11 +58,10 @@ extern "C" int scanhash_hoohash(int thr_id, struct work* work, uint32_t max_nonc
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads",
 			throughput2intensity(throughput), throughput);
 
-		if (!hoohash_gpu_self_test())
-			gpulog(LOG_WARNING, thr_id, "HoohashV110 GPU self-test FAILED "
-				"(libdevice != consensus libm?) — shares may be rejected");
-		else
-			gpulog(LOG_INFO, thr_id, "HoohashV110 GPU self-test PASSED (real-block KAT)");
+		// Fail-closed: no host re-verify exists for this algo, so a GPU that
+		// misses the KAT would mine local rejects all session, silently.
+		if (hoohash_device_selftest(thr_id))
+			gpulog(LOG_INFO, thr_id, "HoohashV110 self-test OK (real-block KAT + negative)");
 
 		// 16 words/entry: cuda_check_hash (cuda_checkhash_64) strides 64-byte slots.
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_hash[thr_id], 16 * sizeof(uint32_t) * throughput), 0);
@@ -100,12 +100,16 @@ extern "C" int scanhash_hoohash(int thr_id, struct work* work, uint32_t max_nonc
 				work->valid_nonces = 1;
 				work_set_target_ratio(work, vhash);
 				work->nonces[1] = cuda_check_hash_suppl(thr_id, throughput, pdata[19], d_hash[thr_id], 1);
-				if (work->nonces[1] != 0)
+				if (work->nonces[1] != UINT32_MAX)
 				{
 					uint32_t idx1 = work->nonces[1] - pdata[19];
 					cudaMemcpy(vhash, d_hash[thr_id] + idx1 * 16, 32, cudaMemcpyDeviceToHost);
-					bn_set_target_ratio(work, vhash, 1);
-					work->valid_nonces++;
+					// Guard the second nonce like the first.
+					if (vhash[7] <= Htarg && fulltest(vhash, ptarget))
+					{
+						bn_set_target_ratio(work, vhash, 1);
+						work->valid_nonces++;
+					}
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				}
 				else
@@ -114,8 +118,11 @@ extern "C" int scanhash_hoohash(int thr_id, struct work* work, uint32_t max_nonc
 				}
 				return work->valid_nonces;
 			}
-			else if (vhash[7] > Htarg)
+			else
 			{
+				// Catches EVERY non-accepting case. As "else if (vhash[7] > Htarg)" a
+				// digest that passed the screen but failed fulltest matched neither
+				// branch: no reject, no log. Resuming at nonces[0]+1 re-scans the tail.
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
 					gpulog(LOG_WARNING, thr_id, "result for %08x does not validate!", work->nonces[0]);

@@ -449,6 +449,7 @@ extern void free_phi(int thr_id);
 extern void free_polytimos(int thr_id);
 extern void free_quark(int thr_id);
 extern void free_qubit(int thr_id);
+extern void free_rinhash(int thr_id);
 extern void free_sha256d(int thr_id);
 extern void free_sha256csm(int thr_id);
 extern void free_sha256t(int thr_id);
@@ -617,7 +618,6 @@ struct option {
 extern int options_count();
 
 extern bool opt_benchmark;
-extern uint32_t opt_batch_size;
 extern bool opt_debug;
 extern bool opt_quiet;
 extern bool opt_protocol;

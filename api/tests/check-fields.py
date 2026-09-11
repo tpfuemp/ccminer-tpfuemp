@@ -3,10 +3,10 @@
 
 The contract is written before the handlers, so it drifts in both directions:
 a field can be documented and never emitted, or emitted and never documented.
-Neither shows up as an error anywhere else — a client just finds a null it did
+Neither shows up as an error anywhere else -- a client just finds a null it did
 not expect, or misses a value that was there all along.
 
-    <run a miner with --api-mode http|both>
+    <run a miner with --api-bind 127.0.0.1:4048>
     python api/tests/check-fields.py                 # live
     python api/tests/check-fields.py captured.json   # from a saved capture
 
@@ -23,17 +23,30 @@ except ImportError:
     print("check-fields: PyYAML is required"); sys.exit(2)
 
 SPEC = "docs/openapi.yaml"
-BASE = "http://127.0.0.1:4068/api/v1/"
+BASE = "http://127.0.0.1:4048/api/v1/"
 
 # endpoint -> (schema name, json key holding it, True if it is an array)
 # The only fields the contract allows to be absent rather than null.
-# Device: "a common shell plus exactly one typed sub-object ... clients must
-# tolerate either sub-object being absent". Health: reasons accompanies a
+# Device: "a common shell plus a typed sub-object naming the device class, and
+# on one implementation a second naming the compute stack ... clients must
+# tolerate any sub-object being absent". Health: reasons accompanies a
 # degraded status. Anything else missing is drift.
 CONDITIONAL = {
-    "Device": {"gpu", "cpu"},
+    "Device": {"gpu", "cpu", "vulkan"},
     "Health": {"reasons"},
 }
+
+# Fields this miner emits that the shared schema does not describe yet, named
+# one by one rather than waved through by a prefix: the whole value of this
+# check is that an undocumented field is loud, and a wildcard here would make
+# the next one silent.
+#
+# They are reported apart from the drift rather than counted as it because the
+# schema is one file that several implementations ship, and it is edited in all
+# of them at once. Adding the field to this repo's copy first and reconciling
+# afterwards is how the document forks; this list is what carries the debt in
+# the meantime, and it is empty when there is none.
+PENDING = {}
 
 BINDINGS = [
     ("summary",   "Summary",     "summary", False),
@@ -77,6 +90,12 @@ def fetch(ep, cache):
     try:
         return json.load(urllib.request.urlopen(BASE + ep, timeout=8))
     except urllib.error.HTTPError as e:
+        # A degraded /health is 503 and carries the health object rather than an
+        # error envelope. That is the one non-2xx with fields to reconcile, and
+        # skipping it would leave the reasons array unchecked in exactly the
+        # state it exists for.
+        if e.code == 503:
+            return json.load(e)
         # 403 (control switched off) and 501 (not served by this miner) are
         # contract-legal answers, not drift; anything else is a real failure.
         if e.code in (403, 501):
@@ -107,13 +126,16 @@ def main():
         got = emitted(payload)
 
         # docs/api-rest.md section 3: "Unavailable values are null, never 0 and
-        # never omitted." So a documented field that is absent IS a fault —
+        # never omitted." So a documented field that is absent IS a fault --
         # except for the handful the contract explicitly says are conditional.
         allowed = CONDITIONAL.get(schema, set())
+        pending = PENDING.get(schema, set())
         absent = set(want) - set(got)
         missing = sorted(absent - allowed)
         optional_absent = sorted(absent & allowed)
-        extra = sorted(set(got) - set(want))         # emitted, not documented
+        undocumented = set(got) - set(want)
+        extra = sorted(undocumented - pending)       # emitted, not documented
+        owed = sorted(undocumented & pending)
         submis = []
         for k in sorted(set(want) & set(got)):
             if want[k] and got[k] is not None:
@@ -132,6 +154,8 @@ def main():
             print("    %s" % m); fail += 1
         for m in optional_absent:
             print("    (optional, absent)      : %s" % m)
+        for m in owed:
+            print("    (owed to the schema)    : %s" % m)
 
     print("\nRESULT:", "PASS" if fail == 0 else "FAIL (%d)" % fail)
     return 1 if fail else 0
@@ -144,7 +168,7 @@ def main():
 # Third leg: the markdown examples against the schema.
 #
 # The two checks above compare emitted-vs-spec. That misses the case where the
-# human document promises a field neither the spec nor the code has — which is
+# human document promises a field neither the spec nor the code has -- which is
 # exactly how `type`, `status`, `best_share` and `job` went unnoticed in the
 # pool example. Run with --md to compare the markdown's JSON blocks too.
 
@@ -155,7 +179,7 @@ def check_markdown(spec):
     """The markdown examples against the schema.
 
     The emitted-vs-spec checks above cannot see a field the human document
-    promises that neither the spec nor the code has — which is exactly how the
+    promises that neither the spec nor the code has -- which is exactly how the
     pool example's type/status/best_share/job went unnoticed.
     """
     doc = open("docs/api-rest.md", encoding="utf-8").read()
