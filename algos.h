@@ -219,7 +219,13 @@ static const char *algo_names[] = {
 	"whirlpoolx",
 	"whirlpoolx2",
 	"wildkeccak",
-	"lyra2re",
+	/* NULL, not "lyra2re": that name ALSO exists in the alias chain below, mapping to
+	 * ALGO_LYRA2 -- but algo_to_int() searches THIS table first and returned the orphan
+	 * ALGO_LYRA2RE, which has no scanhash dispatch, so `-a lyra2re` printed
+	 * "not available in this build" and exited. The lookup already handles NULL
+	 * (`if (algo_names[i] && ...)`), so the slot is skipped and the alias now fires.
+	 * A slot rather than a deletion, so the enum is NOT renumbered. */
+	NULL,
 	"lyra2z330",
 	"yescrypt",
 	"yescryptr8",

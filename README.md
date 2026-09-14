@@ -13,10 +13,15 @@ address.
 Requirements
 ------------
 
-> **This fork targets modern NVIDIA hardware and CUDA 11.8 only.**
+> **This fork targets modern NVIDIA hardware. CUDA 11.8 ships; CUDA 12.9 builds.**
 
-- **CUDA Toolkit:** 11.8 (fixed). Older toolkits (10.x, 11.0–11.7) are not supported.
-- **Build toolchain (Windows):** Visual Studio 2022, project file `ccminer.vcxproj`.
+- **CUDA Toolkit:** 11.8 for the shipping build. Older toolkits (10.x, 11.0-11.7)
+  are not supported. A second project, `ccminer-cuda12.vcxproj`, builds the same
+  sources against **CUDA 12.9** and is validated against a live pool; 11.8 remains
+  the shipping configuration because the two measured within noise of each other.
+  The texture-reference API that CUDA 12 removed is gone from the tree.
+- **Build toolchain (Windows):** Visual Studio 2022, project file `ccminer.vcxproj`
+  (or `ccminer-cuda12.vcxproj` for the CUDA 12.9 build).
 - **Supported GPU architectures:** Pascal (`sm_61`, GTX 10-series) and newer —
   Turing (`sm_75`) and Ampere (`sm_86`). The default build ships native SASS for
   `sm_61 / sm_75 / sm_86` plus a `compute_86` PTX fallback for later cards.
@@ -143,7 +148,16 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `yescryptr16v2` | PPTP |
 | `yescryptr24` | JagariCoinR |
 | `yescryptr32` | WAVI |
+| `yespower` | yespower 1.0, generic (r=32); coin presets below |
+| `yespowerr16` | Yenten (YTN), yespower r=16 |
+| `power2b` (`yespower-b2b`) | yespower-b2b: BLAKE2b head/tail (MicroBitcoin) |
 | `zr5` (`ziftr`) | ZR5 (ZiftrCoin) |
+
+The yespower coins share one `-a` name and differ only in `(N, r, pers)`, which
+the algo name alone cannot carry. Select one either with its own alias
+(`yespowersugar`, `sugarchain`, `yespowerurx`, `yespowerltncg`, `yespowermgpc`,
+`yespowertide`, `yespowerarwn`, `yespoweric`, `yespoweriots`, `yespowerlitb`,
+`cpupower`) or with the pool's `"algo"` field, which is honoured on a pool switch.
 
 Run `ccminer --help` for the authoritative list and per-algo notes.
 
@@ -177,6 +191,24 @@ source tree stays free of build artefacts.
   (default `sm_61 / sm_75 / sm_86`) and re-run `./build.sh`.
 - **WSL2:** the CUDA driver library `libcuda.so` lives in `/usr/lib/wsl/lib`
   rather than under the toolkit; `configure.sh` already adds it to `LDFLAGS`.
+
+Monitoring and control
+----------------------
+
+Two APIs are available and can run at the same time:
+
+- **Binary/telnet API** (`--api-bind`), the upstream protocol, unchanged.
+- **HTTP/JSON REST API** (`--api-http-bind`), added in 2026.09. Read-only status,
+  plus optional **runtime control**: switch pool or algorithm, pause and resume
+  mining, and apply per-algo parameters without restarting. It also exposes
+  **Prometheus** metrics and a `/health` endpoint for container probes.
+
+Control endpoints are refused unless explicitly enabled, and `--api-remote`
+separates "may read" from "may change" so a dashboard can be given status access
+without the ability to redirect hashrate.
+
+The contract is documented in [docs/api-rest.md](docs/api-rest.md) with an
+OpenAPI schema in [docs/openapi.yaml](docs/openapi.yaml).
 
 Source-code dependencies
 ------------------------

@@ -66,6 +66,9 @@ struct opt_config_array {
 	{ CFG_POOL, "max-rate", "pool-max-rate" },
 	{ CFG_POOL, "disabled", "pool-disabled" },
 	{ CFG_POOL, "time-limit", "pool-time-limit" },
+	/* Its setter exists in pool_set_attr(); without this entry a per-pool
+	 * shares-limit in a config was silently dropped. */
+	{ CFG_POOL, "shares-limit", "pool-shares-limit" },
 	{ CFG_NULL, NULL, NULL }
 };
 
@@ -90,6 +93,8 @@ void pool_set_creds(int pooln)
 		p->scantime = -1;
 		p->shares_limit = -1;
 		p->time_limit = -1;
+		p->shares_limit_set = false;
+		p->time_limit_set = false;
 
 		p->allow_mininginfo = allow_mininginfo;
 		p->allow_gbt = allow_gbt;
@@ -154,10 +159,12 @@ void pool_set_attr(int pooln, const char* key, char* arg)
 	}
 	if (!strcasecmp(key, "shares-limit")) {
 		p->shares_limit = atoi(arg);
+		p->shares_limit_set = true;
 		return;
 	}
 	if (!strcasecmp(key, "time-limit")) {
 		p->time_limit = atoi(arg);
+		p->time_limit_set = true;
 		return;
 	}
 	if (!strcasecmp(key, "disabled")) {
@@ -256,14 +263,20 @@ bool pool_switch(int thr_id, int pooln)
 		 * its own when it sees the generation move. */
 		algo_switch_gen++;
 
-		/* The int alone loses which yespower coin this pool asked for, and the
-		 * loss is silent: generic r=32/keyless parameters hash fine and are
-		 * rejected 100% of the time. Re-select from the name the config gave;
-		 * with no "algo" for this pool the CLI's own selection stands. */
-		if ((opt_algo == ALGO_YESPOWER || opt_algo == ALGO_YESPOWERR16) &&
-		    p->algo_name[0] && !yespower_set_variant(p->algo_name))
+	}
+
+	/* The algo int does not carry which yespower coin the pool asked for, and two
+	 * coins can share one enum while differing in (N, r, pers).  So this runs on
+	 * every switch, not only when the enum moves, and bumps the generation when
+	 * the variant actually changed so the device buffers are re-sized. */
+	if ((opt_algo == ALGO_YESPOWER || opt_algo == ALGO_YESPOWERR16) && p->algo_name[0]) {
+		char prev_variant[32];
+		snprintf(prev_variant, sizeof(prev_variant), "%s", yespower_variant_name());
+		if (!yespower_set_variant(p->algo_name))
 			applog(LOG_ERR, "pool %d: keeping yespower variant '%s'", pooln,
 			       yespower_variant_name());
+		else if (strcmp(prev_variant, yespower_variant_name()) != 0)
+			algo_switch_gen++;
 	}
 
 	if (prevn != cur_pooln) {

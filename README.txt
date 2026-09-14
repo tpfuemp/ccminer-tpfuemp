@@ -1,5 +1,5 @@
 
-ccminer-tpfuemp 2026.07.2   "ProgPoW family (kawpow/meowpow/evrprogpow/firopow/meraki) + verthash / curvehash / argon2d500 / argon2d4096 / whirlpoolx2"
+ccminer-tpfuemp 2026.09   "yespower 1.0 family (yespower/yespowerr16/power2b) + argon2id1024, BLAKE3 decred, REST API, CUDA 12 readiness"
 ---------------------------------------------------------------
 
 Donation addresses and contributor credits are in CREDITS.txt.
@@ -34,6 +34,7 @@ its command line interface and options.
                           argon2d1000         Zero Dynamics Cash
                           argon2d4096         Argentum / Myriad (XMY)
                           argon2d16000        Alterdot (ADOT)
+                          argon2id1024        Bitweb (BTW)
                           balloon             Balloon hash
                           bastion             Hefty bastion
                           bitcore             Timetravel-10
@@ -46,6 +47,7 @@ its command line interface and options.
                           c11 / flax          X11 variant
                           cryptolight         AEON CryptoNight (MEM/2)
                           cryptonight         Monero-style CryptoNight
+                          cpupower            CPUchain (CPU), a yespower preset
                           curvehash           CurvehashCoin (secp256k1 EC)
                           decred              Decred BLAKE3 (DCP-0011)
                           deep                Deepcoin
@@ -86,6 +88,7 @@ its command line interface and options.
                           penta               Pentablake (5x Blake-512)
                           phi / phi1612       PHI1612 (BHCoin)
                           polytimos           Polytimos
+                          power2b             yespower-b2b (MicroBitcoin)
                           quark               Quark
                           qubit               Qubit
                           rinhash             RinHash (Blake3 + Argon2d + SHA3-256)
@@ -104,6 +107,7 @@ its command line interface and options.
                           skein               Skein-SHA2 (Skeincoin)
                           skein2              Double Skein (Woodcoin)
                           skunk               Skein-Cube-Fugue-Streebog
+                          sugarchain          alias of yespowersugar
                           skydoge             SkyDoge
                           soterg              Soteria (X12R core-rotation)
                           timetravel          Timetravel (Machinecoin, permuted x8)
@@ -134,6 +138,17 @@ its command line interface and options.
                           yescryptr16v2       PPTP
                           yescryptr24         JagariCoinR
                           yescryptr32         WAVI
+                          yespower            yespower 1.0, generic (r=32)
+                          yespowerr16         Yenten (YTN), yespower r=16
+                          yespowerarwn        Arowana (ARWN)
+                          yespoweric          IsotopeC
+                          yespoweriots        IOTS
+                          yespowerlitb        LightBit (LITB)
+                          yespowerltncg       LightningCash-Gold
+                          yespowermgpc        MagpieCoin (MGPC)
+                          yespowersugar       Sugarchain (SUGAR)
+                          yespowertide        Tidecoin (TDC)
+                          yespowerurx         UraniumX (URX)
                           zr5 / ziftr         ZR5 (ZiftrCoin)
 
   -d, --devices         gives a comma separated list of CUDA device IDs
@@ -301,6 +316,73 @@ Toolkit, use the upstream project instead -- it retains that wider hardware and
 toolkit range: https://github.com/tpruvot/ccminer
 
 >>> RELEASE HISTORY <<<
+  Sep. 14th 2026  ccminer-tpfuemp 2026.09
+                  New algorithms: the yespower 1.0 family -- yespower, yespowerr16
+                  (Yenten), power2b / yespower-b2b -- with 11 coin presets selected by
+                  -a name or a pool "algo" field (Sugarchain, UraniumX, CPUchain,
+                  Tidecoin, LightningCash-Gold, MagpieCoin, Arowana, IsotopeC, IOTS,
+                  LightBit); argon2id1024 (Bitweb)
+
+                  Revived: -a scrypt and -a scrypt-jane, which had no dispatch entry and
+                  could not run at all; -a lyra2v2, which faulted on every launch after a
+                  shared stage changed its buffer layout for another algo; -a lyra2z330
+
+                  Consensus fix: -a decred now mines BLAKE3 (DCP-0011), not Blake-256.
+                  It had been computing Blake-256 since the fork inherited it and could
+                  not produce an acceptable share.
+
+                  Share-loss fixes: 64-bit target compare in blake / blakecoin / vanilla
+                  (the old screen dropped valid shares below difficulty 1); atomic
+                  candidate reporting in groestl256 -- whose second-nonce channel was
+                  entirely dead -- balloon, blake2b, sia and heavyhash; second-nonce
+                  re-verify guards in ghostrider, lyra2RE and allium; duplicate-submit
+                  nonce cursors; UINT32_MAX sentinel across 28 files, since 0 is a legal
+                  nonce
+
+                  Speedups on Ampere, verified against a live pool:
+                    rinhash     6.9x    shared argon2d cooperative fill
+                    heavyhash   4.9x    __dp4a nibble matrix, 16 -> 4 KB of shared
+                    curvehash   2.3x    safegcd inversion, then a 16-bit ecmult_gen window
+                    yespower    2.3x    S-box placement and a 32-thread block, over the
+                                        initial port earlier in this same cycle
+                    odocrypt    1.9x    funnel-shift rotate + per-epoch NVRTC JIT
+                    vanilla     1.46x   default intensity
+                    blake2s     1.14x   default intensity
+                    allium and lyra2 1.14x, lyra2z 1.03x, also default intensity
+                  scrypt, scrypt-jane, lyra2v2 and lyra2z330 carry no factor: they could
+                  not run at all before (see Revived)
+
+                  Pool switching: several fixes, all of which only bite when more than one
+                  pool is configured --
+                    A switch did not close the previous pool's stratum session, so the miner
+                    kept mining the OLD pool's jobs under the NEW pool's algorithm and every
+                    share after the first switch was rejected. Rotating between two pools now
+                    mines and submits on the pool it actually selected.
+                    --time-limit and --shares-limit never stopped the miner: every pool
+                    inherited the value, which made them rotate for ever and left the
+                    documented "timeout reached, exiting" unreachable. A limit given on the
+                    command line now ends the run, and its deadline is measured across the
+                    whole session, so repeated pool rotation cannot keep deferring it. A
+                    pool that sets its own time-limit or shares-limit in the config still
+                    rotates, as before.
+                    A requested shutdown was treated as a dead pool and triggered a failover
+                    into the teardown, which could crash on exit.
+                    "shares-limit" is now accepted as a per-pool config key; it had a setter
+                    but was missing from the key table, so it was silently ignored.
+                  CUDA 12: the texture-reference API that CUDA 12 removed is gone from
+                  the four files that still used it. A validated ccminer-cuda12.vcxproj
+                  (CUDA 12.9) builds alongside the shipping CUDA 11.8 project; 11.8 still
+                  ships, since the two measured within noise of each other
+
+                  REST API: an HTTP/JSON API alongside the legacy binary protocol, with
+                  runtime control (pool and algo switching, pause/resume), Prometheus
+                  metrics, a /health endpoint and --api-remote privilege separation.
+                  See docs/api-rest.md and docs/openapi.yaml
+
+                  Reliability: device self-tests now fail closed instead of logging a
+                  warning and mining on; an algo switch frees GPU buffers, drops stale
+                  shares and resets per-pool stats; NVRTC is linked statically
+
   Jul. 22nd 2026  ccminer-tpfuemp 2026.07.2
                   New algorithms: kawpow (Ravencoin), meowpow (Meowcoin),
                   evrprogpow (Evrmore), firopow (Firo / StakeCube), meraki

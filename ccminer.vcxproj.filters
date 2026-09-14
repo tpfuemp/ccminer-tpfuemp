@@ -427,6 +427,12 @@
     <ClCompile Include="sph\yespower_ref.c">
       <Filter>Source Files\sph</Filter>
     </ClCompile>
+    <ClCompile Include="sph\yespower_b2b_ref.c">
+      <Filter>Source Files\sph</Filter>
+    </ClCompile>
+    <ClCompile Include="sph\hmac_blake2b.c">
+      <Filter>Source Files\sph</Filter>
+    </ClCompile>
     <ClCompile Include="sph\sha256_Y.c">
       <Filter>Source Files\sph</Filter>
     </ClCompile>
@@ -1023,6 +1029,12 @@
       <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\x15\whirlpool.cu">
+      <Filter>Source Files\CUDA\x15</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\x15\whirlpoolx.cu">
+      <Filter>Source Files\CUDA\x15</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\x15\cuda_whirlpoolx.cu">
       <Filter>Source Files\CUDA\x15</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\whirlpoolx2\whirlpoolx2.cu">

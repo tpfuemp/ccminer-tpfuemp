@@ -100,6 +100,10 @@ extern int yespower_ref(yespower_local_t *local,
 extern int yespower_tls_ref(const uint8_t *src, size_t srclen,
     const yespower_params_t *params, yespower_binary_t *dst);
 
+/* yespower-b2b: same structure, BLAKE2b in the head and tail. `-a power2b`. */
+extern int yespower_b2b_tls_ref(const uint8_t *src, size_t srclen,
+    const yespower_params_t *params, yespower_binary_t *dst);
+
 #ifdef __cplusplus
 }
 #endif

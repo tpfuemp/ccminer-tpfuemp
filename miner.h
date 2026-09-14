@@ -359,6 +359,7 @@ extern int scanhash_bitcore(int thr_id, struct work* work, uint32_t max_nonce, u
 extern int scanhash_vanilla(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done, int8_t blake_rounds);
 extern int scanhash_veltor(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_whirl(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_whirlx(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_whirlpoolx2(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_wildkeccak(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_x11evo(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
@@ -466,6 +467,7 @@ extern void free_tribus(int thr_id);
 extern void free_vanilla(int thr_id);
 extern void free_veltor(int thr_id);
 extern void free_whirl(int thr_id);
+extern void free_whirlx(int thr_id);
 extern void free_whirlpoolx2(int thr_id);
 extern void free_wildkeccak(int thr_id);
 extern void free_x11evo(int thr_id);
@@ -491,6 +493,7 @@ void sha3t256_hash(void *state, const void *input);
 void soterg_hash(void *output, const void *input);
 void x25x_hash(void *output, const void *input);
 extern void free_sha256dv(int thr_id);
+extern void free_yespower(int thr_id);
 extern void free_zr5(int thr_id);
 /* api related */
 void *api_thread(void *userdata);
@@ -904,6 +907,10 @@ struct pool_infos {
 	double max_rate;
 	int shares_limit;
 	int time_limit;
+	/* Set only when the pool configures its own limit.  An inherited
+	 * command-line limit means stop the miner, not rotate for ever. */
+	bool shares_limit_set;
+	bool time_limit_set;
 	int scantime;
 	// connection
 	struct stratum_ctx stratum;

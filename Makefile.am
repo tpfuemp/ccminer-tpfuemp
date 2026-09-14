@@ -60,7 +60,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/yescrypt/yescrypt.cu algos/yescrypt/cuda_yescrypt.cu \
 			  sph/yescrypt-common.c sph/yescrypt-opt.c sph/sha256_Y.c \
 			  sph/yescrypt.h sph/yescrypt-platform.h \
-algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh algos/yespower/yespower_smix.cuh algos/yespower/yespower_head_tail.cuh algos/yespower/yespower_hash.cuh sph/yespower_ref.c sph/yespower.h \
+algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh cuda/blake2b_hash_device.cuh algos/yespower/yespower_smix.cuh algos/yespower/yespower_head_tail.cuh algos/yespower/yespower_hash.cuh sph/yespower_ref.c sph/yespower_b2b_ref.c sph/hmac_blake2b.c sph/hmac_blake2b.h sph/yespower.h \
 			  algos/odocrypt/odocrypt_host.cpp algos/odocrypt/odocrypt_jit.cpp algos/odocrypt/cuda_odocrypt.cu \
 			  algos/heavyhash/heavyhash.cu \
 			  algos/heavyhash/cuda_heavyhash.cu \
@@ -139,7 +139,7 @@ algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh algos/y
 			  algos/hsr/hsr.cu algos/hsr/cuda_hsr_sm3.cu algos/hsr/sm3.c \
 			  algos/x15/x14.cu algos/x15/x15.cu algos/stages/cuda_shabal512.cu algos/stages/cuda_whirlpool512.cu \
 			  algos/stages/cuda_whirlpool512_80.cu \
-			  algos/x15/whirlpool.cu \
+			  algos/x15/whirlpool.cu algos/x15/whirlpoolx.cu algos/x15/cuda_whirlpoolx.cu \
 			  algos/whirlpoolx2/whirlpoolx2.cu algos/whirlpoolx2/cuda_whirlpoolx2.cu \
 			  algos/x16/x16r.cu algos/x16/x16rt.cu algos/x16/x16rv2.cu algos/x16/x16s.cu algos/stages/cuda_echo512_80.cu algos/stages/cuda_fugue512_80.cu \
 			  algos/stages/cuda_shabal512_80.cu algos/stages/cuda_shavite512_80.cu algos/stages/cuda_simd512_80.cu \
@@ -171,7 +171,11 @@ endif
 
 ccminer_LDFLAGS  = $(PTHREAD_FLAGS) @CUDA_LDFLAGS@
 ccminer_LDADD    = @LIBCURL@ @JANSSON_LIBS@ @PTHREAD_LIBS@ @WS2_LIBS@ @CUDA_LIBS@ @OPENMP_CFLAGS@ @LIBS@ $(nvml_libs)
-ccminer_CPPFLAGS = @LIBCURL_CPPFLAGS@ @OPENMP_CFLAGS@ $(CPPFLAGS) $(PTHREAD_FLAGS) -fno-strict-aliasing $(JANSSON_INCLUDES) $(DEF_INCLUDES) $(nvml_defs) -I$(top_srcdir)/algos/curvehash/secp256k1
+# WITH_HEAVY_ALGO must be on the C++ side as well as nvcc_FLAGS: the -a heavy /
+# -a mjollnir dispatch lives behind #ifdef in ccminer.cpp, which g++ compiles.
+# With it only on the CUDA side, heavy.cu gets the real body and the dispatch is
+# still compiled out, so the algo reports "not available in this build".
+ccminer_CPPFLAGS = -DWITH_HEAVY_ALGO @LIBCURL_CPPFLAGS@ @OPENMP_CFLAGS@ $(CPPFLAGS) $(PTHREAD_FLAGS) -fno-strict-aliasing $(JANSSON_INCLUDES) $(DEF_INCLUDES) $(nvml_defs) -I$(top_srcdir)/algos/curvehash/secp256k1
 
 if HAVE_OSX
 ccminer_CPPFLAGS += -I/usr/local/llvm/lib/clang/4.0.0/include
@@ -200,6 +204,9 @@ nvcc_ARCH += -gencode=arch=compute_61,code=\"sm_61,compute_61\"
 
 nvcc_FLAGS = $(nvcc_ARCH) @CUDA_INCLUDES@ -I. -I$(srcdir) @CUDA_CFLAGS@
 nvcc_FLAGS += $(JANSSON_INCLUDES) --ptxas-options="-v"
+# -a heavy / -a mjollnir: algos/heavy/ is complete and already in the sources below,
+# but heavy.cu compiles to a stub without this symbol.
+nvcc_FLAGS += -DWITH_HEAVY_ALGO
 
 # we're now targeting all major compute architectures within one binary.
 .cu.o:

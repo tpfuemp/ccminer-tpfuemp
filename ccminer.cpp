@@ -113,6 +113,10 @@ static int opt_fail_pause = 30;
 int opt_time_limit = -1;
 int opt_shares_limit = -1;
 time_t firstwork_time = 0;
+/* Wall clock for the global --time-limit deadline.  `firstwork_time` restarts
+ * on every pool switch so each pool gets its own mining period, which means a
+ * rotating miner would never accumulate the deadline.  This one is set once. */
+time_t session_start_time = 0;
 int opt_timeout = 300; // curl
 int opt_scantime = 10;
 static json_t *opt_config;
@@ -1664,7 +1668,9 @@ static void *workio_thread(void *userdata)
 			break;
 		}
 
-		if (!ok && num_pools > 1 && opt_pool_failover) {
+		/* A deliberate abort is not a dead pool: WC_ABORT sets ok=false, and failing
+	 * over on it switches pools while the miner is tearing down. */
+	if (!ok && wc->cmd != WC_ABORT && !abort_flag && num_pools > 1 && opt_pool_failover) {
 			if (opt_debug_threads)
 				applog(LOG_DEBUG, "%s died, failover", __func__);
 			ok = pool_switch_next(-1);
@@ -1781,7 +1787,7 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		return rpc2_stratum_gen_work(sctx, work);
 
 	if (!sctx->job.job_id) {
-		// applog(LOG_WARNING, "stratum_gen_work: job not yet retrieved");
+		// applog(LOG_WARNING, "stratum_gen_work(): job not yet retrieved");
 		return false;
 	}
 
@@ -2570,12 +2576,22 @@ static void *miner_thread(void *userdata)
 		/* time limit */
 		if (opt_time_limit > 0 && firstwork_time) {
 			int passed = (int)(time(NULL) - firstwork_time);
+			/* Rotation restarts `firstwork_time`, so the per-pool period below uses it
+			* while the EXIT decision must not: measure the deadline from the session. */
+			const int session_passed = (int)(time(NULL) - session_start_time);
 			int remain = (int)(opt_time_limit - passed);
+						/* Only for an inherited limit: a pool with its own period wants rotation. */
+			if (!pools[cur_pooln].time_limit_set && session_passed >= opt_time_limit)
+				remain = -1;
 			if (remain < 0)  {
 				if (thr_id != 0) {
 					sleep(1); continue;
 				}
-				if (num_pools > 1 && pools[cur_pooln].time_limit > 0) {
+								/* Rotate only if this pool asked for its own mining period. A limit inherited
+				 * from --time-limit means stop, and taking the rotate branch for it left the
+				 * exit below unreachable. */
+				if (num_pools > 1 && pools[cur_pooln].time_limit > 0 &&
+				    pools[cur_pooln].time_limit_set) {
 					if (!pool_is_switching) {
 						if (!opt_quiet)
 							applog(LOG_INFO, "Pool mining timeout of %ds reached, rotate...", opt_time_limit);
@@ -2614,7 +2630,9 @@ static void *miner_thread(void *userdata)
 				if (thr_id != 0) {
 					sleep(1); continue;
 				}
-				if (num_pools > 1 && pools[cur_pooln].shares_limit > 0) {
+								/* Same rule as the time limit above. */
+				if (num_pools > 1 && pools[cur_pooln].shares_limit > 0 &&
+				    pools[cur_pooln].shares_limit_set) {
 					if (!pool_is_switching) {
 						if (!opt_quiet)
 							applog(LOG_INFO, "Pool shares limit of %d reached, rotate...", opt_shares_limit);
@@ -3012,9 +3030,9 @@ static void *miner_thread(void *userdata)
 		case ALGO_WHIRLPOOL:
 			rc = scanhash_whirl(thr_id, &work, max_nonce, &hashes_done);
 			break;
-		//case ALGO_WHIRLPOOLX:
-		//	rc = scanhash_whirlx(thr_id, &work, max_nonce, &hashes_done);
-		//	break;
+		case ALGO_WHIRLPOOLX:
+			rc = scanhash_whirlx(thr_id, &work, max_nonce, &hashes_done);
+			break;
 		case ALGO_WHIRLPOOLX2:
 			rc = scanhash_whirlpoolx2(thr_id, &work, max_nonce, &hashes_done);
 			break;
@@ -3247,6 +3265,8 @@ static void *miner_thread(void *userdata)
 
 		if (firstwork_time == 0)
 			firstwork_time = time(NULL);
+		if (session_start_time == 0)
+			session_start_time = time(NULL);
 
 		if (cgpu) cgpu->accepted += work.valid_nonces;
 
@@ -3570,7 +3590,7 @@ wait_stratum_url:
 				 * algo with no barrier while the miner threads are live. */
 				if (opt_retries >= 0 && ++failures > opt_retries &&
 				    !api_ctl_switch_in_flight()) {
-					if (num_pools > 1 && opt_pool_failover) {
+					if (num_pools > 1 && opt_pool_failover && !abort_flag) {
 						applog(LOG_WARNING, "Stratum connect timeout, failover...");
 						pool_switch_next(-1);
 					} else {
@@ -3686,7 +3706,14 @@ out:
 
 pool_switched:
 	/* this thread should not die on pool switch */
-	stratum_disconnect(&(pools[pooln].stratum));
+	/* Disconnect the live session, not `pools[pooln].stratum`, which is never
+	 * connected.  Leaving it open skips the reconnect loop below, so the miner
+	 * keeps reading the previous pool's jobs under the new algo. */
+	stratum_disconnect(&stratum);
+	/* Do not reconnect while shutting down: the disconnect above would otherwise
+	 * drive a failover into the teardown. */
+	if (abort_flag)
+		goto out;
 	if (stratum.url) free(stratum.url); stratum.url = NULL;
 	if (opt_debug_threads)
 		applog(LOG_DEBUG, "%s() reinit...", __func__);

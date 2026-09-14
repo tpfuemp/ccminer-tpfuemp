@@ -105,7 +105,7 @@ void algo_free_all(int thr_id)
 	free_vanilla(thr_id);
 	free_veltor(thr_id);
 	free_whirl(thr_id);
-	//free_whirlx(thr_id);
+	free_whirlx(thr_id);
 	free_whirlpoolx2(thr_id);
 	free_wildkeccak(thr_id);
 	free_x11evo(thr_id);
@@ -146,6 +146,7 @@ void algo_free_all(int thr_id)
 	free_soterg(thr_id);
 	free_x16rt(thr_id);
 	free_x25x(thr_id);
+	free_yespower(thr_id);
 	free_scrypt(thr_id);
 	free_scrypt_jane(thr_id);
 }

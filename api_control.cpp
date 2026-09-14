@@ -888,6 +888,7 @@ static bool profile_apply(const ctl_profile_req *p, char *err, size_t errlen)
 {
 	const int   old_algo = opt_algo;
 	const bool  algo_changed = p->has_algo && p->algo != opt_algo;
+	bool variant_changed = false;
 	bool params_touched = false;
 	char old_variant[32];
 
@@ -896,16 +897,22 @@ static bool profile_apply(const ctl_profile_req *p, char *err, size_t errlen)
 	 * algo running the new coin's (N, r, pers). */
 	snprintf(old_variant, sizeof(old_variant), "%s", yespower_variant_name());
 
-	if (algo_changed) {
+	if (algo_changed)
 		opt_algo = (enum sha_algos) p->algo;
-		if ((opt_algo == ALGO_YESPOWER || opt_algo == ALGO_YESPOWERR16) &&
-		    !yespower_set_variant(p->algo_name)) {
+
+	/* Not gated on the enum moving: `algo_name` exists because the int loses the
+	 * coin, and two yespower coins can share one enum with different (N, r, pers).
+	 * Mirrors the same rule in pools.cpp. */
+	if (p->has_algo &&
+	    (opt_algo == ALGO_YESPOWER || opt_algo == ALGO_YESPOWERR16)) {
+		if (!yespower_set_variant(p->algo_name)) {
 			opt_algo = (enum sha_algos) old_algo;
 			yespower_set_variant(old_variant);
 			snprintf(err, errlen, "algo '%s' has no yespower parameter entry",
 			         p->algo_name);
 			return false;
 		}
+		variant_changed = strcmp(old_variant, yespower_variant_name()) != 0;
 	}
 
 	/* Sticky params for the incoming algo first, so an explicit params object
@@ -920,6 +927,11 @@ static bool profile_apply(const ctl_profile_req *p, char *err, size_t errlen)
 				opt_algo = (enum sha_algos) old_algo;
 				yespower_set_variant(old_variant);
 				api_ctl_params_restore(opt_algo);
+			} else if (variant_changed) {
+				/* opt_algo never moved, so restoring it is a no-op and
+				* api_ctl_params_restore would undo this request's own
+				* params. Only the coin needs walking back. */
+				yespower_set_variant(old_variant);
 			}
 			return false;
 		}
@@ -954,6 +966,11 @@ static bool profile_apply(const ctl_profile_req *p, char *err, size_t errlen)
 				opt_algo = (enum sha_algos) old_algo;
 				yespower_set_variant(old_variant);
 				api_ctl_params_restore(opt_algo);
+			} else if (variant_changed) {
+				/* opt_algo never moved, so restoring it is a no-op and
+				* api_ctl_params_restore would undo this request's own
+				* params. Only the coin needs walking back. */
+				yespower_set_variant(old_variant);
 			}
 			return false;
 		}
@@ -963,6 +980,11 @@ static bool profile_apply(const ctl_profile_req *p, char *err, size_t errlen)
 				opt_algo = (enum sha_algos) old_algo;
 				yespower_set_variant(old_variant);
 				api_ctl_params_restore(opt_algo);
+			} else if (variant_changed) {
+				/* opt_algo never moved, so restoring it is a no-op and
+				* api_ctl_params_restore would undo this request's own
+				* params. Only the coin needs walking back. */
+				yespower_set_variant(old_variant);
 			}
 			return false;
 		}
@@ -985,14 +1007,18 @@ static bool profile_apply(const ctl_profile_req *p, char *err, size_t errlen)
 				"pool selected but not connected after %dms", waited);
 	}
 
-	if (algo_changed) {
-		/* pool_switch() bumps this only when it changes opt_algo itself, which it
-		 * cannot here: opt_algo was assigned above. Miner threads free their device
-		 * buffers when the counter moves. Last, after every rollback path. */
+	if (algo_changed || variant_changed) {
+		/* pool_switch() cannot bump this here: opt_algo was assigned above.  A
+		 * variant-only change must bump it too, since yespower sizes its buffers
+		 * and uploads `pers` under its init guard.  Last, after every rollback. */
 		algo_switch_gen++;
+		if (algo_changed)
 		applog(LOG_NOTICE, "control: algo %s -> %s",
 			algo_names[old_algo] ? algo_names[old_algo] : "?",
 			algo_names[opt_algo] ? algo_names[opt_algo] : "?");
+		else
+			applog(LOG_NOTICE, "control: yespower variant %s -> %s",
+				old_variant, yespower_variant_name());
 	}
 	return true;
 }

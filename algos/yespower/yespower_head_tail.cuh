@@ -28,6 +28,7 @@
 #define YESPOWER_HEAD_TAIL_CUH
 
 #include "cuda/sha256_device.cuh"
+#include "cuda/blake2b_hash_device.cuh" /* yespower-b2b head/tail */
 
 /* The personalisation string, uploaded once per job.  80 bytes covers every
  * known variant; the longest in the wild is cpupower's 73-byte string, which is
@@ -226,6 +227,79 @@ __device__ __forceinline__ void yp_hmac_tail(const uint32_t *B, const uint32_t s
 	for (int i = 9; i < 15; i++) in[i] = 0;
 	in[15] = (64u + 32u) * 8u;
 	sha256_transform_full(in, out, c_sha256_K);
+}
+
+
+/* ==========================================================================
+ * yespower-b2b head and tail (`-a power2b`, `-a yespower-b2b`)
+ *
+ * yespower 1.0 with BLAKE2b replacing SHA-256 in the head and tail only; smix,
+ * pwxform and salsa are unchanged, which is why this lives beside the SHA-256
+ * twins.  Reference: cpuminer-opt/algo/yespower/yespower-blake2b-ref.c.
+ *
+ *   init_hash = BLAKE2b-256(header80)
+ *   B         = PBKDF2-BLAKE2b(init_hash, pers, c=1, 128*R)
+ *   saved     = first 32 bytes of B
+ *   digest    = HMAC-BLAKE2b(key = last 64 bytes of B, msg = saved)
+ *
+ * Two byte-order differences from the SHA-256 twins, both silent if wrong:
+ * there is NO cuda_swab32 anywhere (B is already the little-endian stream
+ * BLAKE2b consumes) and the digest needs no final swab either.  The reference
+ * tail also takes (dst, key, keylen, in, inlen), argument-swapped from the
+ * SHA-256 one.
+ * ======================================================================== */
+
+/* init_hash <- BLAKE2b-256(header). The header arrives as 20 big-endian-VALUED
+ * words, so serialise them back to the byte stream. */
+__device__ __forceinline__ void yp_b2b_init_hash(const uint32_t *hdr, uint32_t w19,
+                                                 uint8_t init_hash[32])
+{
+	uint8_t be[80];
+#pragma unroll
+	for (int i = 0; i < 20; i++) {
+		const uint32_t w = (i == 19) ? w19 : hdr[i];
+		be[i * 4 + 0] = (uint8_t)(w >> 24);
+		be[i * 4 + 1] = (uint8_t)(w >> 16);
+		be[i * 4 + 2] = (uint8_t)(w >> 8);
+		be[i * 4 + 3] = (uint8_t)w;
+	}
+	b2b_hash256(init_hash, be, 80);
+}
+
+/* B <- PBKDF2-BLAKE2b(init_hash, pers, 1, 128*R), four lanes taking every
+ * fourth output block -- the same split as yp_pbkdf2_fill_B. The ipad/opad
+ * states are absorbed ONCE per lane and cloned per block. */
+template<uint32_t R>
+__device__ __forceinline__ void yp_b2b_fill_B(const uint8_t init_hash[32], uint32_t *B,
+                                              const int j, const unsigned mask)
+{
+	/* Do not hoist the ipad/opad states into a copied context: CUDA 12.9
+ * miscompiles that shape here, while 11.8 does not.  The head and tail are a
+ * rounding error against ~524 000 pwxform rounds, so there is nothing to win. */
+	const uint32_t nblocks = 4u * R;
+	const uint32_t plen    = c_yp_perslen;
+	uint8_t *Bb = (uint8_t *)B;
+
+	for (uint32_t i = (uint32_t)j; i < nblocks; i += 4u) {
+		const uint32_t ctr = i + 1u;
+		uint8_t salt[YP_PERS_MAX + 4];
+		for (uint32_t q = 0; q < plen; q++) salt[q] = c_yp_pers[q];
+		salt[plen + 0] = (uint8_t)(ctr >> 24);
+		salt[plen + 1] = (uint8_t)(ctr >> 16);
+		salt[plen + 2] = (uint8_t)(ctr >> 8);
+		salt[plen + 3] = (uint8_t)ctr;
+		b2b_hmac256(Bb + i * 32u, init_hash, 32u, salt, plen + 4u);
+	}
+	__syncwarp(mask);
+}
+
+/* digest <- HMAC-BLAKE2b(key = last 64 bytes of B, msg = the saved first 32). */
+template<uint32_t R>
+__device__ __forceinline__ void yp_b2b_tail(const uint32_t *B, const uint8_t saved[32],
+                                            uint32_t out[8])
+{
+	const uint8_t *K = (const uint8_t *)B + 128u * R - 64u;
+	b2b_hmac256((uint8_t *)out, K, 64u, saved, 32u);
 }
 
 #endif /* YESPOWER_HEAD_TAIL_CUH */

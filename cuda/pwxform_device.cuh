@@ -6,7 +6,7 @@
  *
  * THREAD MAPPING: T=4, one PWXgather lane per thread, so a thread owns the whole
  * 16-byte X[j] as a uint4 and the gather -> multiply -> xor chain needs no
- * shuffles.  Measured 1.74x the 16-thread mapping and 1.13x the 8-thread one.
+ * shuffles, and it is faster than both the 8- and 16-thread mappings.
  * Costs 128 registers for X at r=16; r=32 needs the 8-thread mapping.
  *
  * WRITE-BACK.  A call writes 8 x 16 B -- all four lanes in round 0, then only
@@ -29,6 +29,28 @@
 #include <stdint.h>
 #include "salsa_device.cuh"
 
+/* S-box placement.  yespower 1.0 fixes Swidth = 11, so S is 98304 B per
+ * instance for every variant and every (N, r).
+ *
+ *   PWX_S_SHARED  S in shared memory, which pins the SM to one instance.
+ *   PWX_S_GLOBAL  S in a global arena read with `.cg`.  Slower per access, but
+ *                 it lifts the one-block-per-SM cap and the occupancy more than
+ *                 pays for it; this is the path that ships.
+ *
+ * `.cg` not `.ca` on purpose: the resident instances hold far more table than
+ * L1 can keep, so caching it only thrashes. */
+enum { PWX_S_SHARED = 0, PWX_S_GLOBAL = 1 };
+
+template<int PLACE, typename V> struct PwxS;
+template<typename V> struct PwxS<PWX_S_SHARED, V> {
+	static __device__ __forceinline__ V    ld(const V *p)      { return *p; }
+	static __device__ __forceinline__ void st(V *p, const V v) { *p = v;    }
+};
+template<typename V> struct PwxS<PWX_S_GLOBAL, V> {
+	static __device__ __forceinline__ V    ld(const V *p)      { return __ldcg(p); }
+	static __device__ __forceinline__ void st(V *p, const V v) { __stcg(p, v);     }
+};
+
 /* yespower 1.0 shape, in uint4 (16-byte) units unless noted. */
 #define PWX_SMASK        0x7FF0u   /* ((1 << Swidth) - 1) * PWXsimple * 8       */
 #define PWX_BOX_ENTRIES  2048u     /* 32 KiB / 16 B                             */
@@ -45,9 +67,24 @@
 #define YP_PWX_NEED_SEQ(mask, hz) __any_sync((mask), (hz))
 #endif
 
+/* Test-only fault injection #2: remove the intra-round barriers. The four lanes
+ * then read S while their siblings are still writing it, which is a REAL race --
+ * a wrong answer that varies run to run rather than a wrong answer that is
+ * stable. Exists so the race harness can be shown to fire: a race detector
+ * whose trigger never occurs is untested by construction. Neither build system
+ * defines this. NOTE this is deliberately NOT the same defect as
+ * YP_PWX_FAULT_NO_LANE_FORWARDING, which produces a STABLE wrong digest and is
+ * therefore caught by the KAT and invisible to a repetition test. */
+#ifdef YP_PWX_FAULT_NO_SYNCWARP
+#define YP_PWX_SYNC(mask) ((void)0)
+#else
+#define YP_PWX_SYNC(mask) __syncwarp(mask)
+#endif
+
 /* One lane's round: gather from S0/S1, multiply-add-xor, then the conditional
  * write-back.  Factored out so the ordered and the parallel round below are the
  * SAME code -- a divergence between them would be invisible until a hazard. */
+template<int PLACE = PWX_S_SHARED>
 __device__ __forceinline__ void pwx_lane_round(uint4 &X, uint4 *S,
                                                const uint32_t b0, const uint32_t b1,
                                                const uint32_t w4,
@@ -59,8 +96,8 @@ __device__ __forceinline__ void pwx_lane_round(uint4 &X, uint4 *S,
 	const uint32_t e0 = (X.x & PWX_SMASK) >> 4;
 	const uint32_t e1 = (X.y & PWX_SMASK) >> 4;
 
-	const uint4 s0 = S[b0 + e0];
-	const uint4 s1 = S[b1 + e1];
+	const uint4 s0 = PwxS<PLACE, uint4>::ld(&S[b0 + e0]);
+	const uint4 s1 = PwxS<PLACE, uint4>::ld(&S[b1 + e1]);
 
 	/* PWXsimple = 2 independent 64-bit sub-lanes:
 	 *   x = hi32 * lo32 + S0_k, then xor S1_k                            */
@@ -77,7 +114,7 @@ __device__ __forceinline__ void pwx_lane_round(uint4 &X, uint4 *S,
 	/* Write-back: every lane in round 0, lanes 0 and 1 afterwards. */
 	if ((i == 0) || (j < PWX_GATHER / 2)) {
 		const uint32_t off = w4 + ((i == 0) ? (uint32_t)(j >> 1) : 0u);
-		S[((j & 1) ? b1 : b0) + (off & PWX_W_MASK)] = X;
+		PwxS<PLACE, uint4>::st(&S[((j & 1) ? b1 : b0) + (off & PWX_W_MASK)], X);
 	}
 }
 
@@ -95,6 +132,7 @@ __device__ __forceinline__ void pwx_lane_round(uint4 &X, uint4 *S,
  * in round 0 lane j writes at w4 + (j >> 1) and w4 then advances 2; in rounds
  * 1 and 2 lanes 0 and 1 both write at w4 and it advances 1.
  */
+template<int PLACE = PWX_S_SHARED>
 __device__ __forceinline__ void pwxform_1_0(uint4 &X, uint4 *S,
                                             uint32_t &b0, uint32_t &b1,
                                             uint32_t &b2, uint32_t &w4,
@@ -122,13 +160,13 @@ __device__ __forceinline__ void pwxform_1_0(uint4 &X, uint4 *S,
 
 		if (YP_PWX_NEED_SEQ(mask, hz)) {
 			for (int t = 0; t < PWX_GATHER; t++) {
-				if (j == t) pwx_lane_round(X, S, b0, b1, w4, i, j);
-				__syncwarp(mask);
+				if (j == t) pwx_lane_round<PLACE>(X, S, b0, b1, w4, i, j);
+				YP_PWX_SYNC(mask);
 			}
 		} else {
-			pwx_lane_round(X, S, b0, b1, w4, i, j);
+			pwx_lane_round<PLACE>(X, S, b0, b1, w4, i, j);
 			/* The next round gathers from boxes this round just wrote. */
-			__syncwarp(mask);
+			YP_PWX_SYNC(mask);
 		}
 
 		w4 = (w4 + ((i == 0) ? 2u : 1u)) & PWX_W_MASK;
@@ -156,7 +194,7 @@ __device__ __forceinline__ void pwxform_1_0(uint4 &X, uint4 *S,
  * strided pattern -- one 64-byte round trip per blockmix instead of four
  * shuffles, and salsa_core stays exactly as verified.
  */
-template<uint32_t R>
+template<uint32_t R, int PLACE = PWX_S_SHARED>
 __device__ __forceinline__ void blockmix_pwxform(uint32_t *B, uint4 *S,
                                                  uint32_t &b0, uint32_t &b1,
                                                  uint32_t &b2, uint32_t &w4,
@@ -168,13 +206,25 @@ __device__ __forceinline__ void blockmix_pwxform(uint32_t *B, uint4 *S,
 	/* X <- B'_{r1-1} */
 	uint4 X = B4[(r1 - 1) * 4 + j];
 
-#pragma unroll 1
+/* / yescrypt's shape: `r1 = 2R` is COMPILE-TIME (R is a template
+ * parameter), so this bound is known and `#pragma unroll 1` is actively
+ * SUPPRESSING unrolling of the hot loop -- the body runs ~218k times per hash.
+ * yescrypt ships exactly this shape: templated r plus the pragma.
+ * Tunable so the claim can be measured rather than argued. */
+#ifndef YP_BMX_UNROLL
+#define YP_BMX_UNROLL 1
+#endif
+/* _Pragma + stringify: `#pragma unroll MACRO` is NOT reliably macro-expanded. */
+#define YP_STR2(x) #x
+#define YP_STR(x)  YP_STR2(x)
+#define YP_UNROLL_N(n) _Pragma(YP_STR(unroll n))
+	YP_UNROLL_N(YP_BMX_UNROLL)
 	for (uint32_t i = 0; i < r1; i++) {
 		if (r1 > 1) {                        /* X <- X xor B'_i */
 			const uint4 b = B4[i * 4 + j];
 			X.x ^= b.x; X.y ^= b.y; X.z ^= b.z; X.w ^= b.w;
 		}
-		pwxform_1_0(X, S, b0, b1, b2, w4, j, mask);
+		pwxform_1_0<PLACE>(X, S, b0, b1, b2, w4, j, mask);
 		B4[i * 4 + j] = X;                   /* B'_i <- X */
 	}
 
