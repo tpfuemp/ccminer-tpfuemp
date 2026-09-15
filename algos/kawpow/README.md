@@ -10,10 +10,16 @@ KawPoW chains.
 | :-- | :-- |
 | `ethash/` | Vendored CPU reference (cache/DAG/keccak + ProgPoW). Authoritative host hash + share re-verification. |
 | `cuda_kawpow.cu` | Device kernels: Ethash DAG generation (`kawpow_gpu_calculate_dag_item` + `kawpow_generate_dag_cpu` launcher) and a self-contained ProgPoW hash used by the standalone bring-up tests. |
-| `kawpow_dag.{h,cpp}` | Epoch/DAG state machine: builds the light cache on the host, generates the full DAG on the GPU, and rebuilds it on epoch change (every 7500 blocks). |
-| `kawpow_jit.{h,cpp}` | Per-period NVRTC JIT: generates a period-specialized, **warp-cooperative** CUDA search kernel (`kawpow_search` — 16 threads/nonce, the random ProgPoW program baked in as literals), compiles it, and caches the `CUmodule` keyed on period. The generated program follows kawpowminer's `ProgPow::getKern`; the fixed prefix (keccak_f800, KISS99, `fill_mix`) is embedded. The mix loop reads the DAG as coalesced 16-byte-per-lane loads and the first 16 KB from shared `c_dag`. |
+| `kawpow_params.h` | kawpow as a `pp_params` instance: epoch/period lengths, the register/cache/math/DAG counts and the RAVENCOINKAWPOW seal words. |
+| `progpow_gen_shared.h` | The variant-independent half of the ProgPoW kernel generator (host RNG walk, `merge()`/`math()` emitters, device primitives), used by `../progpow_multi/ppmulti_jit.cpp`. |
 | `kawpow_core.{h,cpp}` | Core orchestration (ethash/C++-STL world): ties the DAG, JIT and host reference together behind a plain-C interface, and host-reverifies every candidate. |
 | `kawpow.cpp` | ccminer bridge (`scanhash_kawpow` / `free_kawpow`, miner.h world). |
+
+The per-period NVRTC JIT and the epoch/DAG state machine are **not** here: kawpow
+drives the shared `../progpow_multi/ppmulti_jit.*` and `ppmulti_dag.*`, the same
+pair meowpow, evrprogpow, firopow and meraki use, passing `kPpKawpow` from
+`kawpow_params.h`. The kernel is generated per period and the `CUmodule` cached
+on it; the DAG is rebuilt on epoch change (every 7500 blocks for kawpow).
 
 `kawpow_core` and `kawpow.cpp` live in separate translation units on purpose:
 `miner.h` macroizes `bool` (via `compat/stdbool.h`), which is incompatible with

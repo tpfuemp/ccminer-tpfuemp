@@ -35,7 +35,6 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/verthash/verthash-cpu.c algos/verthash/verthash-data.cpp \
 			  algos/kawpow/cuda_kawpow.cu \
 			  algos/kawpow/kawpow.cpp algos/kawpow/kawpow_core.cpp \
-			  algos/kawpow/kawpow_dag.cpp algos/kawpow/kawpow_jit.cpp \
 			  algos/kawpow/ethash/ethash.cpp algos/kawpow/ethash/progpow.cpp algos/kawpow/ethash/managed.cpp \
 			  algos/kawpow/ethash/primes.c algos/kawpow/ethash/keccak.c \
 			  algos/kawpow/ethash/keccakf1600.c algos/kawpow/ethash/keccakf800.c \
@@ -187,7 +186,7 @@ endif
 #ccminer_LDFLAGS += -Lalgos/equihash/lib
 #ccminer_LDADD += -lsodium
 ccminer_LDADD += -lcuda
-# NVRTC: per-period ProgPoW kernel JIT (kawpow_jit / ppmulti_jit). Linked
+# NVRTC: per-period ProgPoW kernel JIT (ppmulti_jit). Linked
 # STATICALLY so the binary self-contains the JIT and runs on driver-only rigs
 # (no libnvrtc.so.11.2 needed at load time); mirror the vcxproj which uses the
 # nvrtc*_static.lib set. Order matters: nvrtc -> builtins -> ptxcompiler.
@@ -207,6 +206,12 @@ nvcc_FLAGS += $(JANSSON_INCLUDES) --ptxas-options="-v"
 # -a heavy / -a mjollnir: algos/heavy/ is complete and already in the sources below,
 # but heavy.cu compiles to a stub without this symbol.
 nvcc_FLAGS += -DWITH_HEAVY_ALGO
+
+# Keep the build-machine path out of __FILE__ (and out of the shipped
+# binary): it otherwise lands in .rodata and survives strip.
+TRIMPATH = -ffile-prefix-map=$(abs_top_srcdir)=. -ffile-prefix-map=$(abs_top_builddir)=.
+nvcc_FLAGS += -Xcompiler "$(TRIMPATH)"
+ccminer_CPPFLAGS += $(TRIMPATH)
 
 # we're now targeting all major compute architectures within one binary.
 .cu.o:

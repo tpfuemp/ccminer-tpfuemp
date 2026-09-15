@@ -1,10 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// ProgPoW-family epoch/DAG state machine. Same as algos/kawpow/kawpow_dag.* but
-// keyed on an explicit epoch number (the core computes it from height with the
-// variant's epoch_length), so one class serves every epoch length. Reuses
-// KawPoW's ethash library and its GPU DAG-gen kernel (kawpow_generate_dag_cpu);
-// no second copy of either is compiled.
+// ProgPoW-family epoch/DAG state machine, serving kawpow, meowpow, evrprogpow,
+// firopow and meraki. Keyed on an explicit epoch number rather than a height --
+// the core derives it with the variant's epoch_length -- so one class covers
+// every epoch length and the offset/multiplier variants. Reuses KawPoW's ethash
+// library and its GPU DAG-gen kernel (kawpow_generate_dag_cpu); no second copy
+// of either is compiled.
 
 #pragma once
 
@@ -32,7 +33,6 @@ public:
 private:
     int epoch_ = -1;
     uint32_t* d_dag_ = nullptr;
-    uint32_t* d_l1_ = nullptr;
     uint32_t* d_light_ = nullptr;
     uint32_t items_ = 0;
 };

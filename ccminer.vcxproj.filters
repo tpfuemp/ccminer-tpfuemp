@@ -499,12 +499,6 @@
     <ClCompile Include="algos\kawpow\kawpow_core.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="algos\kawpow\kawpow_dag.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="algos\kawpow\kawpow_jit.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="algos\odocrypt\odocrypt_jit.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>

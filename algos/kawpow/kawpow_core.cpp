@@ -10,8 +10,10 @@
 #include <cuda_runtime.h>
 #include <cuda.h>
 
-#include "kawpow_jit.h"
-#include "kawpow_dag.h"
+#include "../progpow_multi/ppmulti_jit.h"
+#include "kawpow_params.h"   // the single kawpow pp_params definition
+#include "../progpow_multi/ppmulti_dag.h"
+#include "../progpow_multi/ppmulti_epoch.h"   // pp_dag_epochs
 
 #include "ethash/ethash.hpp"
 #include "ethash/ethash.h"
@@ -23,13 +25,15 @@
 
 namespace {
 
+
+
 struct core_state
 {
     int sm_arch = 86;
-    kawpow_dag dag;
-    kawpow_jit* jit = nullptr;
+    ppmulti_dag dag;
+    ppmulti_jit* jit = nullptr;
     uint32_t* d_header = nullptr;
-    kawpow_result* d_result = nullptr;
+    ppmulti_result* d_result = nullptr;
     const ethash::epoch_context* host_ctx = nullptr;
     int host_epoch = -1;
 
@@ -77,9 +81,9 @@ extern "C" void* kawpow_core_create(int sm_arch)
 {
     core_state* s = new core_state();
     s->sm_arch = sm_arch;
-    s->jit = new kawpow_jit(sm_arch);
+    s->jit = new ppmulti_jit(sm_arch, kPpKawpow);
     if (cudaMalloc(&s->d_header, 32) != cudaSuccess) { delete s; return nullptr; }
-    if (cudaMalloc(&s->d_result, sizeof(kawpow_result)) != cudaSuccess) { delete s; return nullptr; }
+    if (cudaMalloc(&s->d_result, sizeof(ppmulti_result)) != cudaSuccess) { delete s; return nullptr; }
     return s;
 }
 
@@ -92,7 +96,12 @@ extern "C" int kawpow_core_ensure(void* h, int height, int* regenerated)
 {
     core_state* s = static_cast<core_state*>(h);
     bool re = false;
-    bool ok = s->dag.ensure(height, &re);
+    // Standard ethash sizing collapses the triple to one epoch; derived through
+    // pp_dag_epochs anyway so the path cannot drift from pp_params.
+    const int epoch = height / kPpKawpow.epoch_length;
+    int seed_epoch = 0, light_epoch = 0, full_epoch = 0;
+    pp_dag_epochs(kPpKawpow, epoch, &seed_epoch, &light_epoch, &full_epoch);
+    bool ok = s->dag.ensure(seed_epoch, light_epoch, full_epoch, &re);
     if (regenerated) *regenerated = re ? 1 : 0;
     return ok ? 1 : 0;
 }
@@ -110,7 +119,7 @@ extern "C" int kawpow_core_selftest(void* h, int height)
     const uint64_t start = 0x0123456789abcd00ULL;
 
     cudaMemcpy(s->d_header, hdr, 32, cudaMemcpyHostToDevice);
-    cudaMemset(s->d_result, 0, sizeof(kawpow_result));
+    cudaMemset(s->d_result, 0, sizeof(ppmulti_result));
 
     CUdeviceptr dhdr = (CUdeviceptr)s->d_header;
     CUdeviceptr ddag = (CUdeviceptr)s->dag.dag();
@@ -125,7 +134,7 @@ extern "C" int kawpow_core_selftest(void* h, int height)
         return 0;
     cuCtxSynchronize();
 
-    kawpow_result r;
+    ppmulti_result r;
     cudaMemcpy(&r, s->d_result, sizeof(r), cudaMemcpyDeviceToHost);
     if (!r.found) return 0;
 
@@ -155,7 +164,7 @@ extern "C" int kawpow_core_search(void* h, const unsigned char* header32, uint64
     if (!s->jit->get(period, items, &fn)) return -1;
 
     cudaMemcpy(s->d_header, header32, 32, cudaMemcpyHostToDevice);
-    cudaMemset(s->d_result, 0, sizeof(kawpow_result));
+    cudaMemset(s->d_result, 0, sizeof(ppmulti_result));
 
     const uint32_t tpb = 256;  // multiple of 16 (PROGPOW_LANES); 256 shares the
                                // 16 KB c_dag across more threads -> ~67% occ vs
@@ -173,7 +182,7 @@ extern "C" int kawpow_core_search(void* h, const unsigned char* header32, uint64
         return -1;
     cuCtxSynchronize();
 
-    kawpow_result r;
+    ppmulti_result r;
     cudaMemcpy(&r, s->d_result, sizeof(r), cudaMemcpyDeviceToHost);
     if (!r.found) return 0;
 

@@ -24,7 +24,7 @@
 // ---- generated device source ----------------------------------------------
 
 // Fixed prefix. NVRTC has no <stdint.h>. Do not add a `typedef ... size_t`:
-// it is a hard error under the statically linked NVRTC (see kawpow_jit.cpp).
+// it is a hard error under the statically linked NVRTC.
 static const char *kPrefix = R"CUDA(
 typedef unsigned char      uint8_t;
 typedef unsigned short     uint16_t;

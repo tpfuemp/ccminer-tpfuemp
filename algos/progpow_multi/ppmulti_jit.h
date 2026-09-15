@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// Parameterized ProgPoW per-period JIT for the MeowPow/EvrProgPow/FiroPoW
-// family. Same design as algos/kawpow/kawpow_jit.* (generate a period-specialized
-// CUDA search kernel, compile with NVRTC, cache the module keyed on period), but
-// the register count, cache/math op counts and the keccak seal are taken from a
-// pp_params so one code path serves all four variants. Each core owns its own
-// ppmulti_jit instance, so the period-keyed cache never collides across variants.
+// Parameterized ProgPoW per-period JIT: generates a period-specialized CUDA
+// search kernel, compiles it with NVRTC and caches the module keyed on period.
+// The register count, cache/math op counts and the keccak seal are taken from a
+// pp_params, so one code path serves kawpow, meowpow, evrprogpow, firopow and
+// meraki. Each core owns its own ppmulti_jit instance, so the period-keyed cache
+// never collides across variants.
 
 #pragma once
 

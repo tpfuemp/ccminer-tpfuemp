@@ -91,7 +91,7 @@
       <AdditionalDependencies>cudart_static.lib;cuda.lib;nvrtc_static.lib;nvrtc-builtins_static.lib;nvptxcompiler_static.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;pthreadVC2.lib;libcurl.x86.lib;openssl.x86.lib;zlib.x86.lib;ws2_32.lib;Wldap32.lib;nvapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>libcmt.lib;msvcrt.lib</IgnoreSpecificDefaultLibraries>
       <AdditionalLibraryDirectories>compat\pthreads\x86;compat\curl-for-windows\out\x86\Release\lib;compat\nvapi\x86;%(AdditionalLibraryDirectories);$(CudaToolkitLibDir)</AdditionalLibraryDirectories>
-      <AdditionalOptions>/NODEFAULTLIB:LIBCMT %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/d1trimfile:$(ProjectDir) /NODEFAULTLIB:LIBCMT %(AdditionalOptions)</AdditionalOptions>
       <LinkStatus>true</LinkStatus>
     </Link>
     <CudaCompile>
@@ -102,6 +102,7 @@
       <Keep>true</Keep>
       <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
       <Include>$(NVTOOLSEXT_PATH)\include;..\..\..\Common\C99</Include>
+      <AdditionalCompilerOptions>/d1trimfile:$(ProjectDir) %(AdditionalCompilerOptions)</AdditionalCompilerOptions>
     </CudaCompile>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -123,7 +124,7 @@
       <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;pthreadVC2.lib;libcurl.x64.lib;libcrypto.x64.lib;libssl.x64.lib;zlib.x64.lib;ws2_32.lib;Wldap32.lib;cudart_static.lib;cuda.lib;nvrtc_static.lib;nvrtc-builtins_static.lib;nvptxcompiler_static.lib;nvapi64.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>libcmt.lib</IgnoreSpecificDefaultLibraries>
       <AdditionalLibraryDirectories>compat\pthreads\x64;compat\curl-for-windows\out\x64\Release\lib;compat\nvapi\amd64;%(AdditionalLibraryDirectories);$(CudaToolkitLibDir)</AdditionalLibraryDirectories>
-      <AdditionalOptions>/NODEFAULTLIB:LIBCMTD %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/d1trimfile:$(ProjectDir) /NODEFAULTLIB:LIBCMTD %(AdditionalOptions)</AdditionalOptions>
       <LinkStatus>true</LinkStatus>
     </Link>
     <CudaCompile>
@@ -135,6 +136,7 @@
       <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
       <Include>$(NVTOOLSEXT_PATH)\include;..\..\..\Common\C99</Include>
       <TargetMachinePlatform>64</TargetMachinePlatform>
+      <AdditionalCompilerOptions>/d1trimfile:$(ProjectDir) %(AdditionalCompilerOptions)</AdditionalCompilerOptions>
     </CudaCompile>
     <CudaLink>
       <PerformDeviceLink>false</PerformDeviceLink>
@@ -165,7 +167,7 @@
       <AdditionalDependencies>cudart_static.lib;cuda.lib;nvrtc_static.lib;nvrtc-builtins_static.lib;nvptxcompiler_static.lib;kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;pthreadVC2.lib;libcurl.x86.lib;openssl.x86.lib;zlib.x86.lib;ws2_32.lib;Wldap32.lib;nvapi.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>libcmt.lib</IgnoreSpecificDefaultLibraries>
       <AdditionalLibraryDirectories>compat\pthreads\x86;compat\curl-for-windows\out\x86\Release\lib;compat\nvapi\x86;%(AdditionalLibraryDirectories);$(CudaToolkitLibDir)</AdditionalLibraryDirectories>
-      <AdditionalOptions>/NODEFAULTLIB:LIBCMT %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/d1trimfile:$(ProjectDir) /NODEFAULTLIB:LIBCMT %(AdditionalOptions)</AdditionalOptions>
       <ImageHasSafeExceptionHandlers>false</ImageHasSafeExceptionHandlers>
       <LinkStatus>false</LinkStatus>
       <LargeAddressAware>true</LargeAddressAware>
@@ -178,6 +180,7 @@
       <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
       <AdditionalOptions>--ptxas-options="-O2" --Wno-deprecated-gpu-targets -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_75,code=compute_75 -gencode=arch=compute_86,code=sm_86 -gencode=arch=compute_86,code=compute_86 %(AdditionalOptions)</AdditionalOptions>
       <Optimization>O2</Optimization>
+      <AdditionalCompilerOptions>/d1trimfile:$(ProjectDir) %(AdditionalCompilerOptions)</AdditionalCompilerOptions>
     </CudaCompile>
     <CudaLink>
       <GPUDebugInfo>false</GPUDebugInfo>
@@ -209,7 +212,7 @@
       <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib;winspool.lib;comdlg32.lib;advapi32.lib;shell32.lib;ole32.lib;oleaut32.lib;uuid.lib;odbc32.lib;odbccp32.lib;pthreadVC2.lib;libcurl.x64.lib;libcrypto.x64.lib;libssl.x64.lib;zlib.x64.lib;ws2_32.lib;Wldap32.lib;cudart_static.lib;cuda.lib;nvrtc_static.lib;nvrtc-builtins_static.lib;nvptxcompiler_static.lib;nvapi64.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <IgnoreSpecificDefaultLibraries>libcmt.lib</IgnoreSpecificDefaultLibraries>
       <AdditionalLibraryDirectories>compat\pthreads\x64;compat\curl-for-windows\out\x64\Release\lib;compat\nvapi\amd64;%(AdditionalLibraryDirectories);$(CudaToolkitLibDir)</AdditionalLibraryDirectories>
-      <AdditionalOptions>/NODEFAULTLIB:LIBCMT %(AdditionalOptions)</AdditionalOptions>
+      <AdditionalOptions>/d1trimfile:$(ProjectDir) /NODEFAULTLIB:LIBCMT %(AdditionalOptions)</AdditionalOptions>
       <LinkStatus>false</LinkStatus>
       <LargeAddressAware>true</LargeAddressAware>
     </Link>
@@ -224,6 +227,7 @@
       <TargetMachinePlatform>64</TargetMachinePlatform>
       <AdditionalOptions>-allow-unsupported-compiler --Wno-deprecated-gpu-targets -gencode=arch=compute_75,code=sm_75 -gencode=arch=compute_75,code=compute_75 -gencode=arch=compute_86,code=sm_86 -gencode=arch=compute_86,code=compute_86 %(AdditionalOptions)</AdditionalOptions>
       <Defines>WITH_HEAVY_ALGO;_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH</Defines>
+      <AdditionalCompilerOptions>/d1trimfile:$(ProjectDir) %(AdditionalCompilerOptions)</AdditionalCompilerOptions>
     </CudaCompile>
     <CudaLink>
       <Optimization>O3</Optimization>
@@ -307,8 +311,6 @@
     </ClCompile>
     <ClCompile Include="algos\kawpow\kawpow.cpp" />
     <ClCompile Include="algos\kawpow\kawpow_core.cpp" />
-    <ClCompile Include="algos\kawpow\kawpow_dag.cpp" />
-    <ClCompile Include="algos\kawpow\kawpow_jit.cpp" />
     <ClCompile Include="algos\kawpow\ethash\ethash.cpp" />
     <ClCompile Include="algos\kawpow\ethash\progpow.cpp" />
     <ClCompile Include="algos\kawpow\ethash\managed.cpp" />
