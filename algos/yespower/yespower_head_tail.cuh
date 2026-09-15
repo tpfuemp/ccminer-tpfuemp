@@ -30,10 +30,11 @@
 #include "cuda/sha256_device.cuh"
 #include "cuda/blake2b_hash_device.cuh" /* yespower-b2b head/tail */
 
-/* The personalisation string, uploaded once per job.  80 bytes covers every
- * known variant; the longest in the wild is cpupower's 73-byte string, which is
- * also the only one that spans more than one SHA-256 block. */
-#define YP_PERS_MAX 80
+/* The personalisation string, uploaded once per job.  96 bytes covers every
+ * known variant; the longest is EqPay's 88-byte string, ahead of cpupower's 73.
+ * The PBKDF2 salt block count is computed from c_yp_perslen rather than fixed,
+ * so this bound is the only thing a longer pers needs. */
+#define YP_PERS_MAX 96
 __constant__ uint8_t  c_yp_pers[YP_PERS_MAX];
 __constant__ uint32_t c_yp_perslen;
 
@@ -70,6 +71,41 @@ __device__ __forceinline__ void yp_sha256_80(const uint32_t *hdr, uint32_t w19,
 #pragma unroll
 	for (int i = 5; i < 15; i++) in[i] = 0;
 	in[15] = 80u * 8u;                        /* 640 bits */
+	sha256_transform_full(in, out, c_sha256_K);
+}
+
+/* --------------------------------------------------------------------------
+ * Head: SHA-256 of EqPay's 181-byte extended header (layout in README.md).
+ *
+ * Three blocks rather than two (181 + 1 + 8 = 190 <= 192).  `hdr` is 46 words in
+ * SHA-256 input order; hdr[19] is ignored and the nonce arrives as w19, as in
+ * yp_sha256_80.  Only the message length differs from yespower 1.0 -- the PBKDF2
+ * salt is `pers`, not the header -- so nothing downstream changes.
+ * ------------------------------------------------------------------------ */
+__device__ __forceinline__ void yp_sha256_181(const uint32_t *hdr, uint32_t w19,
+                                              uint32_t out[8])
+{
+	uint32_t in[16];
+
+	yp_sha256_init(out);
+
+#pragma unroll
+	for (int i = 0; i < 16; i++) in[i] = hdr[i];
+	sha256_transform_full(in, out, c_sha256_K);
+
+#pragma unroll
+	for (int i = 0; i < 16; i++) in[i] = hdr[16 + i];
+	in[3] = w19;                              /* word 19 = the nonce */
+	sha256_transform_full(in, out, c_sha256_K);
+
+	/* Final block: words 32..44 are message, word 45 holds the last message
+	 * byte (the signature length) in its MSB, so the 0x80 pad byte falls at
+	 * byte 181 -- the next byte position after it. */
+#pragma unroll
+	for (int i = 0; i < 13; i++) in[i] = hdr[32 + i];
+	in[13] = (hdr[45] & 0xff000000u) | 0x00800000u;
+	in[14] = 0;
+	in[15] = 181u * 8u;                       /* 1448 bits */
 	sha256_transform_full(in, out, c_sha256_K);
 }
 

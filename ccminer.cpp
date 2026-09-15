@@ -273,17 +273,13 @@ Options:\n\
   -a, --algo=ALGO       specify the hash algorithm to use\n\
 			0x10		ChainOX\n\
 			allium		Lyra2 blake2s\n\
+			anime		Animecoin\n\
 			argon2d500	Dynamic (DYN)\n\
 			argon2d1000	Zero Dynamics Cash\n\
 			argon2d4096	Argentum / Myriad (XMY)\n\
 			argon2d16000	Alterdot\n\
 			argon2id1024	Bitweb (BTW)\n\
 			balloon		Balloon hash\n\
-			evohash		EvoAI\n\
-			rinhash		RinHash (Blake3+Argon2d+SHA3-256)\n\
-			odo		Odocrypt (DigiByte)\n\
-			anime		Animecoin\n\
-			heavyhash	oBTC coin\n\
 			bastion		Hefty bastion\n\
 			bitcore		Timetravel-10\n\
 			blake		Blake 256 (SFR)\n\
@@ -292,102 +288,109 @@ Options:\n\
 			blakecoin	Fast Blake 256 (8 rounds)\n\
 			bmw		BMW 256\n\
 			bmw512		BMW 512\n\
+			c11/flax	X11 variant\n\
 			cryptolight	AEON cryptonight (MEM/2)\n\
 			cryptonight	XMR cryptonight\n\
-			c11/flax	X11 variant\n\
+			curvehash	CurvehashCoin\n\
 			decred		Decred BLAKE3\n\
 			deep		Deepcoin\n\
-			equihash	Zcash Equihash\n\
 			dmd-gr		Diamond-Groestl\n\
+			equihash	Zcash Equihash\n\
+			evohash		EvoAI\n\
+			evrprogpow	EvrProgPow (Evrmore)\n\
+			firopow		FiroPoW (Firo, StakeCube)\n\
 			fresh		Freshcoin (shavite 80)\n\
 			fugue256	Fuguecoin\n\
+			ghostrider	GhostRider (Raptoreum)\n\
 			gostcoin	Double GOST R 34.11\n\
 			groestl		Groestlcoin\n"
 #ifdef WITH_HEAVY_ALGO
-"			heavy       Heavycoin\n\
-			mjollnir	Mjollnircoin (Hefty)\n"
+"			heavy		Heavycoin\n"
 #endif
-"			hmq1725		Doubloons / Espers\n\
+"			heavyhash	oBTC coin\n\
+			hmq1725		Doubloons / Espers\n\
+			hoohash		HoohashV110 (PEPEPOW)\n\
 			hsr		Hshare / HSR (X13 SM3)\n\
 			jackpot		JHA v8\n\
 			jha		JHA (Jackpothash)\n\
+			kawpow		KawPoW (Ravencoin)\n\
 			keccak		Deprecated Keccak-256\n\
 			keccakc		Keccak-256 (CreativeCoin)\n\
 			lbry		LBRY Credits (Sha/Ripemd)\n\
 			luffa		Joincoin\n\
 			lyra2		CryptoCoin\n\
+			lyra2re		Lyra2RE\n\
 			lyra2v2		VertCoin\n\
 			lyra2z		ZeroCoin (3rd impl)\n\
-			lyra2re		Lyra2RE\n\
 			lyra2z330	Lyra2Z330\n\
-			myr-gr		Myriad-Groestl\n\
+			meowpow		MeowPow (Meowcoin)\n\
+			meraki		Meraki (Telestai)\n"
+#ifdef WITH_HEAVY_ALGO
+"			mjollnir	Mjollnircoin (Hefty)\n"
+#endif
+"			myr-gr		Myriad-Groestl\n\
 			neoscrypt	FeatherCoin, Phoenix, UFO...\n\
 			neoscrypt-xaya	XAYA's version...\n\
 			nist5		NIST5 (TalkCoin)\n\
+			odo		Odocrypt (DigiByte)\n\
 			penta		Pentablake hash (5x Blake 512)\n\
 			phi		BHCoin\n\
 			polytimos	Politimos\n\
+			power2b		yespower 1.0-b2b (MicroBitcoin)\n\
 			quark		Quark\n\
 			qubit		Qubit\n\
-			sha256csm	SHA256csm (galleoncoin)\n\
-			sha256d		SHA256d (bitcoin)\n\
-			sha256t		SHA256 x3\n\
-			sha256dv	SHA256d Veil\n\
-			sha3d		Bsha3, Yilacoin and Kylacoin\n\
-			sha3t		Fjarcode and Bitcoin III\n\
-			sha512256d	Double SHA512/256 (Radiant)\n\
-			yespower	yespower 1.0, params via --yespower-param/-key\n\
-			yespowerr16	yespower 1.0 N=4096 r=16 (Yenten)\n\
-			 coin aliases	yespowerSUGAR yespowerURX yespowerLTNCG yespowerMGPC\n\
-					yespowerTIDE yespowerARWN yespowerIC yespowerIOTS\n\
-					yespowerLITB cpupower  (each presets N, r and key)\n\
-			power2b		yespower 1.0-b2b (MicroBitcoin), NOT YET IMPLEMENTED\n\
-			sia		SIA (Blake2B)\n\
-			sib		Sibcoin (X11+Streebog)\n\
-			soterg		Soteria (X12R)\n\
+			rinhash		RinHash (Blake3+Argon2d+SHA3-256)\n\
+			s3		S3 (1Coin)\n\
 			scrypt		Scrypt\n\
 			scrypt-jane	Scrypt-jane Chacha\n\
+			sha3d		Bsha3, Yilacoin and Kylacoin\n\
+			sha3t		Fjarcode and Bitcoin III\n\
+			sha256csm	SHA256csm (galleoncoin)\n\
+			sha256d		SHA256d (bitcoin)\n\
+			sha256dv	SHA256d Veil\n\
+			sha256t		SHA256 x3\n\
+			sha512256d	Double SHA512/256 (Radiant)\n\
+			sia		SIA (Blake2B)\n\
+			sib		Sibcoin (X11+Streebog)\n\
 			skein		Skein SHA2 (Skeincoin)\n\
 			skein2		Double Skein (Woodcoin)\n\
 			skunk		Skein Cube Fugue Streebog\n\
-			s3		S3 (1Coin)\n\
+			skydoge		SkyDoge\n\
+			soterg		Soteria (X12R)\n\
 			timetravel	Machinecoin permuted x8\n\
-			tribus 		Denarius\n\
+			tribus		Denarius\n\
 			vanilla		Blake256-8 (VNL)\n\
 			veltor		Thorsriddle streebog\n\
+			verthash	Verthash (Vertcoin)\n\
 			whirlcoin	Old Whirlcoin (Whirlpool algo)\n\
 			whirlpool	Whirlpool algo\n\
 			whirlpoolx	WhirlpoolX\n\
 			whirlpoolx2	WhirlpoolX2 (CapStash)\n\
-			x11evo		Permuted x11 (Revolver)\n\
+			wildkeccak	Boolberry\n\
 			x11		X11 (DarkCoin)\n\
+			x11evo		Permuted x11 (Revolver)\n\
 			x13		X13 (MaruCoin)\n\
 			x14		X14\n\
 			x15		X15\n\
-			x17		X17\n\
 			x16r		X16R\n\
 			x16rt		X16RT\n\
 			x16rv2		X16R V2\n\
 			x16s		X16S\n\
+			x17		X17\n\
 			x21s		X21S\n\
 			x25x		X25X (SUQA/SIN)\n\
-			skydoge		SkyDoge\n\
-			hoohash		HoohashV110 (PEPEPOW)\n\
-			ghostrider	GhostRider (Raptoreum)\n\
-			curvehash	CurvehashCoin\n\
-			kawpow		KawPoW (Ravencoin)\n\
-			meowpow		MeowPow (Meowcoin)\n\
-			evrprogpow	EvrProgPow (Evrmore)\n\
-			firopow		FiroPoW (Firo, StakeCube)\n\
-			meraki		Meraki (Telestai)\n\
-			verthash	Verthash (Vertcoin)\n\
-			wildkeccak	Boolberry\n\
-			yescrypt     Globlboost-Y (BSTY) or any params\n\
-            yescryptr8   BitZeny (ZNY)\n\
-            yescryptr16  Yenten (YTN)\n\
-            yescryptr16v2 PPTP\n\
-            yescryptr24  JagariCoinR\n\
-            yescryptr32  WAVI\n\
+			yescrypt	Globlboost-Y (BSTY) or any params\n\
+			yescryptr8	BitZeny (ZNY)\n\
+			yescryptr16	Yenten (YTN)\n\
+			yescryptr16v2	PPTP\n\
+			yescryptr24	JagariCoinR\n\
+			yescryptr32	WAVI\n\
+			yespower	yespower 1.0, params via --yespower-param/-key\n\
+			yespowereqpay	EqPay (EQPAY), 181-byte header\n\
+			yespowerr16	yespower 1.0 N=4096 r=16 (Yenten)\n\
+			 coin aliases	yespowerSUGAR yespowerURX yespowerLTNCG yespowerMGPC\n\
+					yespowerIC yespowerIOTS yespowerLITB yespowerLTNCG\n\
+					yespowerMGPC yespowerSUGAR yespowerTIDE yespowerURX\n\
 			zr5		ZR5 (ZiftrCoin)\n\
   -d, --devices         Comma separated list of CUDA devices to use.\n\
                         Device IDs start counting from 0! Alternatively takes\n\
@@ -1969,6 +1972,25 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		work->kawpow_prefix = sctx->job.kawpow_prefix;
 		work->data[18] = le32dec(sctx->job.nbits);    // for calc_network_diff only
 		work->data[19] = 0;
+	} else if (opt_algo == ALGO_YESPOWEREQPAY) {
+		// EqPay hashes 181 bytes: the usual header plus the EVM state roots and
+		// the proof-of-stake fields. No 0x80000000 at data[20] -- byte offset 80
+		// is hashStateRoot here, not SHA-256 padding.
+		for (i = 0; i < 8; i++)
+			work->data[9 + i] = be32dec((uint32_t *)merkle_root + i);
+		work->data[17] = le32dec(sctx->job.ntime);
+		work->data[18] = le32dec(sctx->job.nbits);
+		work->data[19] = 0;
+		// Store the tail as the BIG-ENDIAN DECODE of the wire, like words 0..18,
+		// so scanhash's one be32enc() loop reproduces the wire for all 46 words.
+		// Raw wire bytes here would byte-swap the tail on the GPU side only.
+		// Roots arrive with each word byte-swapped: be32dec(wire) == le32dec(recv).
+		for (i = 0; i < 16; i++)
+			work->data[20 + i] = le32dec(sctx->job.eqpay_roots + i * 4);
+		for (i = 0; i < 8; i++)
+			work->data[36 + i] = 0;             // prevoutStake.hash: null for PoW
+		work->data[44] = 0xffffffff;            // prevoutStake.n = NULL_INDEX
+		work->data[45] = 0;                     // empty vchBlockSigDlgt length
 	} else {
 		for (i = 0; i < 8; i++)
 			work->data[9 + i] = be32dec((uint32_t *)merkle_root + i);
@@ -2040,6 +2062,7 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_YESPOWER:
 		case ALGO_YESPOWERR16:
 		case ALGO_POWER2B:
+		case ALGO_YESPOWEREQPAY:
 			work_set_target(work, sctx->job.diff / (65536.0 * opt_difficulty));
 			break;
 		case ALGO_DMD_GR:
@@ -2739,6 +2762,7 @@ static void *miner_thread(void *userdata)
 				case ALGO_YESPOWER:
 				case ALGO_YESPOWERR16:
 				case ALGO_POWER2B:
+				case ALGO_YESPOWEREQPAY:
 				minmax = 0x8000;
 				break;
 			case ALGO_CRYPTOLIGHT:
@@ -3001,6 +3025,7 @@ static void *miner_thread(void *userdata)
 		case ALGO_YESPOWER:
 		case ALGO_YESPOWERR16:
 		case ALGO_POWER2B:
+		case ALGO_YESPOWEREQPAY:
 			rc = scanhash_yespower(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_SCRYPT:

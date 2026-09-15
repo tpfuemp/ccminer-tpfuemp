@@ -51,6 +51,12 @@ static const char PERS_URX[]     = "UraniumX";
 static const char PERS_LTNCG[]   = "LTNCGYES";
 static const char PERS_MGPC[]    = "Magpies are birds of the Corvidae family.";
 static const char PERS_ARWN[]    = "ARWN";
+static const char PERS_ADVC[]    = "Let the quest begin";
+/* EqPay: 88 bytes, and the trailing '.' is part of it -- perslen is exactly
+ * strlen(), with no NUL hashed. */
+static const char PERS_EQPAY[]   =
+	"The gods had gone away, and the ritual of the religion continued "
+	"senselessly, uselessly.";
 static const char PERS_IC[]      = "IsotopeC";
 static const char PERS_IOTS[]    = "Iots is committed to the development of IOT";
 static const char PERS_LITB[]    =
@@ -69,9 +75,9 @@ static const char PERS_CPUPOWER[] =
  * `perslen` is written out rather than taken from strlen() so that it acts as a
  * checksum on the literal beside it; the setter verifies the two agree.
  *
- * yespowerADVC and yespowerEQPAY are absent on purpose: no byte-exact source for
- * their pers was found, so they stay unlisted rather than guessed.
- * `--yespower-param`/`--yespower-key` still reach them. */
+ * yespowerEQPAY is deliberately not here: it hashes a 181-byte header, which no
+ * (N, r, pers) triple can express, so it is its own algo (ALGO_YESPOWEREQPAY)
+ * and --yespower-param/-key cannot reach it either. */
 struct yespower_variant {
 	const char *name;
 	uint32_t    N;
@@ -89,6 +95,7 @@ static const struct yespower_variant yespower_variants[] = {
 	{ "yespowermgpc",   2048, 32, PERS_MGPC,      41 },  /* MagpieCoin (MGPC)  */
 	{ "yespowertide",   2048,  8, NULL,           0  },  /* Tidecoin (TDC)     */
 	{ "yespowerarwn",   2048, 32, PERS_ARWN,      4  },  /* Arowana (ARWN)     */
+	{ "yespoweradvc",   2048, 32, PERS_ADVC,      19 },  /* AdventureCoin ADVC */
 	{ "yespoweric",     2048, 32, PERS_IC,        8  },  /* IsotopeC           */
 	{ "yespoweriots",   2048, 32, PERS_IOTS,      43 },  /* IOTS               */
 	{ "yespowerlitb",   2048, 32, PERS_LITB,      73 },  /* LightBit (LITB)    */
@@ -189,19 +196,44 @@ static bool yespower_params_for(int algo, yespower_params_t *p)
 		p->pers = (const uint8_t *) PERS_POWER2B;
 		p->perslen = sizeof(PERS_POWER2B) - 1;   /* 46 */
 		return true;
+	case ALGO_YESPOWEREQPAY:     /* EqPay (EQPAY) -- ordinary 1.0 params, 181-byte header */
+		p->N = 2048; p->r = 32;
+		p->pers = (const uint8_t *) PERS_EQPAY;
+		p->perslen = sizeof(PERS_EQPAY) - 1;     /* 88 */
+		return true;
 	default:
 		return false;
 	}
 }
 
-/* One 80-byte header in, 32-byte digest out.
+/* EqPay (Qtum-derived) hashes the 181-byte extended header, not 80: the usual
+ * fields, then hashStateRoot, hashUTXORoot, a null prevoutStake and an empty
+ * signature length.  Full layout in README.md.
+ *
+ * prevoutStake.n MUST be COutPoint::NULL_INDEX; zero gives a well-formed digest
+ * that every local check accepts and the pool rejects. */
+#define YP_EQPAY_HDR_BYTES     181u
+#define YP_EQPAY_HDR_WORDS     46u       /* ceil(181/4), the work-buffer span */
+#define YP_EQPAY_STATE_ROOT     80u
+#define YP_EQPAY_UTXO_ROOT     112u
+#define YP_EQPAY_STAKE         144u
+#define YP_EQPAY_STAKE_N       176u
+#define YP_EQPAY_SIGLEN        180u
+
+/* Bytes of block header this algo's proof-of-work covers. */
+static inline size_t yp_header_bytes(int algo)
+{
+	return (algo == ALGO_YESPOWEREQPAY) ? YP_EQPAY_HDR_BYTES : 80u;
+}
+
+/* One header in, 32-byte digest out.
  *
  * NOTE the return convention: the reference returns 1 on success and -1 on
  * error, the opposite of what its own upstream header documents. On failure we
  * fail CLOSED -- an all-ones digest can never be <= any target, so a broken
  * hash can never be mistaken for a share. */
-static bool yespower_hash_80(void *state, const void *input,
-                             const yespower_params_t *params)
+static bool yespower_hash_hdr(void *state, const void *input, size_t len,
+                              const yespower_params_t *params)
 {
 	yespower_binary_t out;
 	/*  The re-verify MUST follow the same primitive as the kernel. It called
@@ -210,8 +242,8 @@ static bool yespower_hash_80(void *state, const void *input,
 	 * 9/9 pool submissions were rejected while 0 of them tripped "does not
 	 * validate". A re-verify that cannot disagree with the kernel is not a gate. */
 	const int rc = (opt_algo == ALGO_POWER2B)
-	             ? yespower_b2b_tls_ref((const uint8_t *) input, 80, params, &out)
-	             : yespower_tls_ref((const uint8_t *) input, 80, params, &out);
+	             ? yespower_b2b_tls_ref((const uint8_t *) input, len, params, &out)
+	             : yespower_tls_ref((const uint8_t *) input, len, params, &out);
 	if (rc != 1) {
 		memset(state, 0xff, 32);
 		return false;
@@ -225,7 +257,7 @@ extern "C" void yespower_hash(void *state, const void *input, int algo)
 {
 	yespower_params_t p;
 	if (!yespower_params_for(algo, &p)) { memset(state, 0xff, 32); return; }
-	(void) yespower_hash_80(state, input, &p);
+	(void) yespower_hash_hdr(state, input, yp_header_bytes(algo), &p);
 }
 
 /* ---------------------------------------------------------------------------
@@ -277,7 +309,12 @@ extern "C" void yespower_hash(void *state, const void *input, int algo)
 #define YP_IPB_AMPERE 8u
 #define YP_IPB_OTHER  16u
 
-__constant__ static uint32_t c_yp_hdr[20];      /* words 0..18; [19] is the nonce */
+/* Header words in SHA-256 input order; [19] is the nonce and is supplied to the
+ * hash separately.  46 words rather than 20 because EqPay's extended header is
+ * 181 bytes; the other variants upload only the first 20 and never read past. */
+#define YP_HDR_WORDS      20u                   /* yespower 1.0, 80-byte header */
+#define YP_HDR_WORDS_181  46u                   /* EqPay, 181-byte header       */
+__constant__ static uint32_t c_yp_hdr[YP_HDR_WORDS_181];
 __constant__ static uint32_t c_yp_target[8];
 
 /* Exact 256-bit compare, MSW first -- the ordering fulltest() uses. Exact rather
@@ -432,7 +469,7 @@ static THREAD uint32_t *d_B[MAX_GPUS]  = { 0 };
 static THREAD uint32_t *d_X[MAX_GPUS]  = { 0 };
 static THREAD uint4    *d_S[MAX_GPUS]  = { 0 };   /* global S arena; NULL on the shared path */
 static THREAD bool      yp_sglobal[MAX_GPUS] = { false };
-static THREAD bool      yp_b2b[MAX_GPUS]     = { false };   /* yespower-b2b head/tail */
+static THREAD int       yp_head[MAX_GPUS]    = { YP_HEAD_SHA256 };  /* head/tail primitive */
 static THREAD uint32_t *d_res[MAX_GPUS] = { 0 };
 static THREAD uint32_t yp_instances[MAX_GPUS] = { 0 };
 static bool init[MAX_GPUS] = { false };
@@ -441,13 +478,22 @@ static bool init[MAX_GPUS] = { false };
  * a generic runtime r would put the 2R block loop out of the compiler's reach.
  * r=8 exists for Tidecoin and is the one shape no KAT has covered yet. */
 static bool yp_launch(uint32_t r, uint32_t instances, uint32_t startNonce, uint32_t N,
-                      int dev, bool sglobal, bool b2b)
+                      int dev, bool sglobal, int head)
 {
 	const uint32_t shbytes = sglobal ? 0u : (YP_SBOX_UINT4 * 16u);
 
 #define YP_LAUNCH_1(RR, PL, HD, SH)                                              	yespower_gpu_hash<RR, PL, HD><<<instances, YP_WIDTH, (SH)>>>(startNonce, N,         		d_V[dev], d_B[dev], d_X[dev], d_S[dev], d_res[dev])
 
-#define YP_LAUNCH(RR)                                                            	do {                                                                         		if (sglobal && b2b)        YP_LAUNCH_1(RR, PWX_S_GLOBAL, YP_HEAD_B2B,    0); 		else if (sglobal)          YP_LAUNCH_1(RR, PWX_S_GLOBAL, YP_HEAD_SHA256, 0); 		else if (b2b)              YP_LAUNCH_1(RR, PWX_S_SHARED, YP_HEAD_B2B,    shbytes); 		else                       YP_LAUNCH_1(RR, PWX_S_SHARED, YP_HEAD_SHA256, shbytes); 	} while (0)
+#define YP_LAUNCH(RR)                                                            	do {                                                                         		if (sglobal && head == YP_HEAD_B2B) YP_LAUNCH_1(RR, PWX_S_GLOBAL, YP_HEAD_B2B, 0); 		else if (sglobal)          YP_LAUNCH_1(RR, PWX_S_GLOBAL, YP_HEAD_SHA256, 0); 		else if (head == YP_HEAD_B2B)       YP_LAUNCH_1(RR, PWX_S_SHARED, YP_HEAD_B2B, shbytes); 		else                       YP_LAUNCH_1(RR, PWX_S_SHARED, YP_HEAD_SHA256, shbytes); 	} while (0)
+
+	/* EqPay: r is fixed at 32, so the 181-byte head is instantiated only here
+	 * rather than for every r. */
+	if (head == YP_HEAD_SHA256_181) {
+		if (r != 32) return false;
+		if (sglobal) YP_LAUNCH_1(32, PWX_S_GLOBAL, YP_HEAD_SHA256_181, 0);
+		else         YP_LAUNCH_1(32, PWX_S_SHARED, YP_HEAD_SHA256_181, shbytes);
+		return true;
+	}
 
 	switch (r) {
 	case 8:  YP_LAUNCH(8);  return true;
@@ -459,12 +505,22 @@ static bool yp_launch(uint32_t r, uint32_t instances, uint32_t startNonce, uint3
 #undef YP_LAUNCH_1
 }
 
-static bool yp_set_shared_limit(uint32_t r, bool b2b)
+static bool yp_set_shared_limit(uint32_t r, int head)
 {
 	const uint32_t shbytes = YP_SBOX_UINT4 * 16u;
 	cudaError_t e;
 
-/*  The opt-in is PER KERNEL. The checksum kernel asks for the same 98304 B, so	 * it needs its own cudaFuncSetAttribute or every instrument launch fails with	 * `invalid argument` on sm_86 while mining works perfectly. */	#define YP_OPTIN(RR)                                                                 	(b2b ? (cudaFuncSetAttribute(yespower_gpu_hash<RR, PWX_S_SHARED, YP_HEAD_B2B>,    	                            cudaFuncAttributeMaxDynamicSharedMemorySize, shbytes)	        , cudaFuncSetAttribute(yespower_gpu_checksum<RR, PWX_S_SHARED, YP_HEAD_B2B>,	                            cudaFuncAttributeMaxDynamicSharedMemorySize, shbytes))	     : (cudaFuncSetAttribute(yespower_gpu_hash<RR, PWX_S_SHARED, YP_HEAD_SHA256>, 	                            cudaFuncAttributeMaxDynamicSharedMemorySize, shbytes)	        , cudaFuncSetAttribute(yespower_gpu_checksum<RR, PWX_S_SHARED, YP_HEAD_SHA256>,	                            cudaFuncAttributeMaxDynamicSharedMemorySize, shbytes)))
+/*  The opt-in is PER KERNEL. The checksum kernel asks for the same 98304 B, so	 * it needs its own cudaFuncSetAttribute or every instrument launch fails with	 * `invalid argument` on sm_86 while mining works perfectly. */	#define YP_OPTIN(RR)                                                                 	((head == YP_HEAD_B2B) ? (cudaFuncSetAttribute(yespower_gpu_hash<RR, PWX_S_SHARED, YP_HEAD_B2B>,    	                            cudaFuncAttributeMaxDynamicSharedMemorySize, shbytes)	        , cudaFuncSetAttribute(yespower_gpu_checksum<RR, PWX_S_SHARED, YP_HEAD_B2B>,	                            cudaFuncAttributeMaxDynamicSharedMemorySize, shbytes))	     : (cudaFuncSetAttribute(yespower_gpu_hash<RR, PWX_S_SHARED, YP_HEAD_SHA256>, 	                            cudaFuncAttributeMaxDynamicSharedMemorySize, shbytes)	        , cudaFuncSetAttribute(yespower_gpu_checksum<RR, PWX_S_SHARED, YP_HEAD_SHA256>,	                            cudaFuncAttributeMaxDynamicSharedMemorySize, shbytes)))
+
+	if (head == YP_HEAD_SHA256_181) {
+		if (r != 32) return false;
+		e = cudaFuncSetAttribute(yespower_gpu_hash<32, PWX_S_SHARED, YP_HEAD_SHA256_181>,
+		                         cudaFuncAttributeMaxDynamicSharedMemorySize, shbytes);
+		if (e == cudaSuccess)
+			e = cudaFuncSetAttribute(yespower_gpu_checksum<32, PWX_S_SHARED, YP_HEAD_SHA256_181>,
+			                         cudaFuncAttributeMaxDynamicSharedMemorySize, shbytes);
+		return e == cudaSuccess;
+	}
 
 	switch (r) {
 	case 8:  e = YP_OPTIN(8);  break;
@@ -478,10 +534,8 @@ static bool yp_set_shared_limit(uint32_t r, bool b2b)
 
 
 /* ---------------------------------------------------------------------------
- * Instrument plumbing.  Spans are chosen against the playbook's (d) rules:
- * a span that is a multiple of the launch width, or that starts at 0, leaves
- * the ragged tail and the startNonce arithmetic untested -- which is exactly
- * the miner-side path the harness cannot reach.
+ * Instrument plumbing.  A span that is a multiple of the launch width, or that
+ * starts at 0, leaves the ragged tail and the startNonce arithmetic untested.
  *
  * 53 and 13 are prime, so neither divides any instance count this algo uses
  * (28 on the shared path, 448 on the global one); 0x51 puts the first nonce
@@ -495,7 +549,7 @@ static bool yp_set_shared_limit(uint32_t r, bool b2b)
 #define YP_ST_EVEN   12u    /* even sub-span: see the acc[0] blindness leg */
 
 static bool yp_checksum_launch(uint32_t r, uint32_t instances, uint32_t startNonce,
-                               uint32_t N, int dev, bool sglobal, bool b2b,
+                               uint32_t N, int dev, bool sglobal, int head,
                                unsigned long long *d_acc)
 {
 	const uint32_t shbytes = sglobal ? 0u : (YP_SBOX_UINT4 * 16u);
@@ -506,11 +560,22 @@ static bool yp_checksum_launch(uint32_t r, uint32_t instances, uint32_t startNon
 
 #define YP_CK(RR)                                                                \
 	do {                                                                         \
-		if (sglobal && b2b)        YP_CK_1(RR, PWX_S_GLOBAL, YP_HEAD_B2B,    0); \
+		if (sglobal && head == YP_HEAD_B2B) YP_CK_1(RR, PWX_S_GLOBAL, YP_HEAD_B2B, 0); \
 		else if (sglobal)          YP_CK_1(RR, PWX_S_GLOBAL, YP_HEAD_SHA256, 0); \
-		else if (b2b)              YP_CK_1(RR, PWX_S_SHARED, YP_HEAD_B2B,    shbytes); \
+		else if (head == YP_HEAD_B2B)       YP_CK_1(RR, PWX_S_SHARED, YP_HEAD_B2B, shbytes); \
 		else                       YP_CK_1(RR, PWX_S_SHARED, YP_HEAD_SHA256, shbytes); \
 	} while (0)
+
+	/* EqPay, same r=32 restriction as yp_launch. Without this branch the
+	 * instruments would fall through to the 80-byte head and compare the GPU
+	 * against a hash the miner does not compute -- which is what a green
+	 * self-test over the wrong function looks like. */
+	if (head == YP_HEAD_SHA256_181) {
+		if (r != 32) return false;
+		if (sglobal) YP_CK_1(32, PWX_S_GLOBAL, YP_HEAD_SHA256_181, 0);
+		else         YP_CK_1(32, PWX_S_SHARED, YP_HEAD_SHA256_181, shbytes);
+		return true;
+	}
 
 	switch (r) {
 	case 8:  YP_CK(8);  return true;
@@ -540,7 +605,7 @@ static bool yp_gpu_acc(int dev, const yespower_params_t *p,
 		uint32_t chunk = span - done;
 		if (chunk > yp_instances[dev]) chunk = yp_instances[dev];
 		ok = yp_checksum_launch(p->r, chunk, start + done, p->N, dev,
-		                        yp_sglobal[dev], yp_b2b[dev], d_acc)
+		                        yp_sglobal[dev], yp_head[dev], d_acc)
 		     && cudaDeviceSynchronize() == cudaSuccess;
 		done += chunk;
 	}
@@ -553,19 +618,21 @@ static bool yp_gpu_acc(int dev, const yespower_params_t *p,
  * `flip` perturbs the HEADER (a different job, so the digests must differ);
  * the perm/const variants perturb the accumulation instead, which is what makes
  * them demonstrations of the two blindnesses rather than of the hash. */
-static bool yp_cpu_acc(const uint32_t pdata[20], const yespower_params_t *p,
+static bool yp_cpu_acc(const uint32_t *pdata, const yespower_params_t *p,
                        uint32_t start, uint32_t span, bool flip,
                        unsigned long long plain[2], unsigned long long perm[2],
                        unsigned long long even_plain[2], unsigned long long even_const[2])
 {
-	uint32_t endian[20], vhash[8];
+	uint32_t endian[YP_EQPAY_HDR_WORDS], vhash[8];
+	const size_t hlen = yp_header_bytes(opt_algo);
+	const uint32_t hwords = (uint32_t)((hlen + 3u) / 4u);
 
 	if (plain)      plain[0]      = plain[1]      = 0ull;
 	if (perm)       perm[0]       = perm[1]       = 0ull;
 	if (even_plain) even_plain[0] = even_plain[1] = 0ull;
 	if (even_const) even_const[0] = even_const[1] = 0ull;
 
-	for (int k = 0; k < 20; k++) be32enc(&endian[k], pdata[k]);
+	for (uint32_t k = 0; k < hwords; k++) be32enc(&endian[k], pdata[k]);
 	if (flip) endian[3] ^= 0x00000001u;
 
 	for (uint32_t i = 0; i < span; i++) {
@@ -573,7 +640,7 @@ static bool yp_cpu_acc(const uint32_t pdata[20], const yespower_params_t *p,
 		unsigned long long q, w;
 
 		be32enc(&endian[19], nonce);
-		if (!yespower_hash_80(vhash, endian, p)) return false;
+		if (!yespower_hash_hdr(vhash, endian, hlen, p)) return false;
 
 		q = ((unsigned long long) vhash[7] << 32) | vhash[6];
 		w = 2ull * (unsigned long long) nonce + 1ull;
@@ -588,24 +655,103 @@ static bool yp_cpu_acc(const uint32_t pdata[20], const yespower_params_t *p,
 	return true;
 }
 
+/* EqPay genesis gate: the digest of the chain's own genesis header, so unlike
+ * every other check here it is not satisfied by an in-tree mistake that the GPU
+ * and the CPU reference share.  The two perturbation legs are length probes --
+ * bytes 80 and 180 are unreachable if the head hashed 80 or 180 bytes. */
+static bool yespower_eqpay_genesis_kat(int thr_id, const yespower_params_t *p)
+{
+	static const uint8_t kat_hdr[181] = {
+		0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0xe1, 0xa7, 0xff, 0x0f, 0x99, 0xf5, 0xe6, 0x92, 0xa1, 0x6f, 0x69, 0x69,
+		0xe0, 0x09, 0xca, 0xf9, 0x51, 0x86, 0x57, 0xe6, 0x7b, 0x12, 0xa5, 0xac,
+		0x15, 0xf8, 0x53, 0x39, 0x5c, 0x7f, 0xed, 0xaa, 0x25, 0xc6, 0x55, 0x61,
+		0xff, 0xff, 0x3f, 0x1f, 0x53, 0x01, 0x00, 0x00, 0xe9, 0x65, 0xff, 0xd0,
+		0x02, 0xcd, 0x6a, 0xd0, 0xe2, 0xdc, 0x40, 0x2b, 0x80, 0x44, 0xde, 0x83,
+		0x3e, 0x06, 0xb2, 0x31, 0x27, 0xea, 0x8c, 0x3d, 0x80, 0xae, 0xc9, 0x14,
+		0x10, 0x77, 0x14, 0x95, 0x56, 0xe8, 0x1f, 0x17, 0x1b, 0xcc, 0x55, 0xa6,
+		0xff, 0x83, 0x45, 0xe6, 0x92, 0xc0, 0xf8, 0x6e, 0x5b, 0x48, 0xe0, 0x1b,
+		0x99, 0x6c, 0xad, 0xc0, 0x01, 0x62, 0x2f, 0xb5, 0xe3, 0x63, 0xb4, 0x21,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+		0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff,
+		0x00,
+	};
+
+	static const uint8_t kat_digest[32] = {
+		0x56, 0xda, 0x66, 0x12, 0x94, 0xe4, 0xac, 0xf5, 0x60, 0xea, 0x4d, 0x73,
+		0x12, 0x1a, 0xc9, 0xd8, 0xd8, 0xf8, 0xd3, 0x09, 0xf0, 0x6e, 0xe3, 0x32,
+		0x4e, 0x7b, 0xe3, 0x36, 0x01, 0x56, 0x04, 0x00,
+	};
+
+	uint8_t out[32], alt[YP_EQPAY_HDR_BYTES], tmp[32];
+	bool digest_ok, roots_ok, siglen_ok, passed;
+
+	if (!yespower_hash_hdr(out, kat_hdr, YP_EQPAY_HDR_BYTES, p)) {
+		gpulog(LOG_ERR, thr_id, "eqpay self-test: the CPU reference refused the "
+		                        "parameters (N=%u r=%u)", p->N, (uint32_t) p->r);
+		return selftest_gate(thr_id, "eqpay", false);
+	}
+	digest_ok = (memcmp(out, kat_digest, 32) == 0);
+
+	memcpy(alt, kat_hdr, YP_EQPAY_HDR_BYTES);
+	alt[YP_EQPAY_STATE_ROOT] ^= 0x01;
+	roots_ok = yespower_hash_hdr(tmp, alt, YP_EQPAY_HDR_BYTES, p) &&
+	           memcmp(tmp, out, 32) != 0;
+
+	memcpy(alt, kat_hdr, YP_EQPAY_HDR_BYTES);
+	alt[YP_EQPAY_SIGLEN] ^= 0x01;
+	siglen_ok = yespower_hash_hdr(tmp, alt, YP_EQPAY_HDR_BYTES, p) &&
+	            memcmp(tmp, out, 32) != 0;
+
+	passed = digest_ok && roots_ok && siglen_ok;
+	if (!passed)
+		gpulog(LOG_ERR, thr_id, "eqpay self-test FAILED: digest=%d roots=%d siglen=%d "
+		                        "(%u-byte header)",
+		       (int) digest_ok, (int) roots_ok, (int) siglen_ok,
+		       (unsigned) YP_EQPAY_HDR_BYTES);
+
+	return selftest_gate(thr_id, "eqpay", passed);
+}
+
 /* Fail-closed init gate.  Four legs; the last two need no GPU and are the ones
  * that keep the instrument honest, because they PROVE the two documented
  * blindnesses instead of citing them. */
 static bool yespower_device_selftest(int thr_id, int dev, const yespower_params_t *p)
 {
+	/* EqPay first: it is the only leg here with an external oracle, and if the
+	 * parameters or the header length are wrong there is no point reporting a
+	 * GPU-vs-CPU agreement built on them. */
+	if (opt_algo == ALGO_YESPOWEREQPAY && !yespower_eqpay_genesis_kat(thr_id, p))
+		return false;
+
 	/* A fixed header, so the gate is reproducible run to run.  c_yp_hdr is
 	 * re-uploaded with the real job on every scanhash call, so borrowing it
 	 * here cannot leak into mining. */
-	static const uint32_t testhdr[20] = {
+	static const uint32_t testhdr[YP_EQPAY_HDR_WORDS] = {
 		0x20000000u, 0x0f1e2d3cu, 0x4b5a6978u, 0x8796a5b4u, 0xc3d2e1f0u,
 		0x11223344u, 0x55667788u, 0x99aabbccu, 0xddeeff00u, 0x0badc0deu,
 		0xfeedfaceu, 0xcafebabeu, 0x13579bdfu, 0x2468ace0u, 0xa5a5a5a5u,
-		0x5a5a5a5au, 0x00ff00ffu, 0xff00ff00u, 0x1a2b3c4du, 0x00000000u
+		0x5a5a5a5au, 0x00ff00ffu, 0xff00ff00u, 0x1a2b3c4du, 0x00000000u,
+		/* EqPay tail in the shape stratum_gen_work builds. Ignored unless the
+		 * algo hashes 181 bytes, but it must exist: otherwise that head reads
+		 * uninitialised constant memory and fails for the wrong reason. */
+		0x01234567u, 0x89abcdefu, 0x1a2b3c4du, 0x5e6f7a8bu,
+		0x00112233u, 0x44556677u, 0x8899aabbu, 0xccddeeffu,
+		0xdeadbeefu, 0xfeedfaceu, 0x0badf00du, 0xcafed00du,
+		0x13579bdfu, 0x02468aceu, 0xfdb97531u, 0xeca86420u,
+		0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
+		0x00000000u, 0x00000000u, 0x00000000u, 0x00000000u,
+		0xffffffffu,   /* prevoutStake.n */
+		0x00000000u    /* signature length byte, then padding */
 	};
+	const uint32_t st_words = (uint32_t)((yp_header_bytes(opt_algo) + 3u) / 4u);
 	unsigned long long g[2], cpu[2], cneg[2], perm[2], ev[2], evc[2];
 	bool kat, neg, permleg, constleg, passed;
 
-	if (cudaMemcpyToSymbol(c_yp_hdr, testhdr, 20 * sizeof(uint32_t)) != cudaSuccess)
+	if (cudaMemcpyToSymbol(c_yp_hdr, testhdr, st_words * sizeof(uint32_t)) != cudaSuccess)
 		return selftest_gate(thr_id, "yespower", selftest_cuda_fault());
 
 	if (!yp_gpu_acc(dev, p, YP_ST_OFF, YP_ST_SPAN, g))
@@ -694,7 +840,7 @@ extern "C" int scanhash_yespower(int thr_id, struct work *work, uint32_t max_non
 	uint32_t *pdata = work->data;
 	uint32_t *ptarget = work->target;
 	const uint32_t first_nonce = pdata[19];
-	uint32_t endiandata[20];
+	uint32_t endiandata[YP_EQPAY_HDR_WORDS];   /* 46: sized for the longest header */
 	uint32_t vhash[8];
 	yespower_params_t params;
 	uint32_t n = first_nonce;
@@ -753,12 +899,18 @@ extern "C" int scanhash_yespower(int thr_id, struct work *work, uint32_t max_non
 		ptarget[7] = 0x07ffffff;
 
 	/* Follow ccminer's OWN yescrypt (algos/yescrypt/yescrypt.cu), not cpuminer's:
-	 * cpuminer-opt runs yescrypt AND yespower through one scanhash that leaves the
-	 * nonce raw, but ccminer's live, pool-proven yescrypt be32enc's all 20 words
-	 * and submits with the switch's default le32enc.  The two miners keep
-	 * work->data[19] in different conventions, so the sibling's raw-nonce form is
-	 * not transferable here. */
-	for (int k = 0; k < 20; k++)
+	 * cpuminer-opt leaves the nonce raw, while ccminer's yescrypt be32enc's all 20
+	 * words and submits with the switch's default le32enc.  The two miners keep
+	 * work->data[19] in different conventions, so the sibling's form does not
+	 * transfer. */
+	const size_t hdr_bytes  = yp_header_bytes(opt_algo);
+	const uint32_t hdr_words = (uint32_t)((hdr_bytes + 3u) / 4u);
+
+	/* One rule for every word: endiandata is the wire byte stream, and the GPU
+	 * reads the same words as SHA-256 input. stratum_gen_work stores EqPay's
+	 * extended tail as the big-endian decode of the wire for exactly this reason,
+	 * so no part of the header needs a special case here. */
+	for (uint32_t k = 0; k < hdr_words; k++)
 		be32enc(&endiandata[k], pdata[k]);
 
 	if (!init[dev]) {
@@ -797,7 +949,9 @@ extern "C" int scanhash_yespower(int thr_id, struct work *work, uint32_t max_non
 			       device_map[thr_id], fit_q);
 		/* ALGO_POWER2B is yespower-b2b: same (N, r, pers) machinery, BLAKE2b head
 		 * and tail instead of SHA-256.  `-a yespower-b2b` aliases to it in algos.h. */
-		yp_b2b[dev] = (opt_algo == ALGO_POWER2B);
+		yp_head[dev] = (opt_algo == ALGO_POWER2B)    ? YP_HEAD_B2B
+	             : (opt_algo == ALGO_YESPOWEREQPAY) ? YP_HEAD_SHA256_181
+	                                                : YP_HEAD_SHA256;
 		if (yp_sglobal[dev] && (uint32_t) optin < shneed)
 			applog(LOG_INFO, "yespower: GPU #%d offers %d B of shared memory per block "
 			                 "(needs %u), using the global S-box path",
@@ -807,7 +961,7 @@ extern "C" int scanhash_yespower(int thr_id, struct work *work, uint32_t max_non
 			                 "(~2.1x the shared path -- occupancy beats access cost)",
 			       device_map[thr_id]);
 
-		if (!yp_sglobal[dev] && !yp_set_shared_limit(params.r, yp_b2b[dev])) {
+		if (!yp_sglobal[dev] && !yp_set_shared_limit(params.r, yp_head[dev])) {
 			applog(LOG_ERR, "yespower: could not raise the dynamic shared limit to %u B",
 			       shneed);
 			proper_exit(EXIT_CODE_CUDA_ERROR);   /* permanent; see the arch gate above */
@@ -897,7 +1051,7 @@ extern "C" int scanhash_yespower(int thr_id, struct work *work, uint32_t max_non
 	 * Uploading endiandata makes the GPU hash a different header than the host
 	 * re-verify, which surfaces only as "does not validate". Word 19 is ignored --
 	 * the nonce is passed to the kernel separately. */
-	cudaMemcpyToSymbol(c_yp_hdr, pdata, 20 * sizeof(uint32_t));
+	cudaMemcpyToSymbol(c_yp_hdr, pdata, hdr_words * sizeof(uint32_t));
 	cudaMemcpyToSymbol(c_yp_target, ptarget, 32);
 
 	/* -D only: one differential per JOB, against the header just uploaded. The
@@ -920,7 +1074,7 @@ extern "C" int scanhash_yespower(int thr_id, struct work *work, uint32_t max_non
 
 		cudaMemcpy(d_res[dev], res, sizeof(res), cudaMemcpyHostToDevice);
 
-		if (!yp_launch(params.r, batch, n, params.N, dev, yp_sglobal[dev], yp_b2b[dev])) {
+		if (!yp_launch(params.r, batch, n, params.N, dev, yp_sglobal[dev], yp_head[dev])) {
 			applog(LOG_ERR, "yespower: no kernel for r=%u", params.r);
 			return -1;
 		}
@@ -961,7 +1115,7 @@ extern "C" int scanhash_yespower(int thr_id, struct work *work, uint32_t max_non
 
 			for (uint32_t s = 0; s < ncand && found < 2; s++) {
 				be32enc(&endiandata[19], cand[s]);
-				if (!yespower_hash_80(vhash, endiandata, &params)) {
+				if (!yespower_hash_hdr(vhash, endiandata, hdr_bytes, &params)) {
 					applog(LOG_ERR, "yespower: host re-verify failed at nonce %08x", cand[s]);
 					return -1;
 				}
@@ -1032,7 +1186,7 @@ extern "C" void free_yespower(int thr_id)
 
 	yp_instances[dev] = 0;
 	yp_sglobal[dev]   = false;
-	yp_b2b[dev]       = false;
+	yp_head[dev]      = YP_HEAD_SHA256;
 	yp_diff_sig[dev]  = 0;    /* so the `-D` differential re-runs on the new params */
 
 	init[dev] = false;

@@ -785,6 +785,10 @@ struct stratum_job {
 	unsigned char kawpow_seed[32];    // epoch seed_hash
 	unsigned char kawpow_target[32];  // 256-bit share target, MSB first
 	uint16_t      kawpow_prefix;      // 2-byte extranonce nonce prefix
+	// EqPay (Qtum-derived): hashStateRoot || hashUTXORoot, sent as one 64-byte
+	// notify parameter after prevhash. Wire order, un-swapped.
+	bool          has_eqpay_roots;
+	unsigned char eqpay_roots[64];
 };
 
 struct stratum_ctx {

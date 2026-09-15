@@ -118,6 +118,7 @@ enum sha_algos {
 	ALGO_YESPOWER,
 	ALGO_YESPOWERR16,
 	ALGO_POWER2B,
+	ALGO_YESPOWEREQPAY,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -254,6 +255,7 @@ static const char *algo_names[] = {
 	"yespower",
 	"yespowerr16",
 	"power2b",
+	"yespowereqpay",
 	"auto", /* reserved for multi algo */
 	""
 };
@@ -290,6 +292,7 @@ static inline int algo_to_int(char* arg)
 		         !strcasecmp("yespowermgpc", arg) ||
 		         !strcasecmp("yespowertide", arg) ||
 		         !strcasecmp("yespowerarwn", arg) ||
+		         !strcasecmp("yespoweradvc", arg) ||
 		         !strcasecmp("yespoweric", arg) ||
 		         !strcasecmp("yespoweriots", arg) ||
 		         !strcasecmp("yespowerlitb", arg) ||

@@ -21,8 +21,13 @@
 
 /* Head/tail primitive. yespower 1.0 uses SHA-256; yespower-b2b (mined as
  * `-a power2b` and `-a yespower-b2b`) uses BLAKE2b for the SAME structure --
- * smix/pwxform/salsa are byte-identical between them. */
-enum { YP_HEAD_SHA256 = 0, YP_HEAD_B2B = 1 };
+ * smix/pwxform/salsa are byte-identical between them.
+ *
+ * SHA256_181 is yespower 1.0 over EqPay's 181-byte extended header. It differs
+ * from SHA256 only in the length of the message the head hashes: 1.0 replaces
+ * the PBKDF2 salt with `pers`, so the header never reaches the salt and the
+ * rest of the pipeline is untouched. */
+enum { YP_HEAD_SHA256 = 0, YP_HEAD_B2B = 1, YP_HEAD_SHA256_181 = 2 };
 
 #define YP_SBOX_UINT4   6144u    /* 96 KiB / 16 B, three boxes of 2048 */
 #define YP_SFILL_N       768u    /* Sbytes / 128 */
@@ -69,8 +74,10 @@ __device__ __forceinline__ void yespower_hash_1_0(const uint32_t *hdr, const uin
 #pragma unroll
 		for (int i = 0; i < 32; i++) b2b_saved[i] = ((const uint8_t *)B)[i];
 	} else {
-	/* -- head: sha256 = SHA256(header); B = PBKDF2(sha256, pers, 1, 128r) -- */
-	yp_sha256_80(hdr, w19, key);
+	/* -- head: sha256 = SHA256(header); B = PBKDF2(sha256, pers, 1, 128r) --
+	 * HEAD is a template constant, so only one of these is compiled. */
+	if (HEAD == YP_HEAD_SHA256_181) yp_sha256_181(hdr, w19, key);
+	else                            yp_sha256_80(hdr, w19, key);
 	yp_pbkdf2_fill_B<R>(key, B, j, mask);
 
 	/* sha256 <- B[0..7].  The reference copies WORDS out of B and later feeds

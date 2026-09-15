@@ -1634,6 +1634,13 @@ static bool stratum_notify(struct stratum_ctx *sctx, json_t *params)
 	char algo[64] = { 0 };
 	get_currentalgo(algo, sizeof(algo));
 	bool has_claim = !strcasecmp(algo, "lbry");
+	/* EqPay sends its two EVM state roots as a tenth parameter, in the slot lbry
+	 * uses for its claim. Gated on the parameter count as well as the algo: a
+	 * pool that omits them must fail loudly below rather than shift every
+	 * following field by one. */
+	const char *eqpay_roots = NULL;
+	bool has_eqpay_roots = (opt_algo == ALGO_YESPOWEREQPAY)
+	                       && (json_array_size(params) == 10);
 
 	// KawPoW-family pools push mining.set_target (which otherwise flips
 	// is_equihash), so route their notify before the is_equihash branch.
@@ -1660,6 +1667,20 @@ static bool stratum_notify(struct stratum_ctx *sctx, json_t *params)
 			applog(LOG_ERR, "Stratum notify: invalid claim parameter");
 			goto out;
 		}
+	}
+	if (has_eqpay_roots) {
+		eqpay_roots = json_string_value(json_array_get(params, p++));
+		if (!eqpay_roots || strlen(eqpay_roots) < 128) {
+			applog(LOG_ERR, "Stratum notify: invalid EqPay state root parameter");
+			goto out;
+		}
+	} else if (opt_algo == ALGO_YESPOWEREQPAY) {
+		/* Consensus data, so there is no safe default: mining without it produces
+		 * a well-formed digest that the pool rejects 100% of the time, with no
+		 * local symptom. Refuse the job instead of inventing roots. */
+		applog(LOG_ERR, "Stratum notify: EqPay job carries no state roots (%d params)",
+		       (int) json_array_size(params));
+		goto out;
 	}
 	coinb1 = json_string_value(json_array_get(params, p++));
 	coinb2 = json_string_value(json_array_get(params, p++));
@@ -1724,6 +1745,8 @@ static bool stratum_notify(struct stratum_ctx *sctx, json_t *params)
 	sctx->job.job_id = strdup(job_id);
 	hex2bin(sctx->job.prevhash, prevhash, 32);
 	if (has_claim) hex2bin(sctx->job.claim, claim, 32);
+	sctx->job.has_eqpay_roots = has_eqpay_roots;
+	if (has_eqpay_roots) hex2bin(sctx->job.eqpay_roots, eqpay_roots, 64);
 
 	sctx->job.height = getblocheight(sctx);
 
