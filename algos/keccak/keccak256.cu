@@ -1,7 +1,7 @@
 /*
  * Keccak 256
  *
- * (sm_30 "compat" kernel selector removed 2026-07 — sm_61 arch floor)
+ * (sm_30 "compat" kernel selector removed 2026-07  - sm_61 arch floor)
  */
 
 extern "C"
@@ -41,10 +41,19 @@ extern "C" int scanhash_keccak256(int thr_id, struct work* work, uint32_t max_no
 	uint32_t *ptarget = work->target;
 	const uint32_t first_nonce = pdata[19];
 	const int dev_id = device_map[thr_id];
-	uint32_t intensity = 23;
-	if (strstr(device_name[dev_id], "GTX 1070")) intensity = 25;
-	if (strstr(device_name[dev_id], "GTX 1080")) intensity = 26;
-	uint32_t throughput = cuda_default_throughput(thr_id, 1U << intensity);
+	/* Default launch size. Bigger launches amortise the fixed per-launch cost,
+	 * but a batch outliving the job is discarded on every job change, so this
+	 * targets the start of the plateau. Reference is 2^25 threads on a 28-SM
+	 * card (both cards measured here are 28-SM), scaled by SM count so the
+	 * batch stays roughly constant on other sizes. Named cards override it. */
+	uint32_t defthreads = 1U << 25;
+	if (device_mpcount[dev_id] > 0)
+		defthreads = (uint32_t) (((uint64_t) defthreads * device_mpcount[dev_id]) / 28);
+	/* per-card values, measured or inherited */
+	if (strstr(device_name[dev_id], "GTX 1070")) defthreads = 1U << 25;
+	if (strstr(device_name[dev_id], "GTX 1080")) defthreads = 1U << 26;
+	if (strstr(device_name[dev_id], "RTX 30"))   defthreads = 1U << 25;
+	uint32_t throughput = cuda_default_throughput(thr_id, defthreads);
 	if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
 	if (opt_benchmark)
@@ -88,13 +97,13 @@ extern "C" int scanhash_keccak256(int thr_id, struct work* work, uint32_t max_no
 			be32enc(&endiandata[19], work->nonces[0]);
 			keccak256_hash(vhash, endiandata);
 
-			if (vhash[7] <= ptarget[7] && fulltest(vhash, ptarget)) {
+			if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
 				work->valid_nonces = 1;
 				work_set_target_ratio(work, vhash);
 				if (work->nonces[1] != UINT32_MAX) {
 					be32enc(&endiandata[19], work->nonces[1]);
 					keccak256_hash(vhash, endiandata);
-					if (vhash[7] <= ptarget[7] && fulltest(vhash, ptarget)) {
+					if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
 						work->valid_nonces++;
 						bn_set_target_ratio(work, vhash, 1);
 					}
@@ -104,7 +113,10 @@ extern "C" int scanhash_keccak256(int thr_id, struct work* work, uint32_t max_no
 				}
 				return work->valid_nonces;
 			}
-			else if (vhash[7] > Htarg) {
+			else {
+				/* Covers vhash[7] <= Htarg failing fulltest: without the bare else
+				 * that outcome matched no branch, leaving a stale nonce in an
+				 * un-armed buffer to be re-read every iteration. */
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
 				gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);

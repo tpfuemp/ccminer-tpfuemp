@@ -23,18 +23,26 @@ extern bool keccak_device_selftest(int thr_id);
 
 /* launch shape (swept 2026-07-12 on RTX 3060, see README) */
 #define TPB 128
-#define BPM 5   /* min blocks per SM (launch bounds) */
+/* min blocks per SM (launch bounds), per-arch: Pascal needs 96 registers here
+ * where Ampere needs 80, so 6 blocks/SM caps it to 80, spill-free. Ampere keeps
+ * 5 - the tighter bound costs it there. Measured on GTX 1080 Ti / RTX 3060;
+ * sm_75 untested. */
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 610
+#define BPM 6
+#else
+#define BPM 5
+#endif
 #define NPT 1   /* nonces per thread (grid-stride) */
 #define NBN 2
 
 static uint32_t *d_sha3t_nonces[MAX_GPUS];
 static uint32_t *h_sha3t_nonces[MAX_GPUS];
 
-/* per-GPU constant memory — precomputed from the first 72 bytes of the header */
+/* per-GPU constant memory  - precomputed from the first 72 bytes of the header */
 __constant__ uint2 c_sha3t_mid[17];
 __constant__ uint2 c_sha3t_msg[6];
 
-/* ── main GPU kernel ─────────────────────────────────────────────────────────── */
+/* -- main GPU kernel ----------------------------------------------------------- */
 
 __global__ __launch_bounds__(TPB, BPM)
 void sha3t_gpu_hash_80(uint32_t threads, uint32_t startNonce,
@@ -46,16 +54,16 @@ void sha3t_gpu_hash_80(uint32_t threads, uint32_t startNonce,
 	uint64_t step     = (uint64_t)gridDim.x * blockDim.x;
 	uint64_t maxNonce = (uint64_t)startNonce + threads;
 	for (uint64_t nounce = startNonce + thread; nounce < maxNonce; nounce += step) {
-		/* ── round 1: 80-byte header → 32-byte hash1 ──────────────────────────
+		/* -- round 1: 80-byte header -> 32-byte hash1 --------------------------
 		 *
 		 * Midstate covers the first 72 bytes (s[0..8]).  s[9] carries the bits
 		 * field in .x and the per-thread nonce (byte-swapped) in .y.
-		 * s[10] = 0x06  ← NIST SHA3-256 domain separator (NOT 0x01 Keccak).
-		 * s[16] = {0, 0x80000000}  ← end-of-rate bit.
+		 * s[10] = 0x06  <- NIST SHA3-256 domain separator (NOT 0x01 Keccak).
+		 * s[16] = {0, 0x80000000}  <- end-of-rate bit.
 		 * All other lanes initialised to 0 by the midstate constants. */
 
 		s[ 9] = make_uint2(c_sha3t_msg[0].x, cuda_swab32(nounce));
-		s[10] = make_uint2(6, 0);   /* SHA3-256 padding — critical difference */
+		s[10] = make_uint2(6, 0);   /* SHA3-256 padding  - critical difference */
 
 		t[ 4] = c_sha3t_msg[1] ^ s[ 9];
 		u[ 0] = t[4] ^ c_sha3t_mid[ 0];
@@ -105,7 +113,7 @@ void sha3t_gpu_hash_80(uint32_t threads, uint32_t startNonce,
 			keccak_round(s, c_keccak_rc[i]);
 
 		/* hash1 = first 32 bytes of state = s[0..3] */
-		/* ── round 2: SHA3-256(hash1) ─────────────────────────────────────── */
+		/* -- round 2: SHA3-256(hash1) --------------------------------------- */
 		#pragma unroll
 		for (int i = 5; i < 25; i++)
 			s[i] = make_uint2(0, 0);
@@ -114,9 +122,9 @@ void sha3t_gpu_hash_80(uint32_t threads, uint32_t startNonce,
 
 		keccakf1600_full(s);
 
-		/* ── round 3: SHA3-256(hash2) ─────────────────────────────────────
+		/* -- round 3: SHA3-256(hash2) -------------------------------------
 		 * (keccak_final_lane3 truncation A/B'd 2026-07-12: 253.6 vs 256.9
-		 * MH/s — the full permutation wins here; see README) */
+		 * MH/s  - the full permutation wins here; see README) */
 		#pragma unroll
 		for (int i = 5; i < 25; i++)
 			s[i] = make_uint2(0, 0);
@@ -127,14 +135,20 @@ void sha3t_gpu_hash_80(uint32_t threads, uint32_t startNonce,
 
 		/* final_hash[6..7] == devectorize(s[3]).  Compare 64 bits for precision. */
 		if (devectorize(s[3]) <= devectorize(highTarget)) {
-			const uint32_t tmp = atomicExch(&resNounce[0], (uint32_t)nounce);
-			if (tmp != UINT32_MAX)
-				resNounce[1] = tmp;
+			/* Keep the two lowest nonces: slot 0 the minimum, slot 1 the runner-up.
+			 * The host resumes from max(slot0, slot1) + 1, so reporting the lowest
+			 * is what stops the cursor stepping over an unreported candidate. Both
+			 * slots must be atomic, and the winner must come from atomicMin's
+			 * return value rather than a re-read of slot 0. */
+			const uint32_t n    = (uint32_t) nounce;
+			const uint32_t prev = atomicMin(&resNounce[0], n);
+			if (prev != UINT32_MAX)
+				atomicMin(&resNounce[1], (prev > n) ? prev : n);
 		}
 	}
 }
 
-/* ── host functions ──────────────────────────────────────────────────────────── */
+/* -- host functions ------------------------------------------------------------ */
 
 __host__
 void sha3t_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNonce,
@@ -168,7 +182,7 @@ void sha3t_setBlock_80(uint64_t *endiandata)
 	t[1] = endiandata[1] ^ endiandata[6] ^ s[16];
 	t[2] = endiandata[2] ^ endiandata[7];
 	t[3] = endiandata[3] ^ endiandata[8];
-	/* t[4] depends on endiandata[9] which contains the nonce — done per-thread */
+	/* t[4] depends on endiandata[9] which contains the nonce  - done per-thread */
 
 	mid[ 0] = ROTL64(t[1], 1);
 	     u[1] = t[0] ^ ROTL64(t[2], 1);

@@ -2,7 +2,7 @@
  * KECCAK-256 CUDA optimised implementation, based on ccminer-alexis code
  *
  * 2026-07: round body / truncated final round moved to the shared
- * cuda/keccak_device.cuh (bit-identical extraction — this kernel was the
+ * cuda/keccak_device.cuh (bit-identical extraction  - this kernel was the
  * donor); sub-sm_61 launch shapes deleted per arch floor.
  */
 
@@ -18,12 +18,16 @@ extern "C" {
 
 extern bool keccak_device_selftest(int thr_id);
 
-/* Ampere retune: the alexis donor __launch_bounds__(1024,1) forces the reg
- * allocator to <=64 reg/thread, which spills (STACK:8) on sm_86. TPB128/minb5
- * (= the sha3d/sha3t sibling config) gives an 80-reg spill-free build; the
- * eliminated local-memory round-trips beat the higher occupancy (~+2.6%
- * event-timed on RTX 3060). The 64-reg kernel is throughput/spill-bound, not
- * occupancy-bound, so 42% (spill-free) > 67% (spilling). */
+/* min blocks per SM (launch bounds), per-arch: the donor bound of (1024,1)
+ * caps the allocator at 64 reg/thread and spills on Ampere, so 5 blocks/SM is
+ * used there for an 80-register spill-free build. Pascal compiles the same
+ * source to 96 registers; 6 brings it back to 80, still spill-free. Measured
+ * on GTX 1080 Ti / RTX 3060; sm_75 untested. */
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 610
+#define KBPM 6
+#else
+#define KBPM 5
+#endif
 #define TPB52 128
 #define NPT 2
 #define NBN 2
@@ -34,7 +38,7 @@ static uint32_t *h_nonces[MAX_GPUS];
 __constant__ uint2 c_message48[6];
 __constant__ uint2 c_mid[17];
 
-__global__ __launch_bounds__(TPB52, 5)
+__global__ __launch_bounds__(TPB52, KBPM)
 void keccak256_gpu_hash_80(uint32_t threads, uint32_t startNonce, uint32_t *resNounce, const uint2 highTarget)
 {
 	uint32_t thread = blockDim.x * blockIdx.x + threadIdx.x;
@@ -45,7 +49,7 @@ void keccak256_gpu_hash_80(uint32_t threads, uint32_t startNonce, uint32_t *resN
 	for(uint64_t nounce = startNonce + thread; nounce<maxNonce;nounce+=step) {
 
 		/* round 0 from the 72-byte midstate: s[9] carries the nonce,
-		 * s[10] = 0x01 — Keccak-256 padding (NOT 0x06 NIST SHA3). */
+		 * s[10] = 0x01  - Keccak-256 padding (NOT 0x06 NIST SHA3). */
 		s[ 9] = make_uint2(c_message48[0].x,cuda_swab32(nounce));
 		s[10] = make_uint2(1, 0);
 
@@ -101,9 +105,15 @@ void keccak256_gpu_hash_80(uint32_t threads, uint32_t startNonce, uint32_t *resN
 			keccak_round(s, c_keccak_rc[i]);
 
 		if (devectorize(keccak_final_lane3(s)) <= devectorize(highTarget)) {
-			const uint32_t tmp = atomicExch(&resNounce[0], nounce);
-			if (tmp != UINT32_MAX)
-				resNounce[1] = tmp;
+			/* Keep the two lowest nonces: slot 0 the minimum, slot 1 the runner-up.
+			 * The host resumes from max(slot0, slot1) + 1, so reporting the lowest
+			 * is what stops the cursor stepping over an unreported candidate. Both
+			 * slots must be atomic, and the winner must come from atomicMin's
+			 * return value rather than a re-read of slot 0. */
+			const uint32_t n    = (uint32_t) nounce;
+			const uint32_t prev = atomicMin(&resNounce[0], n);
+			if (prev != UINT32_MAX)
+				atomicMin(&resNounce[1], (prev > n) ? prev : n);
 		}
 	}
 }
