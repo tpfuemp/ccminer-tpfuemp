@@ -129,7 +129,7 @@ bool equi_stratum_notify(struct stratum_ctx *sctx, json_t *params)
 	clean = json_is_true(json_array_get(params, p)); p++;
 
 	// zpool / cpuminer-opt equihash extension: optional trailing "<n>_<k>" and
-	// 8-char personalization. When present these are AUTHORITATIVE — the solver
+	// 8-char personalization. When present these are AUTHORITATIVE -- the solver
 	// must hash with the personalization the pool validates against (e.g. a
 	// 144/5 pool advertising "ZcashPoW"). Absent -> keep the -a/env default.
 	{

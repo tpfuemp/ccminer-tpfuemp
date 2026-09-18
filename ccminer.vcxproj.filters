@@ -405,6 +405,9 @@
     <ClCompile Include="algos\equihash\equi.cpp">
       <Filter>Source Files\equihash</Filter>
     </ClCompile>
+    <ClCompile Include="algos\equihash\equi_verify_144.cpp">
+      <Filter>Source Files\equihash</Filter>
+    </ClCompile>
     <ClCompile Include="algos\equihash\equi_verify_192.cpp">
       <Filter>Source Files\equihash</Filter>
     </ClCompile>
@@ -798,7 +801,7 @@
     <ClInclude Include="algos\equihash\eqcuda.hpp">
       <Filter>Source Files\equihash</Filter>
     </ClInclude>
-    <ClInclude Include="algos\equihash\cuda_equi_tromp.h">
+    <ClInclude Include="algos\equihash\equi_pack.h">
       <Filter>Source Files\equihash</Filter>
     </ClInclude>
     <ClInclude Include="algos/heavyhash/heavyhash-gate.h" />
@@ -1351,13 +1354,10 @@
     <CudaCompile Include="algos\equihash\cuda_equi.cu">
       <Filter>Source Files\equihash</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\equihash\cuda_equi_tromp.cu">
+    <CudaCompile Include="algos\equihash\cuda_equi24b.cu">
       <Filter>Source Files\equihash</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\equihash\cuda_equi24.cu">
-      <Filter>Source Files\equihash</Filter>
-    </CudaCompile>
-    <CudaCompile Include="algos\equihash\cuda_equi24_192.cu">
+    <CudaCompile Include="algos\equihash\cuda_equi24b_192.cu">
       <Filter>Source Files\equihash</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\gost\cuda_gosthash.cu" />

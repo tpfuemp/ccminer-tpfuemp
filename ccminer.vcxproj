@@ -295,6 +295,7 @@
     </ClCompile>
     <ClCompile Include="algos\equihash\equi-stratum.cpp" />
     <ClCompile Include="algos\equihash\equi.cpp" />
+    <ClCompile Include="algos\equihash\equi_verify_144.cpp" />
     <ClCompile Include="algos\equihash\equi_verify_192.cpp" />
     <ClCompile Include="algos\equihash\equihash.cpp" />
     <ClCompile Include="algos\curvehash\curvehash_oracle.cpp" />
@@ -356,8 +357,9 @@
     <ClCompile Include="algos/heavyhash/heavyhash-gate.c" />
     <ClCompile Include="algos/heavyhash/keccak_tiny.c" />
     <ClInclude Include="algos\equihash\eqcuda.hpp" />
-    <ClInclude Include="algos\equihash\cuda_equi_tromp.h" />
-    <ClInclude Include="algos\equihash\cuda_equi24.h" />
+    <ClInclude Include="algos\equihash\cuda_equi24b.h" />
+    <ClInclude Include="algos\equihash\equi_verify.h" />
+    <ClInclude Include="algos\equihash\equi_pack.h" />
     <ClInclude Include="algos\neoscrypt\neoscrypt.h" />
     <ClCompile Include="algos\neoscrypt\neoscrypt.cpp" />
     <ClCompile Include="algos\neoscrypt\neoscrypt-cpu.c" />
@@ -619,15 +621,11 @@
       <AdditionalOptions> -Xptxas -dlcm=ca -Xptxas -dscm=cs %(AdditionalOptions)</AdditionalOptions>
       <MaxRegCount>0</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="algos\equihash\cuda_equi_tromp.cu">
-      <AdditionalOptions> -DWN=144 -DWK=5 -DRESTBITS=4 -Xptxas -dlcm=ca -Xptxas -dscm=cs %(AdditionalOptions)</AdditionalOptions>
-      <MaxRegCount>0</MaxRegCount>
-    </CudaCompile>
-    <CudaCompile Include="algos\equihash\cuda_equi24.cu">
+    <CudaCompile Include="algos\equihash\cuda_equi24b.cu">
       <AdditionalOptions> -DEQ_WN=144 -DEQ_WK=5 -Xptxas -dscm=cs %(AdditionalOptions)</AdditionalOptions>
       <MaxRegCount>0</MaxRegCount>
     </CudaCompile>
-    <CudaCompile Include="algos\equihash\cuda_equi24_192.cu">
+    <CudaCompile Include="algos\equihash\cuda_equi24b_192.cu">
       <AdditionalOptions> -DEQ_WN=192 -DEQ_WK=7 -Xptxas -dscm=cs %(AdditionalOptions)</AdditionalOptions>
       <MaxRegCount>0</MaxRegCount>
     </CudaCompile>

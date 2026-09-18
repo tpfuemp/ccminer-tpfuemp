@@ -22,8 +22,9 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  ccminer.cpp pools.cpp util.cpp bench.cpp bignum.cpp \
 			  api.cpp api_control.cpp api_control.h api_model.cpp api_model.h api_http.c api_http.h api_metrics.c api_metrics.h api_routes.cpp api_routes.h hashlog.cpp nvml.cpp stats.cpp sysinfos.cpp cuda.cpp \
 			  nvsettings.cpp \
-			  algos/equihash/equi-stratum.cpp algos/equihash/equi.cpp algos/equihash/equi_verify_192.cpp algos/equihash/blake2/blake2bx.cpp \
-			  algos/equihash/equihash.cpp algos/equihash/cuda_equi.cu algos/equihash/cuda_equi_tromp.cu \n			  algos/equihash/cuda_equi24.cu algos/equihash/cuda_equi24_192.cu \
+			  algos/equihash/equi-stratum.cpp algos/equihash/equi.cpp algos/equihash/equi_verify_144.cpp algos/equihash/equi_verify_192.cpp algos/equihash/blake2/blake2bx.cpp \
+			  algos/equihash/equihash.cpp algos/equihash/cuda_equi.cu \
+			  algos/equihash/cuda_equi24b.cu algos/equihash/cuda_equi24b_192.cu \
 			  algos/allium/allium.cu \
 			  algos/balloon/balloon.cpp algos/balloon/balloon_scan.cpp \
 			  algos/balloon/balloon_selftest.cpp \
@@ -217,19 +218,17 @@ ccminer_CPPFLAGS += $(TRIMPATH)
 .cu.o:
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=128 -o $@ -c $<
 
-# Tromp equihash solver: parameterised for 144/5 (WN=144 selects the
-# BUCKBITS=20/RESTBITS=4 code paths); no register cap, ptxas cache hints.
-algos/equihash/cuda_equi_tromp.o: algos/equihash/cuda_equi_tromp.cu
-	$(NVCC) $(nvcc_FLAGS) -DWN=144 -DWK=5 -DRESTBITS=4 -Xptxas -dlcm=ca -Xptxas -dscm=cs -o $@ -c $<
-
-# equi24: the DIGITBITS=24 solver, same variant selection as the tromp TU above
-# (WN=144 -> 144/5). Uncapped registers and the ptxas cache hints, matching how
-# the equihash TUs are built on the Windows side.
-algos/equihash/cuda_equi24.o: algos/equihash/cuda_equi24.cu
+# equi24b: the few-large-buckets heap for the same DIGITBITS=24 family. Same
+# variant selection as the TUs above and the same ptxas cache hints.
+algos/equihash/cuda_equi24b.o: algos/equihash/cuda_equi24b.cu algos/equihash/equi24b_params.h algos/equihash/cuda_equi24b.h
 	$(NVCC) $(nvcc_FLAGS) -DEQ_WN=144 -DEQ_WK=5 -Xptxas -dscm=cs -o $@ -c $<
 
-# the 192/7 instantiation: same source, different constants
-algos/equihash/cuda_equi24_192.o: algos/equihash/cuda_equi24_192.cu
+# the 192/7 instantiation. cuda_equi24b_192.cu is a wrapper whose only content
+# is `#include "cuda_equi24b.cu"`, so the real source AND its headers must be
+# prerequisites here: an explicit rule gets no automatic dependency scanning,
+# and without them an edit to cuda_equi24b.cu rebuilds the 144/5 object and
+# leaves this one STALE -- one binary, two variants running different code.
+algos/equihash/cuda_equi24b_192.o: algos/equihash/cuda_equi24b_192.cu algos/equihash/cuda_equi24b.cu algos/equihash/equi24b_params.h algos/equihash/cuda_equi24b.h
 	$(NVCC) $(nvcc_FLAGS) -DEQ_WN=192 -DEQ_WK=7 -Xptxas -dscm=cs -o $@ -c $<
 
 # HoohashV110 device TU: consensus-critical strict FP (must match the glibc oracle).

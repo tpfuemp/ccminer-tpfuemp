@@ -55,31 +55,27 @@ static uint8_t _ALIGN(64) data_sols[MAX_GPUS][MAXREALSOLS][1536] = { 0 }; // 140
 static eq_cuda_context_interface* solvers[MAX_GPUS] = { NULL };
 
 // --- equihash variant (n,k)+personalization dispatch ------------------------
-// The djeZo solver above is 200/9-only; the tromp144 solver (cuda_equi_tromp.cu)
-// handles 144/5. Default is Zcash 200/9 ("ZcashPoW"). The (n,k) variant is set
+// The djeZo solver above is 200/9-only; equi24b handles 144/5 and 192/7.
+// Default is Zcash 200/9 ("ZcashPoW"). The (n,k) variant is set
 // ONLY by the `-a` algo parameter (equihash / equihash144) -> eq_set_variant_144()
-// — it fixes the CUDA solver, so it never changes at runtime. The pool's
+// -- it fixes the CUDA solver, so it never changes at runtime. The pool's
 // mining.notify may then set the personalization (eq_set_variant_params: personal
 // only; its (n,k) is validate-only). Solution size + personalization are
 // parametrized via eq_solsize()/eq_personal.
-#include "cuda_equi_tromp.h"
-#include "cuda_equi24.h"
+#include "cuda_equi24b.h"
+#include "equi_verify.h"
+#include "equi_pack.h"    // eq_minimal_from_indices: indices -> submitted bytes
 static int   eq_wn = 200, eq_wk = 9;
 static char  eq_personal[16] = "ZcashPoW";
-static void* tromp_ctx[MAX_GPUS] = { NULL };
 
-// equi24: the DIGITBITS=24 solver (algos/equihash/cuda_equi24.cu). Measured
-// ~1.2x the tromp path on sm_86 and sm_61, and the only route to 192/7, but it
-// needs ~4.3 GiB of arena against tromp's ~2.5 GiB.
+
+// equi24b (cuda_equi24b.cu) is the only solver for the DIGITBITS=24 variants.
+// It retains every layer, so its arena is large and variant-dependent; a card
+// that cannot hold it cannot mine the variant.
 //
-// Selection is per-thread at init and logged, with tromp as the fallback when
-// the arena will not fit. `EQ_SOLVER=tromp` forces the old path -- keep that
-// working: it is the A/B lever and the escape hatch on a small card.
-//
-// Either way every solution is re-verified on the host before submit (by the
-// verifier matching the variant), so a solver defect costs a local reject
-// rather than a bad share.
-static void* equi24_ctx[MAX_GPUS] = { NULL };
+// Every solution is re-verified on the host before submit, so a solver defect
+// costs a local reject rather than a bad share.
+static void* equi24b_ctx[MAX_GPUS] = { NULL };
 
 // Throughput meter for the 144/5 path: scanhash only returns on a target hit, so
 // without this the rate is unobservable. sol/nonce (expect ~2) is reported too --
@@ -90,14 +86,14 @@ static uint32_t eq_m_bad[MAX_GPUS]    = { 0 };  // solutions that failed the hos
 static uint32_t eq_m_clamped[MAX_GPUS] = { 0 }; // solutions found but discarded by the MAXSOLS cap
 static time_t   eq_m_since[MAX_GPUS]  = { 0 };
 
-static inline int eq_cbitlen()   { return eq_wn / (eq_wk + 1); }               // 20 / 24
-static inline int eq_proofsize() { return 1 << eq_wk; }                        // 512 / 32
-static inline int eq_solsize()   { return eq_proofsize() * (eq_cbitlen() + 1) / 8; } // 1344 / 100
+static inline int eq_cbitlen()   { return eq_wn / (eq_wk + 1); }               // 200/9: 20, 144/5 + 192/7: 24
+static inline int eq_proofsize() { return 1 << eq_wk; }                        // 512 / 32 / 128
+static inline int eq_solsize()   { return eq_proofsize() * (eq_cbitlen() + 1) / 8; } // 1344 / 100 / 400
 
 // Bitcoin CompactSize prefix length for the solution byte count.
 static inline int eq_solprefix() { int s = eq_solsize(); return s < 253 ? 1 : (s <= 0xffff ? 3 : 5); }
 
-// Shared accessors for the stratum layer (equi-stratum.cpp) — the number of
+// Shared accessors for the stratum layer (equi-stratum.cpp) -- the number of
 // bytes stored in work->extra to hex-encode on submit: compactSize + solution
 // (1347 for 200/9, 101 for 144/5).
 extern "C" int eq_variant_storelen() { return eq_solprefix() + eq_solsize(); }
@@ -114,7 +110,7 @@ extern "C" void eq_set_variant_144()
 
 // Select the 192/7 (ZeroClassic-class) variant explicitly (from the -a alias).
 // Same solver as 144/5 -- both are DIGITBITS=24 -- differing only in the round
-// count and PROOFSIZE, which are compile-time in the equi24 TU pair.
+// count and PROOFSIZE, which are compile-time in the solver TU pair.
 extern "C" void eq_set_variant_192()
 {
 	eq_wn = 192; eq_wk = 7;
@@ -126,12 +122,12 @@ extern "C" void eq_set_variant_192()
 // Apply the equihash params the POOL advertises in mining.notify (zpool /
 // cpuminer-opt convention: trailing "<n>_<k>" and 8-char personalization).
 //
-// (n,k) is FIXED by the -a algo parameter — it defines the CUDA solver/kernel,
+// (n,k) is FIXED by the -a algo parameter -- it defines the CUDA solver/kernel,
 // so we never switch it at runtime (that would force a kernel unload/reload on a
 // job change). The pool-advertised (n,k) is therefore validation-only: warn on
 // mismatch (miner pointed at the wrong-variant pool) and ignore it. Only the
 // personalization (a runtime BLAKE2b param, no kernel impact) is adopted from
-// the pool — this is what lets a 144/5 pool select e.g. "ZcashPoW". Logs only on
+// the pool -- this is what lets a 144/5 pool select e.g. "ZcashPoW". Logs only on
 // change to avoid per-notify spam.
 extern "C" void eq_set_variant_params(int wn, int wk, const char* personal)
 {
@@ -139,7 +135,7 @@ extern "C" void eq_set_variant_params(int wn, int wk, const char* personal)
 		static bool warned = false;
 		if (!warned) {
 			applog(LOG_WARNING, "pool advertises equihash %d/%d but miner is %d/%d "
-			       "(fixed by -a); ignoring pool (n,k) — use the matching -a algo",
+			       "(fixed by -a); ignoring pool (n,k) -- use the matching -a algo",
 			       wn, wk, eq_wn, eq_wk);
 			warned = true;
 		}
@@ -155,75 +151,13 @@ extern "C" void eq_set_variant_params(int wn, int wk, const char* personal)
 	}
 }
 
-static void CompressArray(const unsigned char* in, size_t in_len,
-	unsigned char* out, size_t out_len, size_t bit_len, size_t byte_pad)
-{
-	assert(bit_len >= 8);
-	assert(8 * sizeof(uint32_t) >= 7 + bit_len);
-
-	size_t in_width = (bit_len + 7) / 8 + byte_pad;
-	assert(out_len == bit_len*in_len / (8 * in_width));
-
-	uint32_t bit_len_mask = (1UL << bit_len) - 1;
-
-	// The acc_bits least-significant bits of acc_value represent a bit sequence
-	// in big-endian order.
-	size_t acc_bits = 0;
-	uint32_t acc_value = 0;
-
-	size_t j = 0;
-	for (size_t i = 0; i < out_len; i++) {
-		// When we have fewer than 8 bits left in the accumulator, read the next
-		// input element.
-		if (acc_bits < 8) {
-			acc_value = acc_value << bit_len;
-			for (size_t x = byte_pad; x < in_width; x++) {
-				acc_value = acc_value | (
-					(
-					// Apply bit_len_mask across byte boundaries
-					in[j + x] & ((bit_len_mask >> (8 * (in_width - x - 1))) & 0xFF)
-					) << (8 * (in_width - x - 1))); // Big-endian
-			}
-			j += in_width;
-			acc_bits += bit_len;
-		}
-
-		acc_bits -= 8;
-		out[i] = (acc_value >> acc_bits) & 0xFF;
-	}
-}
-
-#ifndef htobe32
-#define htobe32(x) swab32(x)
-#endif
-
-static void EhIndexToArray(const u32 i, unsigned char* arr)
-{
-	u32 bei = htobe32(i);
-	memcpy(arr, &bei, sizeof(u32));
-}
-
-static std::vector<unsigned char> GetMinimalFromIndices(std::vector<u32> indices, size_t cBitLen)
-{
-	assert(((cBitLen + 1) + 7) / 8 <= sizeof(u32));
-	size_t lenIndices = indices.size()*sizeof(u32);
-	size_t minLen = (cBitLen + 1)*lenIndices / (8 * sizeof(u32));
-	size_t bytePad = sizeof(u32) - ((cBitLen + 1) + 7) / 8;
-	std::vector<unsigned char> array(lenIndices);
-	for (size_t i = 0; i < indices.size(); i++) {
-		EhIndexToArray(indices[i], array.data() + (i*sizeof(u32)));
-	}
-	std::vector<unsigned char> ret(minLen);
-	CompressArray(array.data(), lenIndices, ret.data(), minLen, cBitLen + 1, bytePad);
-	return ret;
-}
 
 // solver callbacks
 static void cb_solution(int thr_id, const std::vector<uint32_t>& solutions, size_t cbitlen, const unsigned char *compressed_sol)
 {
 	std::vector<unsigned char> nSolution;
 	if (!compressed_sol) {
-		nSolution = GetMinimalFromIndices(solutions, cbitlen);
+		nSolution = eq_minimal_from_indices(solutions, cbitlen);
 	} else {
 		gpulog(LOG_INFO, thr_id, "compressed_sol");
 		nSolution = std::vector<unsigned char>(1344);
@@ -249,7 +183,7 @@ static bool cb_cancel(int thr_id) {
 }
 
 // --- DIGITBITS=24 scan path (144/5 and 192/7) -------------------------------
-// FOR TECHNICAL STUDY ONLY: tromp's reference solver — correct + live-validated,
+// FOR TECHNICAL STUDY ONLY: tromp's reference solver -- correct + live-validated,
 // but not performance-optimized and not comparable to dedicated Equihash miners.
 // Sized for the LARGEST proof in the family: 2^7 = 128 indices for 192/7,
 // against 32 for 144/5. The emit callback takes the size from the solver rather
@@ -279,45 +213,27 @@ static int scanhash_equihash_dig24(int thr_id, struct work *work, uint32_t max_n
 	double secs;
 	uint32_t soluce_count = 0;
 	const int cbl   = eq_cbitlen();  // 24
-	const int solsz = eq_solsize();  // 100
+	const int solsz = eq_solsize();  // 100 (144/5) or 400 (192/7)
 
 	if (opt_benchmark)
 		ptarget[7] = 0xfffff;
 
 	if (!init[thr_id]) {
-		const char *force = getenv("EQ_SOLVER");
-		const bool want24 = !(force && !strcasecmp(force, "tromp"));
-
-		const size_t need = (eq_wk == 7) ? equi24_192_arena_needed() : equi24_144_arena_needed();
-		if (want24) {
-			equi24_ctx[thr_id] = (eq_wk == 7) ? equi24_192_init() : equi24_144_init();
-			if (equi24_ctx[thr_id])
-				gpulog(LOG_INFO, thr_id, "equihash%d/%d: equi24 solver (%.2f GiB arena)",
-				       eq_wn, eq_wk, (double)need / (1 << 30));
-			else
-				gpulog(LOG_WARNING, thr_id, "equi24 needs %.2f GiB and could not allocate it "
-				       "-- falling back to the tromp solver", (double)need / (1 << 30));
-		} else {
-			gpulog(LOG_INFO, thr_id, "equihash%d/%d: tromp solver (EQ_SOLVER=tromp)", eq_wn, eq_wk);
-		}
-
-		// tromp is 144/5-only here: its TU is compiled -DWN=144. There is no
-		// fallback for 192/7, so say so rather than silently mining nothing.
-		if (!equi24_ctx[thr_id] && eq_wk != 5) {
-			gpulog(LOG_ERR, thr_id, "equihash%d/%d needs the equi24 solver and it could not "
-			       "start; the tromp fallback is 144/5 only", eq_wn, eq_wk);
+		// equi24b is the only solver for the DIGITBITS=24 variants. The older
+		// There is no fallback solver: if the arena will not fit, this card
+		// cannot mine the variant, and saying so beats mining nothing quietly.
+		const size_t need = (eq_wk == 7) ? equi24b_192_arena_needed()
+		                                 : equi24b_144_arena_needed();
+		equi24b_ctx[thr_id] = (eq_wk == 7) ? equi24b_192_init() : equi24b_144_init();
+		if (!equi24b_ctx[thr_id]) {
+			gpulog(LOG_ERR, thr_id, "equihash%d/%d needs a %.2f GiB arena and it could "
+			       "not be allocated", eq_wn, eq_wk, (double)need / (1 << 30));
 			proper_exit(EXIT_CODE_CUDA_ERROR);
 			return -1;
 		}
+		gpulog(LOG_INFO, thr_id, "equihash%d/%d: equi24b solver (%.2f GiB arena)",
+		       eq_wn, eq_wk, (double)need / (1 << 30));
 
-		if (!equi24_ctx[thr_id]) {
-			tromp_ctx[thr_id] = tromp144_init(8192, 0);
-			if (!tromp_ctx[thr_id]) {
-				gpulog(LOG_ERR, thr_id, "tromp144_init failed");
-				proper_exit(EXIT_CODE_CUDA_ERROR);
-				return -1;
-			}
-		}
 		gpus_intensity[thr_id] = 8192;
 		api_set_throughput(thr_id, gpus_intensity[thr_id]);
 		cuda_get_arch(thr_id);
@@ -331,30 +247,42 @@ static int scanhash_equihash_dig24(int thr_id, struct work *work, uint32_t max_n
 	do {
 		tromp_ns[thr_id] = 0;
 		int nsol;
-		if (equi24_ctx[thr_id])
-			nsol = (eq_wk == 7)
-				? equi24_192_solve(equi24_ctx[thr_id], (const char*) endiandata,
-				                   eq_personal, tromp_emit, &thr_id)
-				: equi24_144_solve(equi24_ctx[thr_id], (const char*) endiandata,
-				                   eq_personal, tromp_emit, &thr_id);
-		else
-			nsol = tromp144_solve(tromp_ctx[thr_id], (const char*) endiandata,
-			                      eq_personal, tromp_emit, &thr_id);
+		nsol = (eq_wk == 7)
+			? equi24b_192_solve(equi24b_ctx[thr_id], (const char*) endiandata,
+			                    eq_personal, tromp_emit, &thr_id)
+			: equi24b_144_solve(equi24b_ctx[thr_id], (const char*) endiandata,
+			                    eq_personal, tromp_emit, &thr_id);
 		soluce_count += (nsol > 0 ? nsol : 0);
 		eq_m_sols[thr_id] += (uint32_t) (nsol > 0 ? nsol : 0); // every solver solution, not just submitted ones
 		*hashes_done = soluce_count;
 
-		// The device buffer holds MAXSOLS solutions; anything past that was
-		// counted and thrown away. Wagner gives ~2 per instance against a cap
-		// of 10, so this should never fire -- report it rather than assume it,
-		// since it depresses sol/nonce the same way an overfull bucket does.
-		if (tromp_ctx[thr_id]) {
-			const unsigned clamped = tromp144_sols_dropped(tromp_ctx[thr_id]);
-			if (clamped) {
-				eq_m_clamped[thr_id] += clamped;
-				gpulog(LOG_WARNING, thr_id, "solution buffer overflow: %u solution(s) discarded "
-				       "this solve, %u total -- raise MAXSOLS", clamped, eq_m_clamped[thr_id]);
-			}
+		// The device buffer holds a bounded number of candidates; anything past
+		// that was counted and thrown away, in arrival order, so the discard is
+		// indiscriminate -- a real solution goes as readily as a trivial one.
+		// It depresses sol/nonce the same way an overfull bucket does and has no
+		// other symptom, so report it rather than assume it cannot happen.
+		//
+		// Sizing this cap to the expected solution count instead of the
+		// candidate count loses real solutions with every other gate green.
+		unsigned clamped = 0;
+		{
+			unsigned dr[4];
+			if (eq_wk == 7) equi24b_192_drops(equi24b_ctx[thr_id], dr);
+			else            equi24b_144_drops(equi24b_ctx[thr_id], dr);
+			clamped = dr[3];
+			// dr[0..2] are the heap counters. A degenerate input can drive one
+			// destination bucket far past capacity and yield NOTHING, with these
+			// as the only symptom, so report them rather than assume they cannot
+			// fire.
+			if (dr[0] || dr[1] || dr[2])
+				gpulog(LOG_WARNING, thr_id, "equi24b heap overflow: scatter %u, "
+				       "round staging %u, final staging %u -- solutions are being LOST",
+				       dr[0], dr[1], dr[2]);
+		}
+		if (clamped) {
+			eq_m_clamped[thr_id] += clamped;
+			gpulog(LOG_WARNING, thr_id, "solution buffer overflow: %u candidate(s) discarded "
+			       "this solve, %u total -- solutions are being LOST", clamped, eq_m_clamped[thr_id]);
 		}
 
 		if (tromp_ns[thr_id] > 0) {
@@ -365,7 +293,7 @@ static int scanhash_equihash_dig24(int thr_id, struct work *work, uint32_t max_n
 
 			for (int s = 0; s < tromp_ns[thr_id]; s++) {
 				std::vector<u32> idx(tromp_idx[thr_id][s], tromp_idx[thr_id][s] + eq_proofsize());
-				std::vector<unsigned char> minimal = GetMinimalFromIndices(idx, cbl); // 100 bytes
+				std::vector<unsigned char> minimal = eq_minimal_from_indices(idx, cbl); // solsz bytes
 
 				memcpy(full_data, endiandata, 140);
 				// compactSize: one byte below 253, else 0xfd + u16 LE. 144/5's
@@ -383,15 +311,15 @@ static int scanhash_equihash_dig24(int thr_id, struct work *work, uint32_t max_n
 				equi_hash(full_data, vhash, 140 + pfx + solsz);
 
 				if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
-					// The re-verify MUST match the variant: tromp144_verify is
-					// compiled -DWN=144, so on a 192/7 proof it would read 32
-					// of 128 indices under the wrong parameters and reject
-					// every solution.
+					// The re-verify MUST match the variant: the 144/5 verifier
+					// on a 192/7 proof would read 32 of 128 indices under the
+					// wrong parameters and reject every solution. This is the
+					// only independent check on the solver.
 					int rc = (eq_wk == 7)
-						? equi24_192_verify((const char*) endiandata, eq_personal,
-						                    tromp_idx[thr_id][s])
-						: tromp144_verify((const char*) endiandata, eq_personal,
-						                  tromp_idx[thr_id][s]);
+						? eq_verify_192((const char*) endiandata, eq_personal,
+						                tromp_idx[thr_id][s])
+						: eq_verify_144((const char*) endiandata, eq_personal,
+						                tromp_idx[thr_id][s]);
 					if (rc != 0) {
 						// never drop silently: the only signal of a wrong GPU hash
 						eq_m_bad[thr_id]++;
@@ -469,16 +397,6 @@ extern "C" int scanhash_equihash(int thr_id, struct work *work, uint32_t max_non
 			case 1:
 				solvers[thr_id] = new eq_cuda_context<CONFIG_MODE_1>(thr_id, device_map[thr_id]);
 				break;
-#ifdef CONFIG_MODE_2
-			case 2:
-				solvers[thr_id] = new eq_cuda_context<CONFIG_MODE_2>(thr_id, device_map[thr_id]);
-				break;
-#endif
-#ifdef CONFIG_MODE_3
-			case 3:
-				solvers[thr_id] = new eq_cuda_context<CONFIG_MODE_3>(thr_id, device_map[thr_id]);
-				break;
-#endif
 			default:
 				proper_exit(EXIT_CODE_SW_INIT_ERROR);
 				return -1;
@@ -592,9 +510,10 @@ void free_equihash(int thr_id)
 	if (!init[thr_id])
 		return;
 
-	if (tromp_ctx[thr_id]) {              // 144/5 (tromp) path
-		tromp144_free(tromp_ctx[thr_id]);
-		tromp_ctx[thr_id] = NULL;
+	if (equi24b_ctx[thr_id]) {            // 144/5 + 192/7 (equi24b) path
+		if (eq_wk == 7) equi24b_192_free(equi24b_ctx[thr_id]);
+		else            equi24b_144_free(equi24b_ctx[thr_id]);
+		equi24b_ctx[thr_id] = NULL;
 	} else if (solvers[thr_id]) {         // 200/9 (djeZo) path
 		// assume config 1 was used... interface destructor seems bad
 		eq_cuda_context<CONFIG_MODE_1>* ptr = dynamic_cast<eq_cuda_context<CONFIG_MODE_1>*>(solvers[thr_id]);
