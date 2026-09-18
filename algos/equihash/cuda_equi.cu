@@ -1950,6 +1950,7 @@ __host__ eq_cuda_context<RB, SM, SSM, THREADS, PACKER>::eq_cuda_context(int thr_
 	thread_id = thr_id;
 	device_id = dev_id;
 	solutions = nullptr;
+	sols_overflow = 0;
 	equi_mem_sz = sizeof(equi<RB, SM>);
 	throughput = NBLOCKS;
 	totalblocks = NBLOCKS/FD_THREADS;
@@ -2057,9 +2058,13 @@ __host__ void eq_cuda_context<RB, SM, SSM, THREADS, PACKER>::solve(const char *t
 
 	checkCudaErrors(cudaMemcpy(solutions, &device_eq->edata.srealcont, (MAXREALSOLS * (512 * 4)) + 4, cudaMemcpyDeviceToHost));
 
-	//printf("T%d nsols: %u\n", thread_id, solutions->nsols);
-	//if (solutions->nsols > 9)
-	//	printf("missing sol, total: %u\n", solutions->nsols);
+	// The donor shipped this detector COMMENTED OUT (its own words: "missing
+	// sol"). nsols counts every solution the device found; only the first
+	// MAXREALSOLS are stored, so the surplus is lost share value that nothing
+	// reported. Wagner gives ~2 solutions per instance against a cap of 9, so
+	// it should never fire -- which is the reason to report it rather than
+	// assume it. Logged by the caller: this TU has no miner logging.
+	sols_overflow = solutions->nsols > MAXREALSOLS ? solutions->nsols - MAXREALSOLS : 0;
 
 	for (u32 s = 0; (s < solutions->nsols) && (s < MAXREALSOLS); s++)
 	{

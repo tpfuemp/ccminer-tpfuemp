@@ -981,6 +981,7 @@ int equi_verify_sol(void * const hdr, void * const sol);
 int eq_variant_storelen(void); // bytes in work->extra to submit (compactSize+solution)
 int eq_variant_wk(void);       // active equihash k (9 for 200/9, 5 for 144/5)
 void eq_set_variant_144(void); // select 144/5 (BitcoinZ) variant (from -a alias)
+void eq_set_variant_192(void); // select 192/7 variant (from -a alias)
 void eq_set_variant_params(int wn, int wk, const char* personal); // pool notify: adopt personal; (n,k) validate-only (fixed by -a)
 bool yespower_set_variant(const char* name); // select a coin variant's N/r/pers (from -a alias or pool "algo"); false = no such variant
 void yespower_clear_variant(void);           // back to --yespower-param/-key

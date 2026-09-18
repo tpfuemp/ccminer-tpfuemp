@@ -107,6 +107,10 @@ public:
 	int threadsperblock;
 	int threadsperblock_digits;
 	size_t equi_mem_sz;
+	// Solutions the last solve() found and discarded because only MAXREALSOLS
+	// fit in the readback buffer. Surfaced here rather than logged in the CUDA
+	// TU, which has no access to the miner's logging. Read it after solve().
+	u32 sols_overflow;
 };
 
 // ---------------------------------------------------------------------------------------------------

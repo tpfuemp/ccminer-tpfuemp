@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup>
     <Filter Include="Source Files">
@@ -403,6 +403,9 @@
       <Filter>Source Files\cryptonight\bbr</Filter>
     </ClCompile>
     <ClCompile Include="algos\equihash\equi.cpp">
+      <Filter>Source Files\equihash</Filter>
+    </ClCompile>
+    <ClCompile Include="algos\equihash\equi_verify_192.cpp">
       <Filter>Source Files\equihash</Filter>
     </ClCompile>
     <ClCompile Include="algos\equihash\equihash.cpp">
@@ -1349,6 +1352,12 @@
       <Filter>Source Files\equihash</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\equihash\cuda_equi_tromp.cu">
+      <Filter>Source Files\equihash</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\equihash\cuda_equi24.cu">
+      <Filter>Source Files\equihash</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\equihash\cuda_equi24_192.cu">
       <Filter>Source Files\equihash</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\gost\cuda_gosthash.cu" />

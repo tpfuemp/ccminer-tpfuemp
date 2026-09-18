@@ -3804,6 +3804,9 @@ void parse_arg(int key, char *arg)
 		if (opt_algo == ALGO_EQUIHASH &&
 		    (!strcasecmp("equihash144", arg) || !strcasecmp("equihash144_5", arg)))
 			eq_set_variant_144();
+		if (opt_algo == ALGO_EQUIHASH &&
+		    (!strcasecmp("equihash192", arg) || !strcasecmp("equihash192_7", arg)))
+			eq_set_variant_192();
 
 		// Same shape as equihash above: the yespower coin variants share one algo
 		// and differ only in (N, r, pers), which the alias name selects. A later

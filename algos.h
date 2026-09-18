@@ -318,6 +318,8 @@ static inline int algo_to_int(char* arg)
 			i = ALGO_EQUIHASH;
 		else if (!strcasecmp("equihash144", arg) || !strcasecmp("equihash144_5", arg))
 			i = ALGO_EQUIHASH; // 144/5 variant; the (n,k)+personalization is set in parse_arg 'a'
+		else if (!strcasecmp("equihash192", arg) || !strcasecmp("equihash192_7", arg))
+			i = ALGO_EQUIHASH; // 192/7 variant; (n,k)+personalization set in parse_arg 'a'
 		else if (!strcasecmp("doom", arg))
 			i = ALGO_LUFFA;
 		else if (!strcasecmp("hmq17", arg))

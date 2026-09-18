@@ -25,6 +25,14 @@ void *tromp144_init(unsigned nthreads, unsigned tpb);
 int tromp144_solve(void *ctx, const char *headernonce, const char *personal,
                    tromp144_emit_fn emit, void *ud);
 
+// Solutions the last tromp144_solve() found and then threw away because the
+// device-side buffer holds only MAXSOLS of them. Normally 0: Wagner gives ~2
+// solutions per instance against a cap of 10. A non-zero value is real lost
+// share value, and it is NOT the same thing as the solver's by-design discard
+// of colliding pairs on bucket overflow -- that one happens earlier, and the
+// two are indistinguishable from the solution rate alone.
+unsigned tromp144_sols_dropped(void *ctx);
+
 // Free a context created by tromp144_init.
 void tromp144_free(void *ctx);
 

@@ -52,9 +52,59 @@ struct solver_ctx {
 	u32   *heap0, *heap1;
 	proof *sols;       // host readback buffer
 	u32    nthreads, tpb;
+	// Solutions the device found and the MAXSOLS cap threw away on the last
+	// solve. `nsols` counts every candidate; only the first MAXSOLS are stored,
+	// so the surplus is lost share value and nothing used to report it.
+	u32    sols_dropped;
+#ifdef EQ_DIAG
+	u32   *diag_ns;    // NBUCKETS host buffer for the per-round fill readback
+#endif
 	solver_ctx(u32 n) : heq(n), device_eq(0), heap0(0), heap1(0), sols(0),
-	                    nthreads(n), tpb(0) {}
+	                    nthreads(n), tpb(0), sols_dropped(0)
+#ifdef EQ_DIAG
+	                    , diag_ns(0)
+#endif
+	                    {}
 };
+
+#ifdef EQ_DIAG
+// Per-round bucket-fill / discard census. Diagnostic build only: it inserts a
+// blocking 4 MB D2H copy between kernel launches, so it must not ship enabled.
+//
+// No kernel-side drop counter is needed, deliberately. Every scatter does
+//   xorslot = atomicAdd(&nslots[..][bucket], 1);  if (xorslot >= NSLOTS) continue;
+// so the counter already records ATTEMPTS, not stores, and the discarded pairs
+// are exactly sum(max(0, ns[b] - NSLOTS)). In-kernel counters would add an
+// atomic to the drop path of kernels whose limiter is LSU issue rate.
+//
+// MUST be called after the producing kernel and BEFORE the consuming one:
+// eq_take() zeroes each counter as it reads it.
+static void diag_round(solver_ctx *c, u32 r) {
+	if (!c->diag_ns)
+		c->diag_ns = (u32 *)malloc(NBUCKETS * sizeof(u32));
+	if (!c->diag_ns)
+		return;
+	checkCudaErrors(cudaMemcpy(c->diag_ns, c->heq.nslots[r & 1],
+	                           NBUCKETS * sizeof(u32), cudaMemcpyDeviceToHost));
+	unsigned long long attempts = 0, stored = 0;
+	u32 overfull = 0, maxfill = 0;
+	for (u32 b = 0; b < NBUCKETS; b++) {
+		const u32 n = c->diag_ns[b];
+		attempts += n;
+		stored   += n < NSLOTS ? n : NSLOTS;
+		if (n > NSLOTS) overfull++;
+		if (n > maxfill) maxfill = n;
+	}
+	const unsigned long long dropped = attempts - stored;
+	printf("eq-diag r%u: attempts %llu, stored %llu, DROPPED %llu (%.3f%%), "
+	       "buckets overfull %u/%u (%.3f%%), max fill %u of %u, mean %.2f\n",
+	       r, attempts, stored, dropped,
+	       attempts ? 100.0 * (double)dropped / (double)attempts : 0.0,
+	       overfull, NBUCKETS, 100.0 * (double)overfull / (double)NBUCKETS,
+	       maxfill, NSLOTS, (double)attempts / (double)NBUCKETS);
+	c->heq.showbsizes(r);   // histogram, if HIST/SPARK/LOGSPARK is also defined
+}
+#endif
 
 static solver_ctx *ctx_init(u32 nthreads, u32 tpb) {
 	if (!tpb) // default threads-per-block to roughly sqrt(nthreads)
@@ -92,6 +142,9 @@ static int ctx_solve(solver_ctx *c, const char *headernonce, const char *persona
 	// digitH uses a grid-stride loop, so its grid can exceed eq->nthreads;
 	// at nt/tpb=64 blocks the GPU runs ~19% occupied (profiled 2026-07-02).
 	digitH<<<8 * (nt/tpb), tpb>>>(c->device_eq, c->heq.hta, c->heq.nslots);
+#ifdef EQ_DIAG
+	diag_round(c, 0);
+#endif
 #if WN == 144 && WK == 5 && BUCKBITS == 20 && RESTBITS == 4 && !defined(XINTREE)
 	// warp-per-bucket collision kernels (see equi_miner_tromp.cuh): one warp
 	// stages one bucket coalesced and processes its pairs in parallel via
@@ -99,9 +152,21 @@ static int ctx_solve(solver_ctx *c, const char *headernonce, const char *persona
 	// 512 warps = 512 buckets in flight (~0.7MB staged, fits L2 easily).
 	// digitOT/ET kept above as reference.
 	digitWB<1><<<128, EQ_WB_TPB>>>(c->heq.hta, c->heq.nslots);
+#ifdef EQ_DIAG
+	diag_round(c, 1);
+#endif
 	digitWB<2><<<128, EQ_WB_TPB>>>(c->heq.hta, c->heq.nslots);
+#ifdef EQ_DIAG
+	diag_round(c, 2);
+#endif
 	digitWB<3><<<128, EQ_WB_TPB>>>(c->heq.hta, c->heq.nslots);
+#ifdef EQ_DIAG
+	diag_round(c, 3);
+#endif
 	digitWB<4><<<128, EQ_WB_TPB>>>(c->heq.hta, c->heq.nslots);
+#ifdef EQ_DIAG
+	diag_round(c, 4);
+#endif
 #else
 	for (u32 r = 1; r < WK; r++)
 		r & 1 ? digitO<<<nt/tpb, tpb>>>(c->device_eq, r)
@@ -111,6 +176,9 @@ static int ctx_solve(solver_ctx *c, const char *headernonce, const char *persona
 
 	checkCudaErrors(cudaMemcpy(&c->heq, c->device_eq, sizeof(equi), cudaMemcpyDeviceToHost));
 	const u32 maxsols = c->heq.nsols < MAXSOLS ? c->heq.nsols : MAXSOLS;
+	// nsols counts every candidate the device produced; sols[] holds the first
+	// MAXSOLS. Record the surplus rather than discarding it silently.
+	c->sols_dropped = c->heq.nsols > MAXSOLS ? c->heq.nsols - MAXSOLS : 0;
 	checkCudaErrors(cudaMemcpy(c->sols, c->heq.sols, maxsols * sizeof(proof),
 	                           cudaMemcpyDeviceToHost));
 
@@ -132,6 +200,9 @@ static void ctx_free(solver_ctx *c) {
 	if (c->heap0)      cudaFree(c->heap0);
 	if (c->heap1)      cudaFree(c->heap1);
 	if (c->sols)       free(c->sols);
+#ifdef EQ_DIAG
+	if (c->diag_ns)    free(c->diag_ns);
+#endif
 	delete c;
 }
 
@@ -147,6 +218,10 @@ extern "C" int tromp144_solve(void *ctx, const char *headernonce, const char *pe
 	if (!ctx)
 		return -1;
 	return tromp144::ctx_solve((tromp144::solver_ctx *)ctx, headernonce, personal, emit, ud);
+}
+
+extern "C" unsigned tromp144_sols_dropped(void *ctx) {
+	return ctx ? ((tromp144::solver_ctx *)ctx)->sols_dropped : 0;
 }
 
 extern "C" void tromp144_free(void *ctx) {

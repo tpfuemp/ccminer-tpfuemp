@@ -22,8 +22,8 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  ccminer.cpp pools.cpp util.cpp bench.cpp bignum.cpp \
 			  api.cpp api_control.cpp api_control.h api_model.cpp api_model.h api_http.c api_http.h api_metrics.c api_metrics.h api_routes.cpp api_routes.h hashlog.cpp nvml.cpp stats.cpp sysinfos.cpp cuda.cpp \
 			  nvsettings.cpp \
-			  algos/equihash/equi-stratum.cpp algos/equihash/equi.cpp algos/equihash/blake2/blake2bx.cpp \
-			  algos/equihash/equihash.cpp algos/equihash/cuda_equi.cu algos/equihash/cuda_equi_tromp.cu \
+			  algos/equihash/equi-stratum.cpp algos/equihash/equi.cpp algos/equihash/equi_verify_192.cpp algos/equihash/blake2/blake2bx.cpp \
+			  algos/equihash/equihash.cpp algos/equihash/cuda_equi.cu algos/equihash/cuda_equi_tromp.cu \n			  algos/equihash/cuda_equi24.cu algos/equihash/cuda_equi24_192.cu \
 			  algos/allium/allium.cu \
 			  algos/balloon/balloon.cpp algos/balloon/balloon_scan.cpp \
 			  algos/balloon/balloon_selftest.cpp \
@@ -221,6 +221,16 @@ ccminer_CPPFLAGS += $(TRIMPATH)
 # BUCKBITS=20/RESTBITS=4 code paths); no register cap, ptxas cache hints.
 algos/equihash/cuda_equi_tromp.o: algos/equihash/cuda_equi_tromp.cu
 	$(NVCC) $(nvcc_FLAGS) -DWN=144 -DWK=5 -DRESTBITS=4 -Xptxas -dlcm=ca -Xptxas -dscm=cs -o $@ -c $<
+
+# equi24: the DIGITBITS=24 solver, same variant selection as the tromp TU above
+# (WN=144 -> 144/5). Uncapped registers and the ptxas cache hints, matching how
+# the equihash TUs are built on the Windows side.
+algos/equihash/cuda_equi24.o: algos/equihash/cuda_equi24.cu
+	$(NVCC) $(nvcc_FLAGS) -DEQ_WN=144 -DEQ_WK=5 -Xptxas -dscm=cs -o $@ -c $<
+
+# the 192/7 instantiation: same source, different constants
+algos/equihash/cuda_equi24_192.o: algos/equihash/cuda_equi24_192.cu
+	$(NVCC) $(nvcc_FLAGS) -DEQ_WN=192 -DEQ_WK=7 -Xptxas -dscm=cs -o $@ -c $<
 
 # HoohashV110 device TU: consensus-critical strict FP (must match the glibc oracle).
 # No fast-math; disable FMA contraction; precise div/sqrt; no flush-to-zero.
