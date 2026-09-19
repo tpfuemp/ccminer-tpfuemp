@@ -12,6 +12,10 @@
  * precompute) stays in the consuming kernels: it reads per-algo __constant__
  * symbols, and routing those through a pointer parameter would demote the
  * ld.const accesses. Keep those blocks textually in sync across consumers.
+ *
+ * Reach goes well past the keccak algos: three of the direct includers are
+ * shared stages pulled in across the x-family. Re-benchmark and re-KAT an
+ * x-family algo after any change here, not just keccak256/sha3t/sha3d.
  */
 
 #ifndef CUDA_KECCAK_DEVICE_CUH

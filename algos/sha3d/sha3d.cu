@@ -106,7 +106,9 @@ extern "C" int scanhash_sha3d(int thr_id, struct work* work, uint32_t max_nonce,
 				}
 				return work->valid_nonces;
 			}
-			else if (vhash[7] > Htarg) {
+			/* also the screen-passes/fulltest-fails case: without this it is
+			 * neither accepted nor rejected, and the buffer is left un-armed */
+			else {
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
 					gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);

@@ -22,6 +22,14 @@
 #include "cuda/sha512_device.cuh"
 
 #define TPB 256
+/* min blocks/SM: 4 x 256 = 1024 threads, the occupancy this kernel already had
+ * on every target. Naming it is the point - left unspecified ptxas stops short
+ * of the register budget and schedules conservatively. Do not lower it: at 1 it
+ * takes 145 registers on sm_75/sm_86 and occupancy collapses. */
+#ifndef SHA512_MINB
+#define SHA512_MINB 4
+#endif
+#define SHA512_BOUNDS __launch_bounds__(TPB, SHA512_MINB)
 
 /* c_header[0..8] = 64-bit big-endian message words w0..w8 of the header
  * (built host-side from the 32-bit work->data words); c_header[9] = w9 with
@@ -104,7 +112,7 @@ static uint64_t sha512256d_share_q3(const uint32_t nonce)
 	return cuda_swab64(st[3]);
 }
 
-__global__ __launch_bounds__(TPB)
+__global__ SHA512_BOUNDS
 void sha512256d_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint32_t *result, const uint64_t targ_q3)
 {
 	const uint32_t thread = blockDim.x * blockIdx.x + threadIdx.x;
@@ -114,9 +122,12 @@ void sha512256d_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint
 
 		if (sha512256d_share_q3(nonce) <= targ_q3)
 		{
-			uint32_t tmp = atomicCAS(result, UINT32_MAX, nonce);
-			if (tmp != UINT32_MAX)
-				result[1] = nonce;
+			/* Keep the two LOWEST nonces: the host resumes from max(slot0,slot1)+1,
+			 * so anything higher steps over an unreported candidate. Both slots
+			 * atomic; the loser comes from atomicMin's return, not a re-read. */
+			const uint32_t prev = atomicMin(&result[0], nonce);
+			if (prev != UINT32_MAX)
+				atomicMin(&result[1], (prev > nonce) ? prev : nonce);
 		}
 	}
 }
@@ -125,7 +136,7 @@ void sha512256d_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint
  * instead of screening it. acc[0] catches a wrong, missing or duplicated digest;
  * acc[1] weights by 2*nonce+1, so a permutation cannot cancel out (the weight
 * must be injective and odd; nonce|1 is not injective). */
-__global__ __launch_bounds__(TPB)
+__global__ SHA512_BOUNDS
 void sha512256d_gpu_checksum(const uint32_t threads, const uint32_t startNonce, uint64_t *acc)
 {
 	const uint32_t thread = blockDim.x * blockIdx.x + threadIdx.x;

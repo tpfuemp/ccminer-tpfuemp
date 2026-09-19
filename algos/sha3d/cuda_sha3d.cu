@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /*
- * sha3d CUDA kernel — double NIST SHA3-256 over an 80-byte header
+ * sha3d CUDA kernel -- double NIST SHA3-256 over an 80-byte header
  * (BSHA3 / Yilacoin).
  *
  * Provenance: Algo256/cuda_keccak256_sha3d.cu, the tpruvot-era "compat"
  * kernel that was the only correct path (the pre-sm_35 branch hashed a
  * single permutation with Keccak 0x01 padding and is deleted). 2026-07:
  * permutation replaced by the shared cuda/keccak_device.cuh building
- * blocks; dual-nonce atomicExch result buffer like the sibling kernels.
+ * blocks; dual-nonce result buffer like the sibling kernels.
  */
 
 #include <miner.h>
@@ -24,14 +24,21 @@ extern bool keccak_device_selftest(int thr_id);
 
 /* launch shape (swept 2026-07-12 on RTX 3060, see README) */
 #define TPB 128
-#define BPM 5   /* min blocks per SM (launch bounds) */
-#define NPT 1   /* nonces per thread (grid-stride) */
+/* min blocks/SM, per-arch: Pascal wants 8 (64 regs, 50% occupancy), Ampere
+ * measured worse there and keeps 5. sm_75 untested. */
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 610
+#define BPM 8
+#else
+#define BPM 5
+#endif
+#define NPT 1   /* nonces per thread; the kernel below assumes exactly one */
+static_assert(NPT == 1, "kernel handles one nonce per thread: raise the grid, not NPT");
 #define NBN 2
 
 static uint32_t *d_sha3d_nonces[MAX_GPUS];
 static uint32_t *h_sha3d_nonces[MAX_GPUS];
 
-/* per-GPU constant memory — precomputed from the first 72 bytes of the
+/* per-GPU constant memory -- precomputed from the first 72 bytes of the
  * header (sha3t-style absorb midstate; same 0x06/0x80 padding layout).
  * Keep this block textually in sync with algos/sha3t/cuda_sha3t.cu and
  * algos/keccak/cuda_keccak256.cu. */
@@ -42,19 +49,18 @@ __global__ __launch_bounds__(TPB, BPM)
 void sha3d_gpu_hash_80(uint32_t threads, uint32_t startNonce, uint32_t *resNonces, const uint2 highTarget)
 {
 	const uint32_t thread = blockDim.x * blockIdx.x + threadIdx.x;
-	const uint64_t step = (uint64_t)gridDim.x * blockDim.x;
-	const uint64_t maxNonce = (uint64_t)startNonce + threads;
 
 	uint2 s[25], t[5], u[5], v, w;
 
-	for (uint64_t n = startNonce + thread; n < maxNonce; n += step) {
-	const uint32_t nonce = (uint32_t)n;
+	/* one nonce per thread; the grid rounds up, so this drops the ragged tail */
+	if (thread < threads) {
+	const uint32_t nonce = startNonce + thread;
 
-	/* ── first SHA3-256: 80-byte header → 32-byte digest ─────────────────
+	/* -- first SHA3-256: 80-byte header -> 32-byte digest -----------------
 	 *
 	 * Round 0 from the 72-byte midstate: s[9] carries the bits field in .x
 	 * and the per-thread nonce (byte-swapped) in .y.
-	 * s[10] = 0x06 — NIST SHA3-256 domain separator (NOT 0x01 Keccak);
+	 * s[10] = 0x06 -- NIST SHA3-256 domain separator (NOT 0x01 Keccak);
 	 * s[16] = end-of-rate bit (byte 135). */
 
 	s[ 9] = make_uint2(c_sha3d_msg[0].x, cuda_swab32(nonce));
@@ -122,9 +128,12 @@ void sha3d_gpu_hash_80(uint32_t threads, uint32_t startNonce, uint32_t *resNonce
 	/* final_hash[6..7] == lane 3: 64-bit target compare;
 	 * every candidate is re-hashed on the CPU before submit */
 	if (devectorize(keccak_final_lane3(s)) <= devectorize(highTarget)) {
-		const uint32_t tmp = atomicExch(&resNonces[0], nonce);
-		if (tmp != UINT32_MAX)
-			resNonces[1] = tmp;
+		/* Keep the two LOWEST nonces: the host resumes from max(slot0,slot1)+1,
+		 * so anything higher steps over an unreported candidate. Both slots
+		 * atomic; the loser comes from atomicMin's return, not a re-read. */
+		const uint32_t prev = atomicMin(&resNonces[0], nonce);
+		if (prev != UINT32_MAX)
+			atomicMin(&resNonces[1], (prev > nonce) ? prev : nonce);
 	}
 	}
 }
@@ -157,7 +166,7 @@ void sha3d_setBlock_80(uint64_t *endiandata)
 	t[1] = endiandata[1] ^ endiandata[6] ^ s[16];
 	t[2] = endiandata[2] ^ endiandata[7];
 	t[3] = endiandata[3] ^ endiandata[8];
-	/* t[4] depends on endiandata[9] which contains the nonce — done per-thread */
+	/* t[4] depends on endiandata[9] which contains the nonce -- done per-thread */
 
 	mid[ 0] = ROTL64(t[1], 1);
 	     u[1] = t[0] ^ ROTL64(t[2], 1);

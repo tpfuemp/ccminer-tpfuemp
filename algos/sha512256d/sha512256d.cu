@@ -165,7 +165,10 @@ extern "C" int scanhash_sha512256d(int thr_id, struct work* work, uint32_t max_n
 				}
 				return work->valid_nonces;
 			}
-			else if (vhash[7] > ptarget[7]) {
+			/* also the screen-passes/fulltest-fails case: the GPU screens the full
+			 * 64-bit q3 where this first check is 32-bit, so reaching it needs an
+			 * exact top-64 tie -- but without the else it is counted nowhere */
+			else {
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet) {
 					gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);

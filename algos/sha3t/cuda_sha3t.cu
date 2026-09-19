@@ -23,16 +23,15 @@ extern bool keccak_device_selftest(int thr_id);
 
 /* launch shape (swept 2026-07-12 on RTX 3060, see README) */
 #define TPB 128
-/* min blocks per SM (launch bounds), per-arch: Pascal needs 96 registers here
- * where Ampere needs 80, so 6 blocks/SM caps it to 80, spill-free. Ampere keeps
- * 5 - the tighter bound costs it there. Measured on GTX 1080 Ti / RTX 3060;
- * sm_75 untested. */
+/* min blocks/SM, per-arch: Pascal wants 8 (64 regs, 50% occupancy), Ampere
+ * measured worse there and keeps 5. sm_75 untested. */
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 610
-#define BPM 6
+#define BPM 8
 #else
 #define BPM 5
 #endif
-#define NPT 1   /* nonces per thread (grid-stride) */
+#define NPT 1   /* nonces per thread; the kernel below assumes exactly one */
+static_assert(NPT == 1, "kernel handles one nonce per thread: raise the grid, not NPT");
 #define NBN 2
 
 static uint32_t *d_sha3t_nonces[MAX_GPUS];
@@ -51,9 +50,9 @@ void sha3t_gpu_hash_80(uint32_t threads, uint32_t startNonce,
 	uint32_t thread = blockDim.x * blockIdx.x + threadIdx.x;
 	uint2 s[25], t[5], v, w, u[5];
 
-	uint64_t step     = (uint64_t)gridDim.x * blockDim.x;
-	uint64_t maxNonce = (uint64_t)startNonce + threads;
-	for (uint64_t nounce = startNonce + thread; nounce < maxNonce; nounce += step) {
+	/* one nonce per thread; the grid rounds up, so this drops the ragged tail */
+	if (thread < threads) {
+		const uint32_t nounce = startNonce + thread;
 		/* -- round 1: 80-byte header -> 32-byte hash1 --------------------------
 		 *
 		 * Midstate covers the first 72 bytes (s[0..8]).  s[9] carries the bits
@@ -135,12 +134,10 @@ void sha3t_gpu_hash_80(uint32_t threads, uint32_t startNonce,
 
 		/* final_hash[6..7] == devectorize(s[3]).  Compare 64 bits for precision. */
 		if (devectorize(s[3]) <= devectorize(highTarget)) {
-			/* Keep the two lowest nonces: slot 0 the minimum, slot 1 the runner-up.
-			 * The host resumes from max(slot0, slot1) + 1, so reporting the lowest
-			 * is what stops the cursor stepping over an unreported candidate. Both
-			 * slots must be atomic, and the winner must come from atomicMin's
-			 * return value rather than a re-read of slot 0. */
-			const uint32_t n    = (uint32_t) nounce;
+			/* Keep the two LOWEST nonces: the host resumes from max(slot0,slot1)+1,
+			 * so anything higher steps over an unreported candidate. Both slots
+			 * atomic; the loser comes from atomicMin's return, not a re-read. */
+			const uint32_t n    = nounce;
 			const uint32_t prev = atomicMin(&resNounce[0], n);
 			if (prev != UINT32_MAX)
 				atomicMin(&resNounce[1], (prev > n) ? prev : n);
