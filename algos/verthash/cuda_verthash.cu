@@ -3,32 +3,19 @@
 // Verthash (Vertcoin) CUDA device kernels + host launchers.
 //
 // Three-kernel pipeline, structurally ported from the VerthashMiner CUDA kernel
-// (src/vhCuda/verthash.cu, CryptoGraphics GPLv2), reworked to call the shared
-// FIPS-202 permutation cuda/sha3_device.cuh (sha3_keccakf_1600) and to take mdiv
-// as a runtime __constant__ instead of a baked #define:
+// (src/vhCuda/verthash.cu, CryptoGraphics GPLv2), reworked to use the shared
+// FIPS-202 permutation in cuda/sha3_device.cuh and to take mdiv as a runtime
+// __constant__ instead of a baked #define:
 //
-//   1. verthash_gpu_precompute  (8 threads/job): the 8x SHA3-512 prehash-72
-//      first permutation, one per header-byte-0 increment (i+1). Job-scoped.
-//   2. verthash_gpu_sha3_256    (1 thread/nonce): SHA3-256(header||nonce) -> the
-//      running 32-byte hash, stored to d_iohashes (also the IO output buffer).
-//   3. verthash_gpu_io          (4 threads/nonce): finishes the 8x SHA3-512
-//      (final-8 block) into a shared 512-byte subset, then the 4096 random
-//      32-byte datafile reads with the cross-lane fnv1a accumulator sync (done
-//      with a width-4 warp shuffle -- no block barrier).
+//   1. verthash_gpu_precompute (8 threads/job)   8x SHA3-512 prehash-72, job-scoped
+//   2. verthash_gpu_sha3_256   (1 thread/nonce)  SHA3-256(header||nonce)
+//   3. verthash_gpu_io         (4 threads/nonce) SHA3-512 final-8 into a shared
+//      512-byte subset, then 4096 random 32-byte datafile reads, fnv1a-folded
+//      across the 4 lanes with a width-4 shuffle.
 //
-// The IO kernel appends the nonce offset of any hash whose most-significant word
-// (word 7) is <= target[7] to a results list (a safe superset filter -- '<='
-// includes the boundary, so no real share is ever missed); the host re-verifies
-// each candidate with the CPU oracle + fulltest before submit.
-//
-// Optimization note (Phase 6, RTX 3060): the algorithm is 4096 *dependent*
-// random 32-byte reads into a 1.28 GiB buffer with no locality, so it is
-// DRAM-random-access bound (~94 GB/s, ~735 kH/s). Two levers were measured and
-// found NOT to help on this card and were dropped: (a) replacing the shared
-// accumulator sync with a warp shuffle is perf-neutral (kept -- it is simply
-// cleaner, removing the per-iteration block barriers); (b) splitting the SHA3
-// subset into its own kernel to raise IO-kernel occupancy 50%->67% was slightly
-// *slower* (extra launch + global subset round-trip outweigh the occupancy).
+// The IO kernel reports any nonce whose word 7 is <= target[7] -- a safe
+// superset, so no real share is missed; the host re-verifies each candidate
+// with the CPU oracle + fulltest before submit.
 
 #include <cuda_runtime.h>
 #include <stdint.h>
@@ -40,10 +27,26 @@ typedef unsigned int uint;
 __constant__ uint32_t c_vh_header[19];
 // index modulus = ((datafile_size - 32) / 16) + 1.
 __constant__ uint32_t c_vh_mdiv;
+// Multiply-shift reciprocal of c_vh_mdiv (see vh_mod_mdiv / vh_magicu).
+__constant__ uint32_t c_vh_magic;
+__constant__ uint32_t c_vh_shift;
 
 static __device__ __forceinline__ uint vh_fnv1a(const uint a, const uint b)
 {
 	return (a ^ b) * 0x1000193U;
+}
+
+// x % c_vh_mdiv without a division (Hacker's Delight 10-9 magic reciprocal).
+// mdiv stays a RUNTIME value: the datafile has changed size before, and a baked
+// divisor would silently mis-index a new one. ADD is a template parameter, not
+// a branch -- a branch leaves the dead division in the kernel.
+template <bool ADD>
+static __device__ __forceinline__ uint vh_mod_mdiv(const uint x)
+{
+	const uint t = __umulhi(x, c_vh_magic);
+	const uint q = ADD ? ((t + ((x - t) >> 1)) >> c_vh_shift)
+	                   : (t >> c_vh_shift);
+	return x - q * c_vh_mdiv;
 }
 
 static __device__ __forceinline__ uint vh_rotl32(const uint x, const uint n)
@@ -116,21 +119,31 @@ __global__ void verthash_gpu_sha3_256(uint2 *iohashes, const uint in18, const ui
 // ---------------------------------------------------------------------------
 // 3) IO/mix. 4 lanes cooperate per nonce. WORK_SIZE threads/block.
 #define VH_WORK_SIZE 64
+#define VH_GROUPS    (VH_WORK_SIZE / 4)   // 4-lane groups per block
 
-struct vh_sha3_state_t { union { uint u[128]; uint2 u2[64]; }; };
-
+// Subset held TRANSPOSED: word w of group g at [w * VH_GROUPS + g]. The word
+// index is the loop counter, uniform across the block, so the natural layout
+// would put every group of a warp in bank w % 32 -- an 8-way conflict on all
+// 4096 loads. Costs strided stores: 16 per nonce against 4096 loads.
+//
+// DUAL: the index is 16-byte granular (VH_BYTE_ALIGNMENT) but the item is 32
+// bytes, so an odd index straddles two 32-byte sectors. A second copy of the
+// datafile shifted left by 16 B lets an odd index read the same logical bytes
+// from an aligned address:  even -> A[2*idx],  odd -> B[2*(idx-1)].
+// Hash unchanged. Costs ~1.19 GiB; the host passes NULL when VRAM is short.
+template <bool MAGIC_ADD, bool DUAL>
 __global__ void
 __launch_bounds__(VH_WORK_SIZE)
 verthash_gpu_io(uint2 *iohashes, const uint2 *__restrict__ kstates,
-                const uint2 *__restrict__ memory, const uint firstNonce,
-                uint *results, const uint target)
+                const uint2 *__restrict__ memory, const uint2 *__restrict__ memory_odd,
+                const uint firstNonce, uint *results, const uint target)
 {
 	const uint globalThId = blockDim.x * blockIdx.x + threadIdx.x;
 	const uint lgr4id = (globalThId & (VH_WORK_SIZE - 1)) >> 2;  // local 4-lane group
 	const uint gr4id  = globalThId >> 2;                          // nonce index
 	const uint gr4e   = globalThId & 3;                           // lane 0..3
 
-	__shared__ vh_sha3_state_t sha3St[VH_WORK_SIZE / 4];
+	__shared__ uint sha3St[128 * VH_GROUPS];
 
 	// --- SHA3-512 final-8: lane gr4e finishes states 2*gr4e and 2*gr4e+1 ---
 	const uint nonce = firstNonce + gr4id;
@@ -147,9 +160,13 @@ verthash_gpu_io(uint2 *iohashes, const uint2 *__restrict__ kstates,
 
 		sha3_keccakf_1600(st);
 
+		// word index of st[i].x in the untransposed subset; .y follows it
 		#pragma unroll
-		for (int i = 0; i < 8; ++i)
-			sha3St[lgr4id].u2[(gr4e * 16) + (s3s * 8) + i] = st[i];
+		for (int i = 0; i < 8; ++i) {
+			const uint w0 = (gr4e * 32) + (s3s * 16) + 2 * i;
+			sha3St[w0 * VH_GROUPS + lgr4id]       = st[i].x;
+			sha3St[(w0 + 1) * VH_GROUPS + lgr4id] = st[i].y;
+		}
 	}
 	// The subset lives in shared memory, written by the 4 lanes of this group and
 	// read every IO iteration. Each 4-lane group is contained in one warp (4 | 32),
@@ -159,15 +176,21 @@ verthash_gpu_io(uint2 *iohashes, const uint2 *__restrict__ kstates,
 	// --- IO/mix stage ---
 	uint2 up1 = iohashes[globalThId];              // running hash words (2*gr4e, 2*gr4e+1)
 	uint acc = 0x811c9dc5U;
-	const uint mdiv = c_vh_mdiv;
 
 	for (uint i = 0; i < 4096; ++i) {
 		const uint s3idx  = i & 127;
 		const uint rfac   = i >> 7;
-		const uint seek   = vh_rotl32(sha3St[lgr4id].u[s3idx], rfac);
-		const uint offset = (vh_fnv1a(seek, acc) % mdiv) << 1;   // uint2 units
+		const uint seek = vh_rotl32(sha3St[s3idx * VH_GROUPS + lgr4id], rfac);
+		const uint idx  = vh_mod_mdiv<MAGIC_ADD>(vh_fnv1a(seek, acc));
 
-		const uint2 v = memory[offset + gr4e];
+		uint2 v;
+		if (DUAL) {
+			// odd index -> the 16-byte-shifted copy, at a 32-byte-aligned offset
+			const uint2 *__restrict__ base = (idx & 1u) ? memory_odd : memory;
+			v = base[((idx & ~1u) << 1) + gr4e];
+		} else {
+			v = memory[(idx << 1) + gr4e];
+		}
 
 		up1.x = vh_fnv1a(up1.x, v.x);
 		up1.y = vh_fnv1a(up1.y, v.y);
@@ -196,6 +219,44 @@ verthash_gpu_io(uint2 *iohashes, const uint2 *__restrict__ kstates,
 
 // ===========================================================================
 // Host launchers.
+
+// Unsigned magic number for a constant divisor (Hacker's Delight fig. 10-3),
+// exact for every d >= 2. The "add" indicator covers divisors whose magic does
+// not fit in 32 bits.
+static void vh_magicu(uint32_t d, uint32_t *magic, uint32_t *shift, int *add)
+{
+	uint32_t nc, delta, q1, r1, q2, r2;
+	int p;
+
+	*add = 0;
+	nc = (uint32_t) (0xffffffffU - ((0u - d) % d));
+	p  = 31;
+	q1 = 0x80000000U / nc;          r1 = 0x80000000U - q1 * nc;
+	q2 = 0x7fffffffU / d;           r2 = 0x7fffffffU - q2 * d;
+	do {
+		p++;
+		if (r1 >= nc - r1) { q1 = 2 * q1 + 1; r1 = 2 * r1 - nc; }
+		else               { q1 = 2 * q1;     r1 = 2 * r1;      }
+		if (r2 + 1 >= d - r2) {
+			if (q2 >= 0x7fffffffU) *add = 1;
+			q2 = 2 * q2 + 1; r2 = 2 * r2 + 1 - d;
+		} else {
+			if (q2 >= 0x80000000U) *add = 1;
+			q2 = 2 * q2;     r2 = 2 * r2 + 1;
+		}
+		delta = d - 1 - r2;
+	} while (p < 64 && (q1 < delta || (q1 == delta && r1 == 0)));
+
+	*magic = q2 + 1;
+	// the add variant shifts one less; fold it in so the device reads one value
+	*shift = (uint32_t) (p - 32) - (uint32_t) *add;
+}
+
+// Which verthash_gpu_io instantiation the current divisor needs. mdiv is
+// process-global (one datafile for every GPU thread), so every writer stores
+// the same value.
+static int s_magic_add = 0;
+
 extern "C" {
 
 void verthash_cuda_set_header(const uint32_t header19[19])
@@ -205,7 +266,15 @@ void verthash_cuda_set_header(const uint32_t header19[19])
 
 void verthash_cuda_set_mdiv(uint32_t mdiv)
 {
-	cudaMemcpyToSymbol(c_vh_mdiv, &mdiv, sizeof(uint32_t));
+	uint32_t magic = 0, shift = 0;
+	int add = 0;
+
+	if (mdiv >= 2) vh_magicu(mdiv, &magic, &shift, &add);
+
+	s_magic_add = add;
+	cudaMemcpyToSymbol(c_vh_mdiv,  &mdiv,  sizeof(uint32_t));
+	cudaMemcpyToSymbol(c_vh_magic, &magic, sizeof(uint32_t));
+	cudaMemcpyToSymbol(c_vh_shift, &shift, sizeof(uint32_t));
 }
 
 void verthash_cuda_precompute(uint2 *d_kstates)
@@ -216,12 +285,29 @@ void verthash_cuda_precompute(uint2 *d_kstates)
 // nonces MUST be a multiple of 256 (exact grids; the 4-lane IO kernel launches
 // nonces*4 threads with no bounds guard). The host rounds throughput down.
 void verthash_cuda_hash(uint2 *d_iohashes, const uint2 *d_kstates, const uint2 *d_memory,
+                        const uint2 *d_memory_odd,
                         uint32_t in18, uint32_t firstNonce, uint32_t nonces,
                         uint32_t *d_results, uint32_t target)
 {
+	const uint32_t blocks = (nonces * 4) / VH_WORK_SIZE;
+
 	verthash_gpu_sha3_256<<<nonces / 256, 256>>>(d_iohashes, in18, firstNonce);
-	verthash_gpu_io<<<(nonces * 4) / VH_WORK_SIZE, VH_WORK_SIZE>>>(
-		d_iohashes, d_kstates, d_memory, firstNonce, d_results, target);
+
+	if (d_memory_odd) {
+		if (s_magic_add)
+			verthash_gpu_io<true, true><<<blocks, VH_WORK_SIZE>>>(
+				d_iohashes, d_kstates, d_memory, d_memory_odd, firstNonce, d_results, target);
+		else
+			verthash_gpu_io<false, true><<<blocks, VH_WORK_SIZE>>>(
+				d_iohashes, d_kstates, d_memory, d_memory_odd, firstNonce, d_results, target);
+	} else {
+		if (s_magic_add)
+			verthash_gpu_io<true, false><<<blocks, VH_WORK_SIZE>>>(
+				d_iohashes, d_kstates, d_memory, NULL, firstNonce, d_results, target);
+		else
+			verthash_gpu_io<false, false><<<blocks, VH_WORK_SIZE>>>(
+				d_iohashes, d_kstates, d_memory, NULL, firstNonce, d_results, target);
+	}
 }
 
 } // extern "C"
