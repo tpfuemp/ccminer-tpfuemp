@@ -63,6 +63,25 @@ static void do_skein_hash(const void* input, size_t len, void* output)
 	memcpy(output, hash, 32);
 }
 
+// Flex's skein finalization is NOT the one above. Flex's cryptonote tree sets
+// HASH_SIZE = 64 (GhostRider's is 32), so its extra hash is
+// c_skein_hash(8 * HASH_SIZE, ...) = c_skein_hash(512, ...) -- a 512-bit
+// digest, i.e. Skein-512-512, which writes all 64 output bytes.
+//
+// This is a different function from Skein-512-256, not a longer read of it:
+// the output length is folded into the Skein config block, so the two use
+// different initial chaining values. Reusing do_skein_hash here (or widening
+// its memcpy) yields a silently wrong CN result on roughly half of all inputs.
+static void do_flex_skein512_hash(const void* input, size_t len, void* output)
+{
+	uchar hash[64];
+	sph_skein512_context ctx;
+	sph_skein512_init(&ctx);
+	sph_skein512(&ctx, input, len);
+	sph_skein512_close(&ctx, hash);
+	memcpy(output, hash, 64);
+}
+
 // todo: use sph if possible
 static void keccak_hash_permutation(union hash_state *state) {
 	keccakf((uint64_t*)state, 24);
@@ -79,6 +98,20 @@ extern "C" int fast_aesb_pseudo_round_mut(uint8_t *val, uint8_t *expandedKey);
 
 static void (* const extra_hashes[4])(const void*, size_t, void *) = {
 	do_blake_hash, do_groestl_hash, do_jh_hash, do_skein_hash
+};
+
+// Flex's finalization table. Three entries, selected by `state[0] & 2` rather
+// than `& 3`, so only indices 0 and 2 are reachable: JH is never used and
+// groestl (index 1) is dead code in the reference too. Kept at index 1 anyway
+// so the table matches the reference's shape.
+//
+// Consequences that matter to the caller:
+//   - index 0 (blake) writes 32 bytes, index 2 (skein-512) writes 64;
+//   - flex runs each CN round in place on a 64-byte buffer, so on the blake
+//     branch the high 32 output bytes are the round's own INPUT bytes. The
+//     caller must therefore pass a 64-byte buffer already holding the input.
+static void (* const flex_extra_hashes[3])(const void*, size_t, void *) = {
+	do_blake_hash, do_groestl_hash, do_flex_skein512_hash
 };
 
 static uint64_t mul128(uint64_t multiplier, uint64_t multiplicand, uint64_t* product_hi)
@@ -248,8 +281,17 @@ void cryptonight_hash(void* output, const void* input, size_t len)
 		((uint8_t*)(p))[11] = tmp ^ ((0x75310u >> index) & 0x30); \
 	} while (0)
 
+// `flex_final` selects the finalization only; every other step -- the keccak
+// init, the scratchpad fill, the cnv1 tweak, the main loop, the AES rounds and
+// the second pass -- is identical between ghostrider and flex, which is why
+// they share this function instead of keeping two copies of a consensus loop
+// that could drift apart.
+//
+// flex_final = 0: ghostrider/mike, extra_hashes[state[0] & 3], writes 32 bytes.
+// flex_final = 1: flex,       flex_extra_hashes[state[0] & 2], writes 32 or 64.
 static void cryptonight_v1_hash_ctx(void* output, const void* input, size_t len,
-	struct cryptonight_ctx* ctx, size_t mem, size_t iters, size_t mask)
+	struct cryptonight_ctx* ctx, size_t mem, size_t iters, size_t mask,
+	int flex_final)
 {
 	size_t i, j;
 	keccak_hash_process(&ctx->state.hs, (const uint8_t*) input, len);
@@ -308,7 +350,10 @@ static void cryptonight_v1_hash_ctx(void* output, const void* input, size_t len,
 	}
 	memcpy(ctx->state.init, ctx->text, INIT_SIZE_BYTE);
 	keccak_hash_permutation(&ctx->state.hs);
-	extra_hashes[ctx->state.hs.b[0] & 3](&ctx->state, 200, output);
+	if (flex_final)
+		flex_extra_hashes[ctx->state.hs.b[0] & 2](&ctx->state, 200, output);
+	else
+		extra_hashes[ctx->state.hs.b[0] & 3](&ctx->state, 200, output);
 	oaes_free((OAES_CTX **) &ctx->aes_ctx);
 }
 
@@ -319,12 +364,15 @@ static void cryptonight_v1_hash_ctx(void* output, const void* input, size_t len,
 // lite           1 MiB     2^18        MEM   - 16
 // turtle       256 KiB     2^16        MEM   - 16
 // turtlelite   256 KiB     2^16        MEM/2 - 16
-#define GR_CN_VARIANT(name, MEM, IT, MASK) \
+#define CN_VARIANT(name, MEM, IT, MASK, FLEXFINAL) \
 	extern "C" void name(void* output, const void* input, size_t len) { \
 		struct cryptonight_ctx *ctx = (struct cryptonight_ctx*)malloc(sizeof(struct cryptonight_ctx)); \
-		cryptonight_v1_hash_ctx(output, input, len, ctx, (MEM), (IT), (MASK)); \
+		cryptonight_v1_hash_ctx(output, input, len, ctx, (MEM), (IT), (MASK), (FLEXFINAL)); \
 		free(ctx); \
 	}
+
+#define GR_CN_VARIANT(name, MEM, IT, MASK)   CN_VARIANT(name, MEM, IT, MASK, 0)
+#define FLEX_CN_VARIANT(name, MEM, IT, MASK) CN_VARIANT(name, MEM, IT, MASK, 1)
 
 GR_CN_VARIANT(cryptonight_gr_dark,        524288u,  131072u,  524272u)
 GR_CN_VARIANT(cryptonight_gr_darklite,    524288u,  131072u,  262128u)
@@ -332,3 +380,19 @@ GR_CN_VARIANT(cryptonight_gr_fast,       2097152u,  262144u, 2097136u)
 GR_CN_VARIANT(cryptonight_gr_lite,       1048576u,  262144u, 1048560u)
 GR_CN_VARIANT(cryptonight_gr_turtle,      262144u,   65536u,  262128u)
 GR_CN_VARIANT(cryptonight_gr_turtlelite,  262144u,   65536u,  131056u)
+
+// Flex's six variants. The (MEM, iterations, mask) triples are BYTE-IDENTICAL
+// to ghostrider's above -- verified against all six of Flex's own
+// algo/flex/cryptonote/cryptonight_*.c, where the "lite" halving appears as
+// CN_AES_INIT = (MEMORY / AES_BLOCK_SIZE) / 2. Only the finalization differs.
+//
+// `output` must point to a 64-byte buffer pre-seeded with the 64-byte input:
+// the skein branch overwrites all 64, the blake branch writes only the low 32
+// and the high 32 must then read back as the input's, which is what flex's
+// in-place reference produces.
+FLEX_CN_VARIANT(cryptonight_flex_dark,        524288u,  131072u,  524272u)
+FLEX_CN_VARIANT(cryptonight_flex_darklite,    524288u,  131072u,  262128u)
+FLEX_CN_VARIANT(cryptonight_flex_fast,       2097152u,  262144u, 2097136u)
+FLEX_CN_VARIANT(cryptonight_flex_lite,       1048576u,  262144u, 1048560u)
+FLEX_CN_VARIANT(cryptonight_flex_turtle,      262144u,   65536u,  262128u)
+FLEX_CN_VARIANT(cryptonight_flex_turtlelite,  262144u,   65536u,  131056u)

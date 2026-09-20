@@ -369,3 +369,74 @@ void cryptonight_extra_cpu_final_gr(int thr_id, uint32_t threads, uint64_t *d_ct
 	cryptonight_extra_gpu_final_gr <<<grid, block>>> (threads, (uint32_t*)d_ctx_state, d_hash, (uint32_t)zero_high);
 	exit_if_cudaerror(thr_id, __FUNCTION__, __LINE__);
 }
+
+// ---------------------------------------------------------------------------
+// Flex finalization.
+//
+// A TWIN of the _gr kernel above, not a mode of it: ghostrider is live and
+// shares nothing else with flex, so the two endings stay separate functions.
+// Everything before this point -- the keccak init, the scratchpad fill, the
+// cnv1 tweak, the main loop, the second pass -- is identical, which is why
+// flex reuses cryptonight_extra_cpu_prepare_gr and cryptonight_core_cuda_gr
+// unchanged.
+//
+// Three differences from _gr:
+//   1. the selector is `state[0] & 2`, not `& 3`, over a 3-entry table
+//      {blake, groestl, skein-512}. Only indices 0 and 2 are reachable: JH is
+//      never used and groestl is dead code in the reference too.
+//   2. skein is Skein-512-**512** (cn_flex_skein512), which writes all 64
+//      output bytes -- not the 32 that Skein-512-256 writes.
+//   3. there is no zero_high: flex never zeroes the high 32 bytes.
+//
+//  The blake branch writes ONLY the low 32 bytes, on purpose. d_hash still
+// holds this round's 64-byte INPUT at this point (prepare reads it, the core
+// kernels never touch it), so leaving the high half alone reproduces exactly
+// what flex's in-place CPU reference produces. That matters more here than it
+// ever did for ghostrider: flex's final SHA3-256 hashes all 64 bytes of the
+// last CN output, so the high half is consensus-load-bearing rather than
+// discarded.
+// ---------------------------------------------------------------------------
+__global__
+void cryptonight_extra_gpu_final_flex(const uint32_t threads, uint32_t * d_ctx_state, uint64_t * d_hash)
+{
+	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
+	if (thread < threads)
+	{
+		uint64_t* ctx_state = (uint64_t*) (&d_ctx_state[thread * 52U]);
+		uint64_t state[25];
+		#pragma unroll
+		for (int i = 0; i < 25; i++)
+			state[i] = ctx_state[i];
+
+		cn_keccakf2(state);
+
+		uint32_t* out = (uint32_t*)(&d_hash[thread * 8U]);
+
+		if ((((uint8_t*)state)[0] & 0x02) == 0) {
+			// blake256: 32 bytes. The high 32 stay as the round's input.
+			uint32_t hash[8];
+			cn_blake((uint8_t*)state, 200, (uint8_t*)hash);
+			#pragma unroll
+			for (int i = 0; i < 8; i++)
+				out[i] = hash[i];
+		} else {
+			// Skein-512-512: all 64 bytes.
+			uint32_t hash[16];
+			cn_flex_skein512((uint8_t*)state, 200, hash);
+			#pragma unroll
+			for (int i = 0; i < 16; i++)
+				out[i] = hash[i];
+		}
+	}
+}
+
+extern "C" __host__
+void cryptonight_extra_cpu_final_flex(int thr_id, uint32_t threads, uint64_t *d_ctx_state, uint64_t *d_hash)
+{
+	uint32_t threadsperblock = 128;
+	dim3 grid((threads + threadsperblock - 1) / threadsperblock);
+	dim3 block(threadsperblock);
+
+	cryptonight_extra_gpu_final_flex <<<grid, block>>> (threads, (uint32_t*)d_ctx_state, d_hash);
+	exit_if_cudaerror(thr_id, __FUNCTION__, __LINE__);
+}

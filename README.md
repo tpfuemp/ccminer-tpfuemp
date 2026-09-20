@@ -91,6 +91,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `lyra2z330` | Lyra2Z330 |
 | `meowpow` | MeowPow (Meowcoin) |
 | `meraki` | Meraki (Telestai) |
+| `mike` | Mike (VKAX, FortuneBlock) |
 | `mjollnir` | Mjollnir (Hefty hash) |
 | `myr-gr` | Myriad-Groestl |
 | `neoscrypt` | NeoScrypt (FeatherCoin, Phoenix, UFO…) |

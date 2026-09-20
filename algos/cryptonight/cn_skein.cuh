@@ -323,3 +323,63 @@ void cn_skein(const uint8_t * __restrict__ data, DataLength len, uint32_t * __re
 	cn_skein256_update(&state, data, databitlen);
 	cn_skein256_final(&state, hashval);
 }
+
+/* ---------------------------------------------------------------------------
+ * Skein-512-512 for Flex.
+ *
+ * Flex's cryptonote tree sets HASH_SIZE = 64 (GhostRider's is 32), so its CN
+ * extra hash is c_skein_hash(8 * HASH_SIZE, ...) = a 512-BIT digest. That is
+ * a different function from the Skein-512-256 above, not a longer read of it:
+ * the output length is folded into Skein's config block, so the two use
+ * different initial chaining values.
+ *
+ * Calling cn_skein256_init() with hashBitLen = 512 does NOT work -- it
+ * hard-codes SKEIN_512_IV_256. That mistake produces a plausible-looking
+ * digest and a wrong consensus hash on roughly half of all inputs, with no
+ * symptom until a pool rejects the share.
+ *
+ * The permutation, update and final are shared with the 256-bit path
+ * unchanged; cn_skein256_final already emits (hashBitLen + 7) >> 3 = 64 bytes
+ * in a single output block. Only the IV and the length differ.
+ *
+ * IV source: sph/skein.c IV512[] (in-tree), the standard Skein-512-512 chaining
+ * value. Gated against sph_skein512 -- see the project notes
+ * ------------------------------------------------------------------------- */
+__device__
+void cn_skein512_init(skeinHashState *state, size_t hashBitLen)
+{
+	const uint64_t SKEIN_512_IV_512[] =
+	{
+		SKEIN_MK_64(0x4903ADFF,0x749C51CE),
+		SKEIN_MK_64(0x0D95DE39,0x9746DF03),
+		SKEIN_MK_64(0x8FD19341,0x27C79BCE),
+		SKEIN_MK_64(0x9A255629,0xFF352CB1),
+		SKEIN_MK_64(0x5DB62599,0xDF6CA7B0),
+		SKEIN_MK_64(0xEABE394C,0xA9D5C3F4),
+		SKEIN_MK_64(0x991112C7,0x1A75B523),
+		SKEIN_MK_64(0xAE18A40B,0x660FCC33)
+	};
+
+	Skein_512_Ctxt_t *ctx = &state->u.ctx_512;
+
+	ctx->h.hashBitLen = hashBitLen;
+
+	memcpy(ctx->X, SKEIN_512_IV_512, sizeof(ctx->X));
+
+	Skein_Start_New_Type(ctx, MSG);
+}
+
+/* Writes 64 bytes (16 uint32) to hashval. */
+__device__
+void cn_flex_skein512(const uint8_t * __restrict__ data, DataLength len, uint32_t * __restrict__ hashval)
+{
+	const int hashbitlen = 512;
+	DataLength databitlen = len << 3;
+	skeinHashState state;
+
+	state.statebits = 64*SKEIN_512_STATE_WORDS;
+
+	cn_skein512_init(&state, hashbitlen);
+	cn_skein256_update(&state, data, databitlen);
+	cn_skein256_final(&state, hashval);
+}

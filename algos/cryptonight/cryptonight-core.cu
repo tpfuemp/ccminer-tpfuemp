@@ -369,3 +369,67 @@ extern "C" void cryptonight_core_cuda_gr(int thr_id, int blocks, int threads, in
 	cryptonight_core_gpu_phase3_gr <<<grid, block8>>> (throughput, loops, stride64, d_long_state, d_ctx_state, d_ctx_key2);
 	exit_if_cudaerror(thr_id, __FUNCTION__, __LINE__);
 }
+
+// ---------------------------------------------------------------------------
+// Flex variant of the launcher above.
+//
+// Identical kernels, identical parameters -- the ONLY difference is that the
+// per-kernel lane guard is passed explicitly instead of being derived as
+// blocks * threads.
+//
+// Why flex needs that: its CN variant is chosen per NONCE, so each batch is
+// sorted by variant and each variant group is a contiguous sub-range of
+// arbitrary length. Without an explicit guard the caller would have to round
+// every group up to a whole block and let the padding lanes run a full
+// CryptoNight -- on a six-way split that is several percent of wasted work in
+// the component that is ~99% of runtime.
+//
+// The group's base is applied by the CALLER through pointer arithmetic on
+// d_long_state / d_ctx_*; every kernel indexes purely relative to the pointers
+// it is given, so a group starting at any lane offset works.
+//
+// `nlanes` must be <= blocks * threads. Lanes at or beyond it fall out at the
+// `thread < threads` guard each phase kernel already has.
+// ---------------------------------------------------------------------------
+extern "C" void cryptonight_core_cuda_flex(int thr_id, int blocks, int threads, uint32_t nlanes,
+	int variant, uint32_t stride64,
+	uint64_t *d_long_state, uint64_t *d_ctx_state, uint32_t *d_ctx_a, uint32_t *d_ctx_b,
+	uint32_t *d_ctx_key1, uint32_t *d_ctx_key2, uint64_t *d_ctx_tweak)
+{
+	static const uint32_t gr_mem[6]   = {  524288u,  524288u, 2097152u, 1048576u,  262144u, 262144u };
+	static const uint32_t gr_iters[6] = {  131072u,  131072u,  262144u,  262144u,   65536u,  65536u };
+	static const uint32_t gr_mask[6]  = {  524272u,  262128u, 2097136u, 1048560u,  262128u, 131056u };
+
+	if (!nlanes)
+		return;
+
+	const uint32_t mem   = gr_mem[variant];
+	const uint32_t iters = gr_iters[variant];
+	const uint32_t mask  = gr_mask[variant];
+	const uint32_t loops = mem >> 3;
+
+	dim3 grid(blocks);
+	dim3 block(threads);
+	dim3 block4(threads << 2);
+	dim3 block8(threads << 3);
+
+	const uint32_t bfactor = (uint32_t) device_bfactor[thr_id];
+	const uint32_t partcount = 1 << bfactor;
+	const int bsleep = bfactor ? 100 : 0;
+	const int dev_id = device_map[thr_id];
+
+	cryptonight_core_gpu_phase1_gr <<<grid, block8>>> (nlanes, loops, stride64, d_long_state, d_ctx_state, d_ctx_key1);
+	exit_if_cudaerror(thr_id, __FUNCTION__, __LINE__);
+	if (partcount > 1) usleep(bsleep);
+
+	for (uint32_t i = 0; i < partcount; i++)
+	{
+		dim3 b = device_sm[dev_id] >= 300 ? block4 : block;
+		cryptonight_core_gpu_phase2_gr <<<grid, b>>> (nlanes, bfactor, i, mask, iters, stride64, d_long_state, d_ctx_a, d_ctx_b, d_ctx_tweak);
+		exit_if_cudaerror(thr_id, __FUNCTION__, __LINE__);
+		if (partcount > 1) usleep(bsleep);
+	}
+
+	cryptonight_core_gpu_phase3_gr <<<grid, block8>>> (nlanes, loops, stride64, d_long_state, d_ctx_state, d_ctx_key2);
+	exit_if_cudaerror(thr_id, __FUNCTION__, __LINE__);
+}

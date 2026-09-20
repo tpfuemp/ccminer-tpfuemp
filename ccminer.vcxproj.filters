@@ -396,6 +396,12 @@
     <ClCompile Include="algos\cryptonight\cryptonight-cpu.cpp">
       <Filter>Source Files\cryptonight\xmr</Filter>
     </ClCompile>
+    <ClCompile Include="algos\mike\mike_hash.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="algos\flex\flex_hash.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="algos\cryptonight\mman.c">
       <Filter>Source Files\cryptonight\bbr</Filter>
     </ClCompile>
@@ -1417,6 +1423,12 @@
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\ghostrider\ghostrider.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\mike\mike.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\flex\flex.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
   </ItemGroup>

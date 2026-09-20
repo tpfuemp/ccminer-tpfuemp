@@ -47,6 +47,10 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/hoohash/hoohash_device.cuh \
 			  algos/evohash/evohash.cu \
 			  algos/ghostrider/ghostrider.cu \
+			  algos/mike/mike.cu algos/mike/mike_hash.cpp \
+			  algos/flex/flex.cu algos/flex/flex_hash.cpp \
+			  algos/flex/flex.h algos/flex/flex_kat.h algos/flex/flex_schedule.h \
+			  algos/mike/mike.h algos/mike/mike_kat.h \
 			  algos/argon2d/argon2d.cu algos/argon2d/argon2d_fill.cu \
 			  algos/argon2d/blake2b_kernels.cu \
 			  algos/argon2d/argon2ref/argon2.c algos/argon2d/argon2ref/core.c \

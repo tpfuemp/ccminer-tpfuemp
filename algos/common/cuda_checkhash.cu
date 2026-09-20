@@ -11,6 +11,15 @@
 __constant__ uint32_t pTarget[8]; // 32 bytes
 
 // store MAX_GPUS device arrays of 8 nonces
+//
+// Slot 0 is the candidate COUNT, slots 1..CHECKHASH_SLOTS-1 hold the nonces,
+// so at most 7 are retained per batch. The bound used to be a bare `8` in the
+// kernel while the size was a bare `32` in the allocation and the memcpy --
+// three places to keep in step by hand. One name instead.
+#define CHECKHASH_SLOTS   8
+#define CHECKHASH_NONCES  (CHECKHASH_SLOTS - 1)
+#define CHECKHASH_BYTES   (CHECKHASH_SLOTS * sizeof(uint32_t))
+
 static uint32_t* h_resNonces[MAX_GPUS] = { NULL };
 static uint32_t* d_resNonces[MAX_GPUS] = { NULL };
 static __thread bool init_done = false;
@@ -18,8 +27,8 @@ static __thread bool init_done = false;
 __host__
 void cuda_check_cpu_init(int thr_id, uint32_t threads)
 {
-    CUDA_CALL_OR_RET(cudaMalloc(&d_resNonces[thr_id], 32));
-    CUDA_SAFE_CALL(cudaMallocHost(&h_resNonces[thr_id], 32));
+    CUDA_CALL_OR_RET(cudaMalloc(&d_resNonces[thr_id], CHECKHASH_BYTES));
+    CUDA_SAFE_CALL(cudaMallocHost(&h_resNonces[thr_id], CHECKHASH_BYTES));
     init_done = true;
 }
 
@@ -93,10 +102,21 @@ void cuda_checkhash_64(uint32_t threads, uint32_t startNounce, uint32_t *hash, u
 		// todo: use only 32 bytes * threads if possible
 		uint32_t *inpHash = &hash[thread << 4];
 
-		if (resNonces[0] == UINT32_MAX) {
-			if (hashbelowtarget(inpHash, pTarget))
-				resNonces[0] = (startNounce + thread);
-		}
+		// atomicMin, so slot 0 is the LOWEST candidate in the batch.
+		//
+		// It used to be `if (resNonces[0] == UINT32_MAX) resNonces[0] = nonce;`
+		// -- a cross-thread read-modify-write with no atomic, so the winner was
+		// whichever thread happened to store last, NOT the smallest nonce. Two
+		// consequences, both silent:
+		//   - the caller resumes from max(nonce0, nonce1) + 1, so a LOWER
+		//     candidate that lost the race is skipped permanently;
+		//   - cuda_check_hash_suppl() could hand back that same nonce as the
+		//     "second" one, costing the real second candidate its submit
+		//     (measured: 4 duplicate submits in 38 multi-candidate batches).
+		// The init is already 0xffffffff (see the memset in the host wrapper),
+		// which is exactly atomicMin's identity.
+		if (hashbelowtarget(inpHash, pTarget))
+			atomicMin(&resNonces[0], (startNounce + thread));
 	}
 }
 
@@ -108,10 +128,10 @@ void cuda_checkhash_32(uint32_t threads, uint32_t startNounce, uint32_t *hash, u
 	{
 		uint32_t *inpHash = &hash[thread << 3];
 
-		if (resNonces[0] == UINT32_MAX) {
-			if (hashbelowtarget(inpHash, pTarget))
-				resNonces[0] = (startNounce + thread);
-		}
+		// Same fix as cuda_checkhash_64 above: atomicMin so slot 0 is the
+		// lowest candidate, not the last thread to win a race.
+		if (hashbelowtarget(inpHash, pTarget))
+			atomicMin(&resNonces[0], (startNounce + thread));
 	}
 }
 
@@ -184,7 +204,7 @@ void cuda_checkhash_64_suppl(uint32_t threads, uint32_t startNounce, uint32_t *h
 		// overwrite each other's slots.
 		uint32_t resNum = atomicAdd(&resNonces[0], 1) + 1;
 		__threadfence();
-		if (resNum < 8)
+		if (resNum < CHECKHASH_SLOTS)
 			resNonces[resNum] = (startNounce + thread);
 	}
 }
@@ -212,15 +232,45 @@ uint32_t cuda_check_hash_suppl(int thr_id, uint32_t threads, uint32_t startNounc
 	cuda_checkhash_64_suppl <<<grid, block>>> (threads, startNounce, d_inputHash, d_resNonces[thr_id]);
 	cudaDeviceSynchronize();
 
-	cudaMemcpy(h_resNonces[thr_id], d_resNonces[thr_id], 32, cudaMemcpyDeviceToHost);
+	cudaMemcpy(h_resNonces[thr_id], d_resNonces[thr_id], CHECKHASH_BYTES, cudaMemcpyDeviceToHost);
 	rescnt = h_resNonces[thr_id][0];
-	if (rescnt > numNonce) {
-		if (numNonce <= rescnt) {
-			result = h_resNonces[thr_id][numNonce+1];
-		}
-		if (opt_debug)
-			applog(LOG_WARNING, "Found %d nonces: %x + %x", rescnt, h_resNonces[thr_id][1], result);
+
+	/* The kernel stores candidates in DISCOVERY order -- whichever thread won
+	 * its atomicAdd first -- not sorted. Indexing that directly meant
+	 * _suppl(.., 1) returned "the second one stored", which can be the very
+	 * nonce cuda_check_hash() already returned as the lowest: the caller then
+	 * submits a duplicate (the hashlog catches it) and the REAL second
+	 * candidate is never submitted at all. Measured on a live pool before this
+	 * fix: 4 duplicate submits across 38 multi-candidate batches.
+	 *
+	 * Sorting makes index k mean "the k-th LOWEST", so index 0 agrees with
+	 * cuda_check_hash()'s atomicMin by construction and index 1 is a genuinely
+	 * different, genuinely next candidate.
+	 *
+	 * Only the retained slots can be sorted. With more than CHECKHASH_NONCES
+	 * candidates in one batch the kernel has already dropped some, so this is
+	 * the k-th lowest of those KEPT; callers use cuda_check_hash_count() to see
+	 * that case and resume conservatively rather than skipping the remainder. */
+	uint32_t stored = rescnt;
+	if (stored > CHECKHASH_NONCES)
+		stored = CHECKHASH_NONCES;
+
+	uint32_t sorted[CHECKHASH_NONCES];
+	for (uint32_t i = 0; i < stored; i++)
+		sorted[i] = h_resNonces[thr_id][i + 1];
+	for (uint32_t i = 1; i < stored; i++) {           /* insertion sort, n <= 7 */
+		const uint32_t v = sorted[i];
+		uint32_t j = i;
+		while (j > 0 && sorted[j - 1] > v) { sorted[j] = sorted[j - 1]; j--; }
+		sorted[j] = v;
 	}
+
+	if (numNonce < stored)
+		result = sorted[numNonce];
+
+	if (opt_debug && rescnt > 1)
+		applog(LOG_WARNING, "Found %d nonces (%u kept), sorted: %x + %x",
+			rescnt, stored, sorted[0], stored > 1 ? sorted[1] : UINT32_MAX);
 
 	return result;
 }

@@ -289,6 +289,8 @@
     <ClCompile Include="algos\cryptonight\oaes_lib.cpp" />
     <ClCompile Include="algos\cryptonight\cryptolight-cpu.cpp" />
     <ClCompile Include="algos\cryptonight\cryptonight-cpu.cpp" />
+    <ClCompile Include="algos\mike\mike_hash.cpp" />
+    <ClCompile Include="algos\flex\flex_hash.cpp" />
     <ClCompile Include="algos\cryptonight\cpu\c_keccak.c" />
     <ClCompile Include="algos\equihash\blake2\blake2bx.cpp">
       <EnableEnhancedInstructionSet Condition="'$(Platform)'=='Win32'">StreamingSIMDExtensions</EnableEnhancedInstructionSet>
@@ -391,6 +393,8 @@
     <CudaCompile Include="algos\hoohash\hoohash.cu" />
     <CudaCompile Include="algos\evohash\evohash.cu" />
     <CudaCompile Include="algos\ghostrider\ghostrider.cu" />
+    <CudaCompile Include="algos\mike\mike.cu" />
+    <CudaCompile Include="algos\flex\flex.cu" />
     <CudaCompile Include="algos\odocrypt\cuda_odocrypt.cu" />
     <CudaCompile Include="algos\blake2b\blake2b.cu" />
     <CudaCompile Include="algos\blake2b\cuda_blake2b_selftest.cu" />

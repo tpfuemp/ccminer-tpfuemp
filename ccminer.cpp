@@ -299,6 +299,7 @@ Options:\n\
 			evohash		EvoAI\n\
 			evrprogpow	EvrProgPow (Evrmore)\n\
 			firopow		FiroPoW (Firo, StakeCube)\n\
+			flex		Flex (Kylacoin, Lyncoin)\n\
 			fresh		Freshcoin (shavite 80)\n\
 			fugue256	Fuguecoin\n\
 			ghostrider	GhostRider (Raptoreum)\n\
@@ -324,7 +325,8 @@ Options:\n\
 			lyra2z		ZeroCoin (3rd impl)\n\
 			lyra2z330	Lyra2Z330\n\
 			meowpow		MeowPow (Meowcoin)\n\
-			meraki		Meraki (Telestai)\n"
+			meraki		Meraki (Telestai)\n\
+			mike		Mike (VKAX, FortuneBlock)\n"
 #ifdef WITH_HEAVY_ALGO
 "			mjollnir	Mjollnircoin (Hefty)\n"
 #endif
@@ -1842,6 +1844,10 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 			SHA256((uchar*)sctx->job.coinbase, sctx->job.coinbase_size, (uchar*)merkle_root);
 			break;
 		case ALGO_SHA3D:
+		case ALGO_FLEX:
+			// flex's merkle leaf is sha3d (double SHA3-256, 0x06 padding) over
+			// the coinbase; the branch loop below then uses sha256d, exactly as
+			// the Kylacoin reference does.
 			sha3d(merkle_root, sctx->job.coinbase, (int)sctx->job.coinbase_size);
 			break;
 		case ALGO_GOSTCOIN:
@@ -2094,8 +2100,12 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 			work_set_target(work, sctx->job.diff / opt_difficulty);
 			break;
 		case ALGO_GHOSTRIDER:
+		case ALGO_MIKE:
 			// GhostRider/Raptoreum: hash difficulty carries a 2^16 factor
 			// (cpuminer-opt opt_target_factor = 65536). Verify on live pool.
+			// mike (VKAX/FortuneBlock) shares it: VKAX's powLimit is
+			// byte-identical to Raptoreum's, and the CPU port confirmed the
+			// convention live at two stratum difficulties.
 			work_set_target(work, sctx->job.diff / (65536.0 * opt_difficulty));
 			break;
 		case ALGO_KECCAK:
@@ -3117,6 +3127,12 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_GHOSTRIDER:
 			rc = scanhash_ghostrider(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_MIKE:
+			rc = scanhash_mike(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_FLEX:
+			rc = scanhash_flex(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_SHA3T:
 			rc = scanhash_sha3t(thr_id, &work, max_nonce, &hashes_done);

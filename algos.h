@@ -119,6 +119,8 @@ enum sha_algos {
 	ALGO_YESPOWERR16,
 	ALGO_POWER2B,
 	ALGO_YESPOWEREQPAY,
+	ALGO_MIKE,
+	ALGO_FLEX,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -256,6 +258,8 @@ static const char *algo_names[] = {
 	"yespowerr16",
 	"power2b",
 	"yespowereqpay",
+	"mike",
+	"flex",
 	"auto", /* reserved for multi algo */
 	""
 };
