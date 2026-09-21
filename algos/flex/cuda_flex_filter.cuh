@@ -20,8 +20,13 @@
  *  - Round 0 must run shared 80-byte stages over the whole scan span, because
  *    those derive nonce = startNounce + thread and cannot take a scattered set.
  *
- * DISABLED by default: it fails the host re-verify in live mining. See the
- * project notes before re-enabling.
+ * Enabled by default; FLEX_NONCE_FILTER=0 takes the plain path.
+ *
+ * The caller must upload the header (flex_seed_setBlock_80) BEFORE running
+ * this kernel. The admitted core[0] set below is a precondition the pipeline's
+ * round 0 relies on to run four stages instead of fourteen, so a selection
+ * made under a different header is not merely suboptimal -- those lanes never
+ * get a round-0 stage. flex_pipeline_run() checks this and refuses the batch.
  */
 
 #ifndef CUDA_FLEX_FILTER_CUH
@@ -45,11 +50,43 @@
  * arithmetic minimum; raising it trades speedup for a shorter scan span. */
 #define FLEX_FILTER_MAX_UNITS 4u
 
-/* Scan span per chained lane, from the measured acceptance 0.0372. The margin
- * covers the binomial spread: at T = 8192 the expected yield is 8192 with
- * sd ~90, so a 15% margin is ~13 sigma. A SHORT batch is legal (the pipeline
- * already trims), a long one is what the kernel's bound prevents. */
-#define FLEX_FILTER_SPAN_PER_LANE 31u
+/* Acceptance: P(core[0] admitted AND the CN triple totals <= MAX_UNITS). A
+ * property of the nibble reductions over a uniform hash, so it is the same on
+ * every card and every toolkit -- NOT arch- or memory-dependent.
+ *
+ * Only a seed: scanhash re-estimates it from the observed yield each batch, so
+ * changing FLEX_FILTER_CORE_MASK or FLEX_FILTER_MAX_UNITS cannot leave a stale
+ * constant behind. Re-measure it from the TRUE yield, never from the clamped
+ * one -- yield/span after the host clamp is just the clamp over the span. */
+#define FLEX_FILTER_ACCEPT_SEED 0.03732
+
+/* Sigma of binomial margin to carry on the yield. Under-yield costs lanes
+ * directly; over-scan costs round-0 work linearly (the span is walked in
+ * T-sized chunks at 4 stages each, so it is the dominant filtered-path
+ * overhead, not the filter kernel). The asymmetry favours a generous k. */
+#define FLEX_FILTER_SIGMA 5.0
+
+/* Scan span needed to yield `lanes` accepted nonces at acceptance `accept`.
+ *
+ * The yield is Binomial(span, accept); require it >= lanes with k sigma of
+ * headroom. With y = span*accept, solving y - k*sqrt(y) = lanes gives
+ * sqrt(y) = (k + sqrt(k^2 + 4*lanes)) / 2.
+ *
+ * A fixed nonces-per-lane constant cannot serve both ends of the lane range,
+ * because the margin is statistical and shrinks as sqrt(lanes): it over-scans
+ * on a big card and under-yields on a small one. Lane count is sized from free
+ * VRAM, so that is the indirect memory dependence. */
+static inline uint32_t flex_filter_span(uint32_t lanes, double accept)
+{
+	if (!(accept > 1e-4)) accept = 1e-4;     /* also catches NaN */
+	if (accept > 1.0) accept = 1.0;
+	const double k = FLEX_FILTER_SIGMA;
+	const double r = (k + sqrt(k * k + 4.0 * (double)lanes)) * 0.5;
+	double span = (r * r) / accept;
+	if (span > 268435456.0) span = 268435456.0;   /* 1<<28, keeps the cursor sane */
+	if (span < (double)lanes) span = (double)lanes;
+	return (uint32_t)(span + 0.5);
+}
 
 /* Fold one 32-bit seed word's eight nibbles into the running "first three
  * distinct CN variants" state.

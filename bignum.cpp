@@ -95,6 +95,9 @@ extern "C" void bn_set_target_ratio(struct work* work, uint32_t* hash, int nonce
 // compat (only store single nonce share diff per work)
 extern "C" void work_set_target_ratio(struct work* work, uint32_t* hash)
 {
-	bn_store_hash_target_ratio(hash, work->target, work, work->submit_nonce_id);
+	/* Slot 0: every caller passes its FIRST candidate here and uses
+	 * bn_set_target_ratio() for the rest. Must not index on submit_nonce_id,
+	 * which the submit loop owns and which is unrelated to this candidate. */
+	bn_store_hash_target_ratio(hash, work->target, work, 0);
 }
 

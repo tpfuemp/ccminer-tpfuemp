@@ -29,6 +29,8 @@
 #include "algos/flex/flex.h"
 #include "algos/flex/cuda_flex_sha3.cuh"
 #include "algos/flex/cuda_flex_order.cuh"
+/* for FLEX_FILTER_CORE_MASK: round 0 of the filtered path depends on it */
+#include "algos/flex/cuda_flex_filter.cuh"
 #include "algos/flex/flex_schedule.h"
 
 #ifdef __CUDACC__
@@ -206,6 +208,11 @@ struct flex_ctx {
 	uint32_t *d_nonces;       /* [threads] accepted nonces, unordered */
 	uint32_t *d_count;        /* filter yield; may EXCEED threads (saturated) */
 	uint32_t *h_nonces;       /* host copy: maps a screen's lane index -> nonce */
+	/* Running estimate of the filter's acceptance, re-fitted from the TRUE
+	 * yield each batch. Seeded from a measurement but not trusting it: this is
+	 * what keeps the span correct if the admitted set or the unit threshold
+	 * ever changes, instead of leaving a stale constant nobody re-measures. */
+	double    accept_est;
 };
 
 static bool flex_pipeline_init(flex_ctx *c, int thr_id, uint32_t threads, size_t scratch_bytes)
@@ -226,6 +233,7 @@ static bool flex_pipeline_init(flex_ctx *c, int thr_id, uint32_t threads, size_t
 	c->h_nonces = (uint32_t*)malloc(sizeof(uint32_t) * threads);
 	if (!c->h_nonces) return false;
 	c->span = 0;
+	c->accept_est = FLEX_FILTER_ACCEPT_SEED;
 	if (cudaMalloc(&c->d_long_state, st) != cudaSuccess) return false;
 	if (cudaMalloc(&c->d_ctx_state, (size_t)26 * sizeof(uint64_t) * threads) != cudaSuccess) return false;
 	if (cudaMalloc(&c->d_ctx_a,    (size_t)4 * sizeof(uint32_t) * threads) != cudaSuccess) return false;
@@ -533,6 +541,23 @@ static void flex_pipeline_run(flex_ctx *c, int thr_id, uint32_t *endiandata,
 		 * which is what keeps the overhead near 5% instead of 18%. */
 		static const uint32_t f_algos[4] =
 			{ FLEX_SKEIN, FLEX_LUFFA, FLEX_HAMSI, FLEX_FUGUE };
+
+		/* Running four stages instead of fourteen is an OPTIMISATION resting on
+		 * a precondition, so check it rather than assume it: a lane whose
+		 * core[0] is not admitted never gets a round-0 stage and is hashed
+		 * wrong -- silently, because a wrong lane just fails the target screen.
+		 * It cost a live regression once (the filter ran before the header was
+		 * uploaded, so it selected on the previous job: 375 of 512 lanes). */
+		uint32_t unadmitted = 0;
+		for (uint32_t t = 0; t < L; t++)
+			if (!((FLEX_FILTER_CORE_MASK >> c->h_core[t]) & 1u)) unadmitted++;
+		if (unadmitted) {
+			applog(LOG_ERR, "flex: %u of %u filtered lanes have an unadmitted core[0] -- "
+			       "the filter and the chain disagree on the header", unadmitted, L);
+			c->lanes = 0;
+			return;
+		}
+
 		const uint32_t span = c->span;
 		for (uint32_t base = 0; base < span; base += T) {
 			const uint32_t chunk = (span - base < T) ? (span - base) : T;

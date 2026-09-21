@@ -569,9 +569,10 @@ bool rpc2_stratum_submit(struct pool_infos *pool, struct work *work)
 		return false; // prevent bad hashes
 	hashhex = bin2hex((unsigned char*)hash, 32);
 
+	const uint32_t sub_id = submit_id_next();
 	snprintf(s, sizeof(s), "{\"method\":\"submit\",\"params\":"
 		"{\"id\":\"%s\",\"job_id\":\"%s\",\"nonce\":\"%s\",\"result\":\"%s\"}, \"id\":%u}",
-		rpc2_id, work->job_id, noncestr, hashhex, stratum.job.shares_count + 10);
+		rpc2_id, work->job_id, noncestr, hashhex, sub_id);
 
 	free(hashhex);
 	free(noncestr);
@@ -585,6 +586,7 @@ bool rpc2_stratum_submit(struct pool_infos *pool, struct work *work)
 
 	//stratum.sharediff = target_to_diff_rpc2((uint32_t*)hash);
 	stratum.sharediff = work->sharediff[idnonce];
+	submit_id_remember(sub_id, stratum.sharediff);
 
 	return true;
 }

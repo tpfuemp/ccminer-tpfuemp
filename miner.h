@@ -831,7 +831,17 @@ struct tx {
 	uint32_t len;
 };
 
-#define MAX_NONCES 2
+/* Nonce slots one scanhash return can carry. 7 matches CHECKHASH_NONCES, the
+ * device screen's retention, so the host can take every candidate it kept.
+ *
+ * Carrying fewer loses no shares -- a driver resumes just above the highest
+ * nonce it returned, so the rest are re-found next pass -- but it re-hashes
+ * that part of the batch.
+ *
+ * Raising this alone is inert: a driver must also fill the slots and relax its
+ * resume threshold. The submit path in ccminer.cpp loops to MAX_NONCES.
+ */
+#define MAX_NONCES 7
 struct work {
 	uint32_t data[48];
 	uint32_t target[8];
@@ -962,6 +972,11 @@ json_t * json_rpc_longpoll(CURL *curl, char *lp_url, struct pool_infos*,
 
 bool stratum_socket_full(struct stratum_ctx *sctx, int timeout);
 bool stratum_send_line(struct stratum_ctx *sctx, char *s);
+/* Monotonic JSON-RPC id for a mining.submit, plus the difficulty it carried.
+ * Every submit path must use both: an id built any other way is not in the
+ * ring and reads back as another share's difficulty. */
+uint32_t submit_id_next(void);
+void submit_id_remember(uint32_t id, double diff);
 char *stratum_recv_line(struct stratum_ctx *sctx);
 bool stratum_connect(struct stratum_ctx *sctx, const char *url);
 void stratum_disconnect(struct stratum_ctx *sctx);

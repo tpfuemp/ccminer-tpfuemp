@@ -267,10 +267,10 @@ bool equi_stratum_submit(struct pool_infos *pool, struct work *work)
 	jobid = work->job_id + 8;
 	sprintf(timehex, "%08x", swab32(work->data[25]));
 
+	const uint32_t sub_id = submit_id_next();
 	snprintf(s, sizeof(s), "{\"method\":\"mining.submit\",\"params\":"
 		"[\"%s\",\"%s\",\"%s\",\"%s\",\"%s\"], \"id\":%u}",
-		pool->user, jobid, timehex, noncestr, solhex,
-		stratum.job.shares_count + 10);
+		pool->user, jobid, timehex, noncestr, solhex, sub_id);
 
 	free(solhex);
 	free(noncestr);
@@ -283,6 +283,7 @@ bool equi_stratum_submit(struct pool_infos *pool, struct work *work)
 	}
 
 	stratum.sharediff = work->sharediff[idnonce];
+	submit_id_remember(sub_id, stratum.sharediff);
 	stratum.job.shares_count++;
 
 	return true;

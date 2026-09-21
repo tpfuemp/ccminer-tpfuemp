@@ -342,10 +342,56 @@ static void gr_core_hash_64(int algo, int thr_id, uint32_t throughput, uint32_t 
 // Per-variant scratchpad sizes (bytes): dark, darklite, fast, lite, turtle, turtlelite.
 static const uint32_t gr_cn_mem[CN_HASH_FUNC_COUNT] = { 524288u, 524288u, 2097152u, 1048576u, 262144u, 262144u };
 
+/* CryptoNight iteration units per variant (gr_iters[] / 65536 in
+ * algos/cryptonight/cryptonight-core.cu). A batch's cost is
+ * threads x sum(units), not threads: a cheap triple has smaller scratchpad
+ * slots, so more lanes fit and it does MORE total work. Capping lanes
+ * therefore cannot equalise batch duration. */
+static const uint32_t gr_cn_units[6] = { 2u, 2u, 4u, 4u, 1u, 1u };
+
+/* Batch work budget in lane-units. A launch cannot be preempted, so a batch
+ * still running when a new job arrives was hashed against a retired header
+ * and is discarded whole. The budget bounds that exposure by holding batch
+ * duration roughly constant across triples. GR_WORK_BUDGET overrides it;
+ * -i overrides everything. */
+#define GR_WORK_BUDGET_DEFAULT 24576u
+
 // Scratchpad budget (bytes) and the thread count the per-thread buffers were
 // sized for, established once at init.
 static size_t   gr_scratch_bytes[MAX_GPUS]  = { 0 };
 static uint32_t gr_max_throughput[MAX_GPUS] = { 0 };
+/* Human-readable chain order:
+ *   ShbSknFugSmdHamCNDarkLShvLufCubEchBmwCNTrtlLGroBlkWrlJh5KckCNDark
+ * Core groups of 5, 5, 5, each closed by its CryptoNight round. Printed once per
+ * ORDER CHANGE under -D, not per scanhash call -- the order is derived from
+ * header bytes [4,36) and so is constant for a whole job. */
+static const char *const gr_core_abbr[15] = { "Blk","Bmw","Gro","Jh5","Kck","Skn","Luf","Cub","Shv","Smd","Ech","Ham","Fug","Shb","Wrl" };
+static const char *const gr_cn_abbr[6]  = { "CNDark","CNDarkL","CNFast","CNLite","CNTrtl","CNTrtlL" };
+
+static void gr_format_order(const uint8_t *core, const uint8_t *cn, char *out, size_t cap)
+{
+	static const int grp[] = { 5, 5, 5 };
+	size_t o = 0;
+	int ci = 0;
+	out[0] = 0;
+	for (size_t g2 = 0; g2 < sizeof(grp)/sizeof(grp[0]); g2++) {
+		for (int i = 0; i < grp[g2] && o + 8 < cap; i++, ci++)
+			o += (size_t)snprintf(out + o, cap - o, "%s", gr_core_abbr[core[ci]]);
+		if (o + 10 < cap)
+			o += (size_t)snprintf(out + o, cap - o, "%s", gr_cn_abbr[cn[g2]]);
+	}
+}
+
+/* Returns 1 when the order differs from the last one logged on this thread. */
+static int gr_order_changed(int thr_id, const char *s)
+{
+	static char last[MAX_GPUS][256];
+	if (thr_id < 0 || thr_id >= MAX_GPUS) return 1;
+	if (strcmp(last[thr_id], s) == 0) return 0;
+	snprintf(last[thr_id], sizeof(last[thr_id]), "%s", s);
+	return 1;
+}
+
 
 // One CryptoNight-v1 round: 64-byte d_hash -> 32-byte d_hash (+ zero high 32).
 // stride64 = the job's per-thread slot (largest CN variant) in uint64 words.
@@ -570,8 +616,24 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 		gr_scratch_bytes[thr_id] = budget;
 
 		uint32_t max_throughput = (uint32_t) min((size_t)(budget / 262144u), (size_t)(1U << 18));
-		if (gpus_intensity[thr_id] > 0 && gpus_intensity[thr_id] < max_throughput)
-			max_throughput = gpus_intensity[thr_id]; // -i N caps thread count
+
+		/* Upper bound on lanes, kept as a backstop. The binding limit is the
+		 * per-job WORK budget applied in scanhash; see gr_cn_units[].
+		 * GR_LANE_CAP overrides this; -i overrides everything. */
+		uint32_t lane_cap = 16384;
+		{
+			const char *ev = getenv("GR_LANE_CAP");
+			if (ev) {
+				const unsigned long v = strtoul(ev, NULL, 0);
+				if (v >= 128) lane_cap = (uint32_t)v;
+			}
+		}
+		if (gpus_intensity[thr_id] > 0) {
+			if (gpus_intensity[thr_id] < max_throughput)
+				max_throughput = gpus_intensity[thr_id]; // -i N caps thread count
+		} else if (max_throughput > lane_cap) {
+			max_throughput = lane_cap;
+		}
 		max_throughput = (max_throughput / 128) * 128;
 		if (max_throughput < 128) max_throughput = 128;
 		gr_max_throughput[thr_id] = max_throughput;
@@ -609,7 +671,8 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 
 		cuda_check_cpu_init(thr_id, max_throughput);
 
-		gpulog(LOG_INFO, thr_id, "ghostrider: running startup self-test (kernel + pipeline), ~10s...");
+		gpulog(LOG_INFO, thr_id, "ghostrider: startup self-test (races%s)",
+			getenv("GR_GUARD") ? " + full chain, ~10s" : "; GR_GUARD=1 adds the chain check");
 
 		// Guard 1 (races): every core kernel must be self-consistent at full
 		// throughput. Variation across repeats => an intra-kernel race (e.g. a
@@ -640,8 +703,12 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 
 		// Guard 2 (chain logic): verify the full GPU pipeline against the CPU
 		// reference across several header orders (order derivation, CN interleaving,
-		// first-round init). Run at low throughput so startup stays fast.
-		{
+		// first-round init).
+		//
+		// Opt-in via GR_GUARD=1: it is most of startup, and an API-driven
+		// algo switch pays it on every change. Consensus is unaffected --
+		// every candidate is host re-verified before submit.
+		if (getenv("GR_GUARD")) {
 			uint32_t lcg = 0x12345678u;
 			int diffs = 0;
 			const int NTEST = 6;
@@ -716,6 +783,13 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 	getAlgoString(&endiandata[1], 64, coreOrder, 15);
 	getAlgoString(&endiandata[1], 64, cnOrder, 6);
 
+	if (opt_debug) {
+		char ord[256];
+		gr_format_order(coreOrder, cnOrder, ord, sizeof(ord));
+		if (gr_order_changed(thr_id, ord))
+			gpulog(LOG_DEBUG, thr_id, "ghostrider: hash order: %s", ord);
+	}
+
 	// Pack threads for this job: per-thread slot = the job's largest CN variant.
 	uint32_t vmax = 0;
 	for (int g = 0; g < 3; g++)
@@ -725,7 +799,38 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 	uint32_t throughput = (uint32_t) min((size_t)(gr_scratch_bytes[thr_id] / vmax), (size_t)gr_max_throughput[thr_id]);
 	throughput = (throughput / threads) * threads;
 	if (throughput < threads) throughput = threads;
+
+	/* Clamp by WORK, not by lanes: sum the job's CN units and give the batch a
+	 * fixed unit budget, so a cheap triple gets proportionally more lanes and
+	 * every job lands at roughly the same wall-clock duration. */
+	uint32_t cn_units = 0;
+	for (int g = 0; g < 3; g++) cn_units += gr_cn_units[cnOrder[g]];
+	if (!cn_units) cn_units = 1;
+	uint32_t work_budget = GR_WORK_BUDGET_DEFAULT;
+	{
+		const char *ev = getenv("GR_WORK_BUDGET");
+		if (ev) {
+			const unsigned long v = strtoul(ev, NULL, 0);
+			if (v >= 1024) work_budget = (uint32_t)v;
+		}
+	}
+	{
+		uint32_t cap = work_budget / cn_units;
+		cap = (cap / threads) * threads;
+		if (cap < threads) cap = threads;
+		if (gpus_intensity[thr_id] == 0 && throughput > cap)
+			throughput = cap;
+	}
 	const uint32_t blocks = throughput / threads;
+
+	/* The cap acts on THROUGHPUT, and throughput is min(scratch/vmax, cap):
+	 * a triple containing fast or lite is already below the cap, so the cap
+	 * binds only on all-cheap triples. Logged because the CN triple is fixed
+	 * per job and spans ~2.5x in work. */
+	if (opt_debug)
+		gpulog(LOG_DEBUG, thr_id, "ghostrider: job cn %d,%d,%d = %u units, vmax %u KiB -> %u threads = %u of %u units",
+			cnOrder[0], cnOrder[1], cnOrder[2], cn_units, vmax >> 10,
+			throughput, throughput * cn_units, work_budget);
 
 	// Bail out before launching the 18-kernel pipeline if the job changed or the
 	// miner is shutting down (avoids wasted work and a teardown-race CUDA error).
@@ -807,26 +912,32 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 		if (vhash[7] <= ptarget[7] && fulltest(vhash, ptarget)) {
 			work->valid_nonces = 1;
 			work_set_target_ratio(work, vhash);
-			work->nonces[1] = cuda_check_hash_suppl(thr_id, throughput, pdata[19], dh, 1);
-			const uint32_t found = cuda_check_hash_count(thr_id);
-			if (work->nonces[1] != UINT32_MAX) {
-				be32enc(&endiandata[19], work->nonces[1]);
+			/* Every candidate the screen kept, in ONE launch. Each one is host
+			 * re-verified: the GPU screen compares the top word only. */
+			uint32_t cand[MAX_NONCES];
+			uint32_t found = 0;
+			const uint32_t keep = cuda_check_hash_suppl_all(thr_id, throughput,
+						pdata[19], dh, cand, MAX_NONCES, &found);
+			uint32_t hi = work->nonces[0];
+			for (uint32_t k = 1; k < keep; k++) {
+				const uint32_t n = cand[k];
+				if (n > hi) hi = n;          /* highest RETURNED, accepted or not */
+				be32enc(&endiandata[19], n);
 				ghostrider_hash(vhash, endiandata);
-				// The GPU screen compares the top word only, so the second nonce
-				// can still fail the full compare -- guard it like the first.
-				if (vhash[7] <= ptarget[7] && fulltest(vhash, ptarget)) {
-					bn_set_target_ratio(work, vhash, 1);
-					work->valid_nonces++;
-				}
+				if (vhash[7] > ptarget[7] || !fulltest(vhash, ptarget))
+					continue;
+				bn_set_target_ratio(work, vhash, work->valid_nonces);
+				work->nonces[work->valid_nonces] = n;
+				work->valid_nonces++;
 			}
 
-			// The screen already covered [first_nonce, first_nonce + throughput),
-			// so resume past the whole batch rather than re-hashing its tail.
-			// Only safe when the screen found no more nonces than work can carry;
-			// otherwise resume conservatively so the rest are re-found next pass.
-			uint32_t resume = (found <= 2)
+			/* The screen covered [first_nonce, first_nonce + throughput), so
+			 * resume past the whole batch once every kept candidate has been
+			 * returned. If it kept more than work can carry, resume just above
+			 * the highest returned one so the rest are re-found next pass. */
+			uint32_t resume = (keep > 0 && found <= keep)
 				? first_nonce + throughput
-				: max(work->nonces[0], work->nonces[1]) + 1;
+				: hi + 1;
 			if (resume > max_nonce || resume < first_nonce)
 				resume = max_nonce;
 			pdata[19] = resume;

@@ -209,21 +209,20 @@ void cuda_checkhash_64_suppl(uint32_t threads, uint32_t startNounce, uint32_t *h
 	}
 }
 
-__host__
-uint32_t cuda_check_hash_suppl(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_inputHash, uint8_t numNonce)
+/* Runs the supplementary screen ONCE and hands back the candidates it kept,
+ * sorted ascending. Shared by both public entry points. */
+static uint32_t checkhash_suppl_collect(int thr_id, uint32_t threads, uint32_t startNounce,
+	uint32_t *d_inputHash, uint32_t *sorted, uint32_t *pstored)
 {
-	/* UINT32_MAX = "no further candidate", matching cuda_check_hash().
-	 * 0 cannot serve: it is a legal nonce, and returning it here made a
-	 * candidate at nonce 0 indistinguishable from none. */
-	uint32_t rescnt, result = UINT32_MAX;
-
 	const uint32_t threadsperblock = 512;
 	dim3 grid((threads + threadsperblock - 1) / threadsperblock);
 	dim3 block(threadsperblock);
 
+	*pstored = 0;
+
 	if (!init_done) {
 		applog(LOG_ERR, "missing call to cuda_check_cpu_init");
-		return UINT32_MAX;
+		return 0;
 	}
 
 	// first element stores the count of found nonces
@@ -233,7 +232,7 @@ uint32_t cuda_check_hash_suppl(int thr_id, uint32_t threads, uint32_t startNounc
 	cudaDeviceSynchronize();
 
 	cudaMemcpy(h_resNonces[thr_id], d_resNonces[thr_id], CHECKHASH_BYTES, cudaMemcpyDeviceToHost);
-	rescnt = h_resNonces[thr_id][0];
+	const uint32_t rescnt = h_resNonces[thr_id][0];
 
 	/* The kernel stores candidates in DISCOVERY order -- whichever thread won
 	 * its atomicAdd first -- not sorted. Indexing that directly meant
@@ -249,13 +248,12 @@ uint32_t cuda_check_hash_suppl(int thr_id, uint32_t threads, uint32_t startNounc
 	 *
 	 * Only the retained slots can be sorted. With more than CHECKHASH_NONCES
 	 * candidates in one batch the kernel has already dropped some, so this is
-	 * the k-th lowest of those KEPT; callers use cuda_check_hash_count() to see
-	 * that case and resume conservatively rather than skipping the remainder. */
+	 * the k-th lowest of those KEPT; callers read the total to see that case
+	 * and resume conservatively rather than skipping the remainder. */
 	uint32_t stored = rescnt;
 	if (stored > CHECKHASH_NONCES)
 		stored = CHECKHASH_NONCES;
 
-	uint32_t sorted[CHECKHASH_NONCES];
 	for (uint32_t i = 0; i < stored; i++)
 		sorted[i] = h_resNonces[thr_id][i + 1];
 	for (uint32_t i = 1; i < stored; i++) {           /* insertion sort, n <= 7 */
@@ -265,14 +263,52 @@ uint32_t cuda_check_hash_suppl(int thr_id, uint32_t threads, uint32_t startNounc
 		sorted[j] = v;
 	}
 
-	if (numNonce < stored)
-		result = sorted[numNonce];
-
 	if (opt_debug && rescnt > 1)
-		applog(LOG_WARNING, "Found %d nonces (%u kept), sorted: %x + %x",
+		applog(LOG_WARNING, "Found %u nonces (%u kept), sorted: %x + %x",
 			rescnt, stored, sorted[0], stored > 1 ? sorted[1] : UINT32_MAX);
 
-	return result;
+	*pstored = stored;
+	return rescnt;
+}
+
+__host__
+uint32_t cuda_check_hash_suppl(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_inputHash, uint8_t numNonce)
+{
+	/* UINT32_MAX = "no further candidate", matching cuda_check_hash(). 0 cannot
+	 * serve as the sentinel: it is a legal nonce. */
+	uint32_t sorted[CHECKHASH_NONCES], stored = 0;
+
+	checkhash_suppl_collect(thr_id, threads, startNounce, d_inputHash, sorted, &stored);
+
+	return (numNonce < stored) ? sorted[numNonce] : UINT32_MAX;
+}
+
+/* Every candidate of the batch in one launch: writes up to max_out nonces to
+ * out[] in ascending order and returns how many it wrote. *total, if given,
+ * receives how many the batch FOUND -- larger than the written count when the
+ * device dropped candidates past CHECKHASH_NONCES, which tells the caller it
+ * must not skip the rest of the window.
+ *
+ * Prefer this over looping cuda_check_hash_suppl(): cuda_check_hash_count()
+ * means a COUNT only after a suppl call, but the lowest NONCE after
+ * cuda_check_hash(), so the loop form is easy to mis-order. */
+__host__
+uint32_t cuda_check_hash_suppl_all(int thr_id, uint32_t threads, uint32_t startNounce,
+	uint32_t *d_inputHash, uint32_t *out, uint32_t max_out, uint32_t *total)
+{
+	uint32_t sorted[CHECKHASH_NONCES], stored = 0;
+
+	const uint32_t rescnt = checkhash_suppl_collect(thr_id, threads, startNounce,
+							d_inputHash, sorted, &stored);
+	if (total)
+		*total = rescnt;
+
+	if (stored > max_out)
+		stored = max_out;
+	for (uint32_t i = 0; i < stored; i++)
+		out[i] = sorted[i];
+
+	return stored;
 }
 
 // Candidate count from the last cuda_check_hash_suppl() call. Lets a caller tell

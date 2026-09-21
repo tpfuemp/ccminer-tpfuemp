@@ -36,6 +36,8 @@ extern void cuda_check_cpu_setTarget(const void *ptarget);
 extern uint32_t cuda_check_hash(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_inputHash);
 extern uint32_t cuda_check_hash_suppl(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_inputHash, uint8_t numNonce);
 extern uint32_t cuda_check_hash_count(int thr_id);
+extern uint32_t cuda_check_hash_suppl_all(int thr_id, uint32_t threads, uint32_t startNounce,
+	uint32_t *d_inputHash, uint32_t *out, uint32_t max_out, uint32_t *total);
 extern cudaError_t MyStreamSynchronize(cudaStream_t stream, int situation, int thr_id);
 extern void cudaReportHardwareFailure(int thr_id, cudaError_t error, const char* func);
 extern __device__ __device_builtin__ void __syncthreads(void);

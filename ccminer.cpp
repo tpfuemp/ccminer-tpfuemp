@@ -218,6 +218,15 @@ double   stratum_diff = 0.0;
 double   net_diff = 0;
 uint64_t net_hashrate = 0;
 uint64_t net_blocks = 0;
+/* Stratum submit ids: monotonic, never restarting, each paired with the
+ * difficulty it was submitted with. The id must be unique for the whole
+ * session -- one that restarts per job lets a response arriving after a job
+ * change match the wrong share. It is only a JSON-RPC correlation token. */
+#define SUBMIT_RING 32
+static uint32_t submit_seq = 10;
+static struct { uint32_t id; double diff; } submit_ring[SUBMIT_RING] = { 0 };
+static uint32_t submit_ring_pos = 0;
+static pthread_mutex_t submit_id_lock;
 // conditional mining
 uint8_t conditional_state[MAX_GPUS] = { 0 };
 double opt_max_temp = 0.0;
@@ -1026,6 +1035,53 @@ int share_result(int result, int pooln, double sharediff, const char *reason)
 	return 1;
 }
 
+/* Allocate the next submit id; once per submitted share. Non-static because
+ * xmr-rpc.cpp and equi-stratum.cpp build their own mining.submit. */
+uint32_t submit_id_next(void)
+{
+	uint32_t id;
+	pthread_mutex_lock(&submit_id_lock);
+	id = submit_seq++;
+	pthread_mutex_unlock(&submit_id_lock);
+	return id;
+}
+
+/* Remember the difficulty this id carried; the work is gone by response time. */
+void submit_id_remember(uint32_t id, double diff)
+{
+	pthread_mutex_lock(&submit_id_lock);
+	submit_ring[submit_ring_pos % SUBMIT_RING].id = id;
+	submit_ring[submit_ring_pos % SUBMIT_RING].diff = diff;
+	submit_ring_pos++;
+	pthread_mutex_unlock(&submit_id_lock);
+}
+
+/* Look an id up. Ids start at 10, so a zeroed slot never matches. A miss means
+ * the ring wrapped before the pool answered; the caller keeps its fallback. */
+static bool submit_id_lookup(uint32_t id, double *diff)
+{
+	bool hit = false;
+	pthread_mutex_lock(&submit_id_lock);
+	for (int i = 0; i < SUBMIT_RING; i++) {
+		if (submit_ring[i].id == id) {
+			*diff = submit_ring[i].diff;
+			hit = true;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&submit_id_lock);
+
+	if (!hit) {
+		static uint32_t misses = 0;
+		misses++;
+		if (opt_debug)
+			applog(LOG_DEBUG, "submit id %u not in ring (ring wrapped before "
+				"the pool answered); displayed diff is another share's -- "
+				"%u so far", id, misses);
+	}
+	return hit;
+}
+
 static bool submit_upstream_work(CURL *curl, struct work *work)
 {
 	char s[512];
@@ -1100,6 +1156,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 		uint32_t ntime, nonce = work->nonces[idnonce];
 		char *ntimestr, *noncestr, *xnonce2str, *nvotestr;
 		uint16_t nvote = 0;
+		const uint32_t sub_id = submit_id_next();
 
 		// KawPoW-family: ethproxy mining.submit [worker, job_id, nonce(16hex),
 		// header_hash, mixhash]. nonce is the full 64-bit value (big-endian hex)
@@ -1113,10 +1170,11 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 			char *hhstr    = bin2hex(work->kawpow_header, 32);
 			char *mixstr   = bin2hex(work->kawpow_mix, 32);
 			stratum.sharediff = work->sharediff[idnonce];
+			submit_id_remember(sub_id, stratum.sharediff);
 			snprintf(s, sizeof(s), "{\"method\": \"mining.submit\", \"params\": ["
 				"\"%s\", \"%s\", \"0x%s\", \"0x%s\", \"0x%s\"], \"id\":%u}",
 				pool->user, work->job_id + 8, noncestr, hhstr, mixstr,
-				stratum.job.shares_count + 10);
+				sub_id);
 			free(noncestr); free(hhstr); free(mixstr);
 			gettimeofday(&stratum.tv_submit, NULL);
 			if (unlikely(!stratum_send_line(&stratum, s))) {
@@ -1137,9 +1195,10 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 			char *histr  = bin2hex((const uchar*)&v_hi, 4);
 			char *lostr  = bin2hex((const uchar*)&v_lo, 4);
 			stratum.sharediff = work->sharediff[idnonce];
+			submit_id_remember(sub_id, stratum.sharediff);
 			sprintf(s, "{\"method\": \"mining.submit\", \"params\": ["
 				"\"%s\", \"%s\", \"%s\", \"%s\", \"%s\"], \"id\":%u}",
-				pool->user, work->job_id + 8, histr, ntimes, lostr, stratum.job.shares_count + 10);
+				pool->user, work->job_id + 8, histr, ntimes, lostr, sub_id);
 			free(ntimes); free(histr); free(lostr);
 			gettimeofday(&stratum.tv_submit, NULL);
 			if (unlikely(!stratum_send_line(&stratum, s))) {
@@ -1252,6 +1311,7 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 
 		// store to keep/display the solved ratio/diff
 		stratum.sharediff = work->sharediff[idnonce];
+		submit_id_remember(sub_id, stratum.sharediff);
 
 		if (net_diff && stratum.sharediff > net_diff && (opt_debug || opt_debug_diff))
 			applog(LOG_INFO, "share diff: %.5f, possible block found!!!",
@@ -1264,12 +1324,12 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 			nvotestr = bin2hex((const uchar*)(&nvote), 2);
 			sprintf(s, "{\"method\": \"mining.submit\", \"params\": ["
 					"\"%s\", \"%s\", \"%s\", \"%s\", \"%s\", \"%s\"], \"id\":%u}",
-					pool->user, work->job_id + 8, xnonce2str, ntimestr, noncestr, nvotestr, stratum.job.shares_count + 10);
+					pool->user, work->job_id + 8, xnonce2str, ntimestr, noncestr, nvotestr, sub_id);
 			free(nvotestr);
 		} else {
 			sprintf(s, "{\"method\": \"mining.submit\", \"params\": ["
 					"\"%s\", \"%s\", \"%s\", \"%s\", \"%s\"], \"id\":%u}",
-					pool->user, work->job_id + 8, xnonce2str, ntimestr, noncestr, stratum.job.shares_count + 10);
+					pool->user, work->job_id + 8, xnonce2str, ntimestr, noncestr, sub_id);
 		}
 		free(xnonce2str);
 		free(ntimestr);
@@ -3334,18 +3394,31 @@ static void *miner_thread(void *userdata)
 				continue;
 			}
 
-			// second nonce found, submit too (on pool only!)
-			if (rc > 1 && work.nonces[1]) {
-				work.submit_nonce_id = 1;
-				nonceptr[0] = work.nonces[1];
+			// further nonces found, submit them too (on pool only!)
+			// The scan cursor moves past this window, so a candidate not
+			// submitted here is lost for good.
+			if (rc > 1) {
+				bool submit_failed = false;
 				if (opt_algo == ALGO_ZR5) {
-					work.data[0] = work.data[22]; // pok
+					// pok swap, once for the whole tail: repeating it per nonce
+					// would read back the data[22] the first pass zeroed.
+					work.data[0] = work.data[22];
 					work.data[22] = 0;
 				}
-				if (!submit_work(mythr, &work))
+				for (int sn = 1; sn < rc && sn < MAX_NONCES; sn++) {
+					// 0 and UINT32_MAX are both "no nonce here" in the tree's
+					// conventions, and 0 is ALSO a legal nonce -- skipping it is
+					// the pre-existing behaviour, not a new loss.
+					if (!work.nonces[sn] || work.nonces[sn] == UINT32_MAX)
+						continue;
+					work.submit_nonce_id = (uint8_t)sn;
+					nonceptr[0] = work.nonces[sn];
+					if (!submit_work(mythr, &work)) { submit_failed = true; break; }
+					nonceptr[0] = curnonce;
+					work.nonces[sn] = 0; // reset
+				}
+				if (submit_failed)
 					break;
-				nonceptr[0] = curnonce;
-				work.nonces[1] = 0; // reset
 			}
 		}
 	}
@@ -3516,7 +3589,7 @@ static bool stratum_handle_response(char *buf)
 	json_t *val, *err_val, *res_val, *id_val;
 	json_error_t err;
 	struct timeval tv_answer, diff;
-	int num = 0, job_nonce_id = 0;
+	int num = 0;
 	double sharediff = stratum.sharediff;
 	bool ret = false;
 
@@ -3538,10 +3611,10 @@ static bool stratum_handle_response(char *buf)
 	if (num < 4)
 		goto out;
 
-	// We dont have the work anymore, so use the hashlog to get the right sharediff for multiple nonces
-	job_nonce_id = num - 10;
-	if (opt_showdiff && check_dups)
-		sharediff = hashlog_get_sharediff(g_work.job_id, job_nonce_id, sharediff);
+	// The work is gone by now, so look the submit id up for this share's own
+	// difficulty. Must not be keyed on the job that is live now: a response can
+	// arrive after a job change.
+	submit_id_lookup((uint32_t)num, &sharediff);
 
 	gettimeofday(&tv_answer, NULL);
 	timeval_subtract(&diff, &tv_answer, &stratum.tv_submit);
@@ -4723,6 +4796,7 @@ int main(int argc, char *argv[])
 	pthread_mutex_init(&stratum_work_lock, NULL);
 	pthread_mutex_init(&stats_lock, NULL);
 	pthread_mutex_init(&g_work_lock, NULL);
+	pthread_mutex_init(&submit_id_lock, NULL);
 
 	// number of cpus for thread affinity
 #if defined(WIN32)

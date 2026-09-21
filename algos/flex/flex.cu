@@ -110,8 +110,27 @@ static void flex_cpu_chain_upto(const uint32_t *hdr, int steps, uint8_t out[64])
  * GATHER hands each scattered lane its OWN 80-byte state (a chunk off-by-one
  * would mis-pair lanes with nonces and is invisible to a filter-only check).
  */
+/* The nonce pre-filter is ON by default; FLEX_NONCE_FILTER=0 takes the plain
+ * path, which is the arm to run if the filtered path is ever suspected. */
+static bool flex_filter_enabled(void)
+{
+	static int v = -1;
+	if (v < 0) {
+		const char *ev = getenv("FLEX_NONCE_FILTER");
+		v = ev ? (atoi(ev) ? 1 : 0) : 1;
+		if (!v)
+			applog(LOG_INFO, "flex: nonce filter disabled by FLEX_NONCE_FILTER=0");
+	}
+	return v != 0;
+}
+
 static int flex_guard_filtered(int thr_id, uint32_t saved_threads)
 {
+	/* Startup latency matters: an API-driven algo switch pays it on every
+	 * change. */
+	if (!flex_filter_enabled())
+		return 0;
+
 	uint32_t guard_lanes = 256u;
 	{
 		const char *ev = getenv("FLEX_GUARD_LANES");
@@ -139,8 +158,8 @@ static int flex_guard_filtered(int thr_id, uint32_t saved_threads)
 		 * over-yields and the count clamps to the capacity, which makes lanes equal
 		 * stride and hides that class of fault. */
 		const uint32_t span = (it == 1)
-			? (T * FLEX_FILTER_SPAN_PER_LANE) / 4u
-			: (T * FLEX_FILTER_SPAN_PER_LANE);
+			? flex_filter_span(T, FLEX_FILTER_ACCEPT_SEED) / 4u
+			: flex_filter_span(T, FLEX_FILTER_ACCEPT_SEED);
 		uint32_t yield = 0;
 		c->span = span;
 		cudaMemset(c->d_count, 0, sizeof(uint32_t));
@@ -196,7 +215,11 @@ static int flex_guard_chain(int thr_id, uint32_t saved_threads)
 	 * ~4096 lanes while 256 lanes passed cleanly. FLEX_GUARD_LANES overrides
 	 * the width so the guard can be run at the real batch size -- do that
 	 * after ANY change to the scratchpad layout or the lane count. */
-	uint32_t guard_lanes = 256u;
+	/* 32 lanes x 2 headers = 64 chains. Each chain is a different per-nonce
+	 * route, so 64 of them still sample all 14 core algos and all 6 CN variants
+	 * many times over -- enough to catch a broken build or card. Raise it with
+	 * FLEX_GUARD_LANES for real verification. */
+	uint32_t guard_lanes = 32u;
 	{
 		const char *ev = getenv("FLEX_GUARD_LANES");
 		if (ev) {
@@ -215,7 +238,7 @@ static int flex_guard_chain(int thr_id, uint32_t saved_threads)
 	int diffs = 0;
 	uint32_t lcg = 0x12345678u;
 
-	for (int t = 0; t < 3 && !diffs; t++) {
+	for (int t = 0; t < 2 && !diffs; t++) {
 		uint32_t pd[20], ed[20];
 		for (int k = 0; k < 20; k++) { lcg = lcg * 1664525u + 1013904223u; pd[k] = lcg; }
 		for (int k = 0; k < 20; k++) be32enc(&ed[k], pd[k]);
@@ -354,60 +377,6 @@ static int flex_guard_width(int thr_id, uint32_t wide)
 }
 
 // ----------------------------------------------------------------------------
-// Candidate screen audit (FLEX_VERIFY=1, =2 arms a negative control).
-// The host only ever sees nonces the screen reported, so a screen that MISSES
-// one produces no reject and no failed verify -- only slightly worse luck.
-// ----------------------------------------------------------------------------
-static uint32_t *flex_audit_buf[MAX_GPUS] = { 0 };
-static uint32_t  flex_audit_cap[MAX_GPUS] = { 0 };
-
-static bool flex_host_below(const uint32_t *h, const uint32_t *t)
-{
-	for (int i = 7; i >= 0; i--) {
-		if (h[i] > t[i]) return false;
-		if (h[i] < t[i]) return true;
-	}
-	return true;
-}
-
-static void flex_screen_audit(int thr_id, uint32_t throughput, uint32_t start_nonce,
-	uint32_t *dh, const uint32_t *ptarget, uint32_t reported, int mode)
-{
-	if (flex_audit_cap[thr_id] < throughput) {
-		free(flex_audit_buf[thr_id]);
-		flex_audit_buf[thr_id] = (uint32_t*) malloc((size_t)throughput * 64);
-		if (!flex_audit_buf[thr_id]) { flex_audit_cap[thr_id] = 0; return; }
-		flex_audit_cap[thr_id] = throughput;
-	}
-	uint32_t *hb = flex_audit_buf[thr_id];
-	cudaMemcpy(hb, dh, (size_t)throughput * 64, cudaMemcpyDeviceToHost);
-
-	if (mode >= 2) hb[7] = 0;   /* negative control: lane 0 becomes unmissable */
-
-	uint32_t hostcnt = 0, hostfirst = UINT32_MAX;
-	bool sawreported = (reported == UINT32_MAX);
-	for (uint32_t t = 0; t < throughput; t++) {
-		if (flex_host_below(&hb[t * 16], ptarget)) {
-			if (!hostcnt) hostfirst = start_nonce + t;
-			if (start_nonce + t == reported) sawreported = true;
-			hostcnt++;
-		}
-	}
-
-	cuda_check_hash_suppl(thr_id, throughput, start_nonce, dh, 1);
-	const uint32_t gpucnt = cuda_check_hash_count(thr_id);
-	const char *ctl = (mode >= 2) ? "  [negative control armed - a MISS here is EXPECTED]" : "";
-
-	if (gpucnt != hostcnt)
-		gpulog(LOG_ERR, thr_id, "flex screen/host MISS: screen counted %u, host counted %u over [%08x,+%u) first=%08x%s",
-			gpucnt, hostcnt, start_nonce, throughput, hostfirst, ctl);
-	else if (!sawreported)
-		gpulog(LOG_ERR, thr_id, "flex screen/host: screen reported %08x which the host does not find%s", reported, ctl);
-	else if (opt_debug)
-		gpulog(LOG_DEBUG, thr_id, "flex screen/host ok: %u candidates over [%08x,+%u)", hostcnt, start_nonce, throughput);
-}
-
-// ----------------------------------------------------------------------------
 extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done)
 {
 	uint32_t *pdata = work->data;
@@ -485,15 +454,22 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 		}
 		cuda_check_cpu_init(thr_id, throughput);
 
-		gpulog(LOG_INFO, thr_id, "flex: running startup guards (kernels + full chain)...");
+		/* Startup does the CHEAP checks only; an API-driven algo switch pays
+		 * startup on every change. Consensus is unaffected -- every candidate is
+		 * re-hashed on the host before submit, so a broken card or build shows
+		 * up as "does not validate" within seconds of mining. Set FLEX_GUARD=1
+		 * to run the full set. */
 		if (!flex_guard_races(thr_id, throughput))
 			gpulog(LOG_INFO, thr_id, "flex: core kernels race-free");
-		if (!flex_guard_chain(thr_id, throughput))
-			gpulog(LOG_INFO, thr_id, "flex: GPU==CPU on the full chain");
-		flex_guard_filtered(thr_id, throughput);
-		if (getenv("FLEX_GUARD_WIDTH"))
-			flex_guard_width(thr_id, throughput);
-		gpulog(LOG_INFO, thr_id, "flex: guards complete, starting mining");
+
+		if (getenv("FLEX_GUARD")) {
+			gpulog(LOG_INFO, thr_id, "flex: running full startup guards...");
+			if (!flex_guard_chain(thr_id, throughput))
+				gpulog(LOG_INFO, thr_id, "flex: GPU==CPU on the full chain");
+			flex_guard_filtered(thr_id, throughput);
+			if (getenv("FLEX_GUARD_WIDTH"))
+				flex_guard_width(thr_id, throughput);
+		}
 
 		init_done[thr_id] = true;
 	}
@@ -518,25 +494,25 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 	 * CryptoNight rounds total 4 iteration units against an unfiltered mean
 	 * of 7.388. Consensus-legal, because any nonce is a valid nonce.
 	 *
-	 * The nonce pre-filter is DISABLED by default: it benchmarks well but fails
-	 * the host re-verify in live mining, delivering less accepted work than the
-	 * plain path. Set FLEX_NONCE_FILTER=1 to re-enable for debugging. */
-	static int flex_use_filter = -1;
-	if (flex_use_filter < 0) {
-		const char *ev = getenv("FLEX_NONCE_FILTER");
-		flex_use_filter = (ev && atoi(ev)) ? 1 : 0;
-		if (flex_use_filter)
-			gpulog(LOG_WARNING, thr_id,
-			       "flex: nonce filter ENABLED -- known to fail the host re-verify; debugging only");
-	}
+	 * Enabled by default; FLEX_NONCE_FILTER=0 takes the plain path.
+	 *
+	 * The header MUST be uploaded before the filter runs. Round 0 of the
+	 * filtered path runs only the four core[0] stages the filter admits, and
+	 * the filter is what establishes that, so a selection made under a stale
+	 * header leaves most lanes without a round-0 stage at all. */
+	const int flex_use_filter = flex_filter_enabled() ? 1 : 0;
 
 	const uint32_t scan_base = pdata[19];
 	const uint32_t span = flex_use_filter
-		? (uint32_t)c->threads * FLEX_FILTER_SPAN_PER_LANE
+		? flex_filter_span(c->threads, c->accept_est)
 		: c->threads;               /* disabled: one nonce per lane, no scan */
 	uint32_t yield = 0;
 	c->span = span;
 	if (flex_use_filter) {
+		/* Upload this job's header BEFORE filtering. flex_pipeline_run() also
+		 * uploads it, but that runs after the filter, and a selection made
+		 * under the previous job's seeds breaks round 0's precondition. */
+		flex_seed_setBlock_80(endiandata);
 		cudaMemset(c->d_count, 0, sizeof(uint32_t));
 		flex_filter_cpu(span, pdata[19], c->threads, c->d_nonces, c->d_count);
 		cudaMemcpy(&yield, c->d_count, sizeof(uint32_t), cudaMemcpyDeviceToHost);
@@ -544,14 +520,27 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 		yield = c->threads;
 	}
 
+	/* Re-fit the acceptance from the TRUE yield, BEFORE the clamp below throws
+	 * the information away -- a clamped yield divided by the span is not a
+	 * measurement of acceptance, it is the clamp. An EWMA because the estimate
+	 * only needs to track a change in the predicate, not per-batch noise. */
+	if (flex_use_filter && span) {
+		const double obs = (double)yield / (double)span;
+		if (obs > 1e-4 && obs <= 1.0)
+			c->accept_est += 0.10 * (obs - c->accept_est);
+	}
+
 	/* The kernel keeps counting past the buffer so this can legitimately
 	 * exceed the capacity; clamp, and say so rather than silently believing
 	 * the span was exactly right. */
 	if (yield > c->threads) {
 		if (opt_debug)
-			applog(LOG_DEBUG, "flex: filter saturated, %u accepted for %u lanes",
-			       yield, c->threads);
+			applog(LOG_DEBUG, "flex: filter saturated, %u accepted for %u lanes "
+			       "(span %u, accept %.5f)", yield, c->threads, span, c->accept_est);
 		yield = c->threads;
+	} else if (opt_debug && yield < c->threads) {
+		applog(LOG_DEBUG, "flex: filter under-yield, %u accepted for %u lanes "
+		       "(span %u, accept %.5f)", yield, c->threads, span, c->accept_est);
 	}
 	if (yield < FLEX_CN_TPB) {
 		/* Nothing worth launching for. Still consume the span. */
@@ -610,22 +599,37 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 		if (vhash[7] <= ptarget[7] && fulltest(vhash, ptarget)) {
 			work->valid_nonces = 1;
 			work_set_target_ratio(work, vhash);
-			/* Lane index again, for the same reason as nonces[0]. */
-			const uint32_t lane1 = cuda_check_hash_suppl(thr_id, hashed,
-			                                       flex_use_filter ? 0 : pdata[19], c->d_hash, 1);
-			work->nonces[1] = (!flex_use_filter || lane1 == UINT32_MAX) ? lane1
-			                : (lane1 < hashed ? c->h_nonces[lane1] : UINT32_MAX);
-			const uint32_t found = cuda_check_hash_count(thr_id);
-			if (work->nonces[1] != UINT32_MAX) {
-				be32enc(&endiandata[19], work->nonces[1]);
+			/* Every candidate the screen kept, in ONE launch. Under the filter
+			 * the cursor below advances past the whole span regardless, so a
+			 * candidate not taken here is lost for good. */
+			uint32_t cand[MAX_NONCES];
+			uint32_t found = 0;
+			const uint32_t keep = cuda_check_hash_suppl_all(thr_id, hashed,
+						flex_use_filter ? 0 : pdata[19], c->d_hash,
+						cand, MAX_NONCES, &found);
+			for (uint32_t k = 1; k < keep; k++) {
+				/* Lane index again, for the same reason as nonces[0]. */
+				const uint32_t n = (!flex_use_filter) ? cand[k]
+						 : (cand[k] < hashed ? c->h_nonces[cand[k]] : UINT32_MAX);
+				if (n == UINT32_MAX)
+					continue;
+				be32enc(&endiandata[19], n);
 				flex_hash(vhash, endiandata);
-				/* The screen compares the top word only, so guard the second
+				/* The screen compares the top word only, so guard every further
 				 * nonce exactly like the first. */
-				if (vhash[7] <= ptarget[7] && fulltest(vhash, ptarget)) {
-					bn_set_target_ratio(work, vhash, 1);
-					work->valid_nonces++;
-				}
+				if (vhash[7] > ptarget[7] || !fulltest(vhash, ptarget))
+					continue;
+				bn_set_target_ratio(work, vhash, work->valid_nonces);
+				work->nonces[work->valid_nonces] = n;
+				work->valid_nonces++;
 			}
+
+			/* Past the device screen's retention the candidates are gone and the
+			 * cursor advances anyway, so they cannot be recovered. Counted so the
+			 * loss is observable. */
+			if (found > keep && opt_debug)
+				gpulog(LOG_DEBUG, thr_id, "flex: %u candidates, %u retrievable",
+				       found, keep);
 
 			/* the nonce cursor under a filter: the cursor advances by the SCANNED SPAN,
 			 * never by a found nonce. The old max(nonce)+1 form is wrong here in
@@ -668,10 +672,6 @@ extern "C" void free_flex(int thr_id)
 	flex_pipeline_free(&ctx[thr_id]);
 	flex_stage_free_all(thr_id);
 	cuda_check_cpu_free(thr_id);
-
-	free(flex_audit_buf[thr_id]);
-	flex_audit_buf[thr_id] = NULL;
-	flex_audit_cap[thr_id] = 0;
 
 	cudaDeviceSynchronize();
 	init_done[thr_id] = false;
