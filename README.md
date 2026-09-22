@@ -68,6 +68,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `evohash` | EvoAI |
 | `evrprogpow` | EvrProgPow (Evrmore) |
 | `firopow` | FiroPoW (Firo, StakeCube) |
+| `flex` | Flex (Kylacoin, Lyncoin) |
 | `fresh` | Freshcoin (Shavite-80) |
 | `fugue256` | Fuguecoin |
 | `ghostrider` (`gr`) | GhostRider (Raptoreum) |
@@ -151,6 +152,8 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `yescryptr32` | WAVI |
 | `yespower` | yespower 1.0, generic (r=32); coin presets below |
 | `yespowerr16` | Yenten (YTN), yespower r=16 |
+| `yespowereqpay` | EqPay: yespower 1.0 over a 181-byte Qtum-style header |
+| `yespoweradvc` | AdventureCoin (ADVC) |
 | `power2b` (`yespower-b2b`) | yespower-b2b: BLAKE2b head/tail (MicroBitcoin) |
 | `zr5` (`ziftr`) | ZR5 (ZiftrCoin) |
 

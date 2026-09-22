@@ -341,7 +341,7 @@ Options:\n\
 #endif
 "			myr-gr		Myriad-Groestl\n\
 			neoscrypt	FeatherCoin, Phoenix, UFO...\n\
-			neoscrypt-xaya	XAYA's version...\n\
+			xaya/neoscrypt-xaya	XAYA's version...\n\
 			nist5		NIST5 (TalkCoin)\n\
 			odo		Odocrypt (DigiByte)\n\
 			penta		Pentablake hash (5x Blake 512)\n\

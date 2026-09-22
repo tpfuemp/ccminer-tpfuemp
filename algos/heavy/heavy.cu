@@ -1,3 +1,7 @@
+// windows.h must not pull in the legacy winsock.h: this TU also reaches
+// winsock2.h, and the two redefine sockaddr/fd_set. CUDA 12 header order
+// exposes it; 11.8 happens not to.
+#define WIN32_LEAN_AND_MEAN
 #include <stdio.h>
 #include <openssl/sha.h>
 #include <cuda.h>

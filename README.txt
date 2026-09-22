@@ -1,5 +1,5 @@
 
-ccminer-tpfuemp 2026.09   "yespower 1.0 family (yespower/yespowerr16/power2b) + argon2id1024, BLAKE3 decred, REST API, CUDA 12 readiness"
+ccminer-tpfuemp 2026.09.1   "yespower 1.0 family (yespower/yespowerr16/power2b) + argon2id1024, BLAKE3 decred, REST API, CUDA 12 readiness"
 ---------------------------------------------------------------
 
 Donation addresses and contributor credits are in CREDITS.txt.
@@ -56,6 +56,7 @@ its command line interface and options.
                           evohash             EvoAI
                           evrprogpow          EvrProgPow (Evrmore)
                           firopow             FiroPoW (Firo, StakeCube)
+                          flex                Flex (Kylacoin, Lyncoin)
                           fresh               Freshcoin (Shavite-80)
                           fugue256            Fuguecoin
                           ghostrider / gr     GhostRider (Raptoreum)
@@ -79,6 +80,7 @@ its command line interface and options.
                           lyra2z330           Lyra2Z330
                           meowpow             MeowPow (Meowcoin)
                           meraki              Meraki (Telestai)
+                          mike                Mike (VKAX, FortuneBlock)
                           mjollnir            Mjollnir (Hefty hash)
                           myr-gr              Myriad-Groestl
                           neoscrypt           NeoScrypt (FeatherCoin, Phoenix, UFO...)
@@ -140,7 +142,9 @@ its command line interface and options.
                           yescryptr32         WAVI
                           yespower            yespower 1.0, generic (r=32)
                           yespowerr16         Yenten (YTN), yespower r=16
+                          yespoweradvc        AdventureCoin (ADVC)
                           yespowerarwn        Arowana (ARWN)
+                          yespowereqpay       EqPay (Qtum-style 181-byte header)
                           yespoweric          IsotopeC
                           yespoweriots        IOTS
                           yespowerlitb        LightBit (LITB)
@@ -316,6 +320,34 @@ Toolkit, use the upstream project instead -- it retains that wider hardware and
 toolkit range: https://github.com/tpruvot/ccminer
 
 >>> RELEASE HISTORY <<<
+  Sep. 22nd 2026  ccminer-tpfuemp 2026.09.1
+
+                  New algorithms
+                    flex             Flex (Kylacoin, Lyncoin)
+                    mike             Mike (VKAX, FortuneBlock)
+                    yespowereqpay    EqPay, yespower 1.0 over a 181-byte header
+                    yespoweradvc     AdventureCoin (ADVC), a yespower preset
+                    equihash 144/5 and 192/7 -- a new DIGITBITS=24 solver; 192/7
+                    could not be mined at all before (research use, see notes)
+
+                  Speed
+                    hoohash    ~8% faster, bit-exact against the reference
+                    verthash   32-byte aligned datafile reads, per-card intensity
+                    keccak, sha3t, sha3d, sha512256d: per-arch launch bounds
+                    progpow    one kernel generator and DAG state machine now
+                               shared by kawpow, meowpow, evrprogpow, firopow
+                               and meraki
+
+                  Fixes
+                    hoohash    stratum difficulty factor (2^16, as the coin's own
+                               reference miner uses). Without it the share target
+                               was harder than the network target at the pool's
+                               default difficulty and almost nothing was submitted
+                    candidate reporting and share-difficulty attribution in the
+                    shared screen used by most algorithms
+                    uninitialised buffer readbacks in the hoohash self-test and
+                    in the shared candidate collector
+
   Sep. 14th 2026  ccminer-tpfuemp 2026.09
                   New algorithms: the yespower 1.0 family -- yespower, yespowerr16
                   (Yenten), power2b / yespower-b2b -- with 11 coin presets selected by
