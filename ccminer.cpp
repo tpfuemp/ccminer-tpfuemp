@@ -2156,7 +2156,6 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		case ALGO_EVOHASH:
 		case ALGO_ODO:
 		case ALGO_SKYDOGE:
-		case ALGO_HOOHASH:
 			work_set_target(work, sctx->job.diff / opt_difficulty);
 			break;
 		case ALGO_GHOSTRIDER:
@@ -2166,6 +2165,10 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 			// mike (VKAX/FortuneBlock) shares it: VKAX's powLimit is
 			// byte-identical to Raptoreum's, and the CPU port confirmed the
 			// convention live at two stratum difficulties.
+		case ALGO_HOOHASH:
+			// hoohash (PEPEPOW) uses the same 2^16 factor as its own reference
+			// miner. Without it the pool target lands harder than the network
+			// target and the miner submits almost nothing.
 			work_set_target(work, sctx->job.diff / (65536.0 * opt_difficulty));
 			break;
 		case ALGO_KECCAK:

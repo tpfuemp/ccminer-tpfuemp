@@ -225,7 +225,10 @@ static uint32_t checkhash_suppl_collect(int thr_id, uint32_t threads, uint32_t s
 		return 0;
 	}
 
-	// first element stores the count of found nonces
+	// Arm every slot the readback copies, not just the count: the kernel writes
+	// only as many slots as it finds candidates, so the rest would be read back
+	// uninitialised. Slots get the UINT32_MAX sentinel, the count starts at 0.
+	cudaMemset(d_resNonces[thr_id], 0xff, CHECKHASH_BYTES);
 	cudaMemset(d_resNonces[thr_id], 0, sizeof(uint32_t));
 
 	cuda_checkhash_64_suppl <<<grid, block>>> (threads, startNounce, d_inputHash, d_resNonces[thr_id]);

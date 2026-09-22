@@ -86,8 +86,13 @@ __device__ __forceinline__ double hoo_High(double x) {
 }
 
 __device__ double hoo_ComplexNonLinear(double x) {
-    double f1 = (x * HOO_CTM) / 8.0 - floor((x * HOO_CTM) / 8.0);
-    double f2 = (x * HOO_CTM) / 4.0 - floor((x * HOO_CTM) / 4.0);
+    // f1 = frac(u), f2 = frac(2u) for u = x*CTM/8. Deriving f2 from f1 is exact,
+    // not an approximation: 2u and 2*f1 are exact, and subtracting 1 from [1,2) is
+    // exact. Do not replace with a second floor of x*CTM/4 -- same value, more work.
+    const double u  = (x * HOO_CTM) / 8.0;
+    const double f1 = u - floor(u);
+    const double t  = f1 + f1;
+    const double f2 = (t >= 1.0) ? (t - 1.0) : t;
     if (f1 < 0.33) {
         if      (f2 < 0.25) return hoo_Medium(x + (1 + f2));
         else if (f2 < 0.5)  return hoo_Medium(x - (1 + f2));
@@ -123,7 +128,10 @@ __device__ __forceinline__ double hoo_TransformFactor(double x) {
     return x / granularity - floor(x / granularity);
 }
 
-__device__ void hoo_generateMatrix(const uint8_t* seed, double mat[64][64]) {
+// Fills mat[][] and matdiv[][] = mat[][] * divider in one pass: the matmul's cheap
+// branch needs only that product, which the reference forms as an intermediate.
+__device__ void hoo_generateMatrix(const uint8_t* seed, double mat[64][64],
+                                   double matdiv[64][64]) {
     hoo_xoshiro st;
     st.s0 = hoo_read_u64le(seed + 0);
     st.s1 = hoo_read_u64le(seed + 8);
@@ -135,12 +143,14 @@ __device__ void hoo_generateMatrix(const uint8_t* seed, double mat[64][64]) {
             uint64_t val = hoo_xoshiro_gen(&st);
             uint32_t lo  = (uint32_t)(val & 0xFFFFFFFFu);
             mat[i][j] = (double)lo / (double)0xFFFFFFFFu * normalize;
+            matdiv[i][j] = mat[i][j] * 0.0001;   // == the reference's `divider`
         }
     }
 }
 
 // hashBytes = firstPass (BLAKE3 of full 80-byte header). nonce = u32 LE @ offset 76.
-__device__ void hoo_matmul(double mat[64][64], const uint8_t* hashBytes,
+__device__ void hoo_matmul(double mat[64][64], double matdiv[64][64],
+                           const uint8_t* hashBytes,
                            uint8_t* output, uint64_t nonce) {
     uint8_t  scaledValues[32];
     uint8_t  vector[64];
@@ -154,7 +164,6 @@ __device__ void hoo_matmul(double mat[64][64], const uint8_t* hashBytes,
     for (int i = 0; i < 8; i++) H[i] = hoo_read_u32be(hashBytes + i * 4);
     double hashXor    = (double)(H[0]^H[1]^H[2]^H[3]^H[4]^H[5]^H[6]^H[7]);
     double nonceMod   = (double)(nonce & 0xFF);
-    double divider    = 0.0001;
     double multiplier = 1234;
     double sw         = 0.0;
 
@@ -165,13 +174,20 @@ __device__ void hoo_matmul(double mat[64][64], const uint8_t* hashBytes,
 
     for (int i = 0; i < 64; i++) {
         for (int j = 0; j < 64; j++) {
-            if (sw <= 0.02) {
-                double input     = (mat[i][j] * hashXor * (double)vector[j] + nonceMod);
-                double out_val   = hoo_SafeComplexTransform(input) * (double)vector[j] * multiplier;
-                product[i] += out_val;
-            } else {
-                double out_val   = mat[i][j] * divider * (double)vector[j];
-                product[i] += out_val;
+            // vector[j] == 0 makes both branches add exactly +0.0 (the transform is
+            // finite and >= 0), so product[i] and the sw derived from it are
+            // unchanged. Skipping is bit-exact; sw must still be recomputed below.
+            if (vector[j] != 0) {
+                if (sw <= 0.02) {
+                    double input     = (mat[i][j] * hashXor * (double)vector[j] + nonceMod);
+                    double out_val   = hoo_SafeComplexTransform(input) * (double)vector[j] * multiplier;
+                    product[i] += out_val;
+                } else {
+                    // matdiv = mat*divider, precomputed per job. The reference
+                    // evaluates left to right, so this is the same intermediate.
+                    double out_val   = matdiv[i][j] * (double)vector[j];
+                    product[i] += out_val;
+                }
             }
             sw = hoo_TransformFactor(product[i]);
         }

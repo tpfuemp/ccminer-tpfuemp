@@ -34,6 +34,8 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/curvehash/curvehash_oracle.cpp algos/curvehash/curvehash.cu algos/curvehash/secp256k1_unity.c \
 			  algos/verthash/verthash.cu algos/verthash/cuda_verthash.cu \
 			  algos/verthash/verthash-cpu.c algos/verthash/verthash-data.cpp \
+			  cuda/sha3_device.cuh \
+			  cuda/intensity_autotune.cuh \
 			  algos/kawpow/cuda_kawpow.cu \
 			  algos/kawpow/kawpow.cpp algos/kawpow/kawpow_core.cpp \
 			  algos/kawpow/ethash/ethash.cpp algos/kawpow/ethash/progpow.cpp algos/kawpow/ethash/managed.cpp \
@@ -57,6 +59,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/argon2d/argon2ref/encoding.c algos/argon2d/argon2ref/opt.c \
 			  algos/argon2d/argon2ref/thread.c algos/argon2d/argon2ref/blake2/blake2b.c \
 			  algos/argon2d/argon2d_kernel.h algos/argon2d/cudaexception.h \
+			  algos/argon2d/argon2d_blake2b_device.cuh \
 			  algos/argon2d/argon2ref/argon2.h algos/argon2d/argon2ref/core.h \
 			  algos/argon2d/argon2ref/encoding.h algos/argon2d/argon2ref/thread.h \
 			  algos/argon2d/argon2ref/blake2/blake2.h algos/argon2d/argon2ref/blake2/blake2-impl.h \
@@ -124,6 +127,7 @@ algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh cuda/bl
 			  cuda/jh512_device.cuh cuda/bmw512_device.cuh cuda/skein512_device.cuh \
 			  cuda/luffa512_device.cuh cuda/shabal512_device.cuh cuda/cubehash512_device.cuh \
 			  cuda/hamsi512_device.cuh cuda/fugue512_device.cuh cuda/groestl512_device.cuh cuda/echo512_device.cuh cuda/shavite512_device.cuh cuda/whirlpool512_device.cuh cuda/tiger192_device.cuh \
+			  cuda/aes_device.cuh cuda/aes_sp_device.cuh \
 			  algos/sha3d/sha3d.cu algos/sha3d/cuda_sha3d.cu \
 			  algos/sha3t/sha3t.cu algos/sha3t/cuda_sha3t.cu \
 			  algos/sia/sia.cu algos/sia/sia-rpc.cpp sph/blake2b.c \

@@ -27,6 +27,9 @@ __constant__ uint8_t c_hoohash_header[80];
 
 // Per-job matrix, generated once from the (nonce-zeroed) header. Per-device global.
 __device__ double d_hoo_matrix[64][64];
+// mat[i][j] * divider, precomputed with the matrix so the cheap branch of the
+// matmul does not repeat the multiply per iteration.
+__device__ double d_hoo_matrix_div[64][64];
 
 // Generate the per-job matrix: matrixSeed = BLAKE3(header80 with nonce bytes zeroed),
 // then xoshiro-fill d_hoo_matrix. xoshiro is a sequential stream -> single thread.
@@ -41,7 +44,7 @@ __global__ void hoohash_gen_matrix_kernel()
 
 		uint8_t seed[32];
 		blake3_256(masked, 80, seed);
-		hoo_generateMatrix(seed, d_hoo_matrix);
+		hoo_generateMatrix(seed, d_hoo_matrix, d_hoo_matrix_div);
 	}
 }
 
@@ -70,7 +73,7 @@ __global__ void hoohash_gpu_hash(uint32_t threads, uint32_t startNonce, uint32_t
 	uint64_t non = (uint64_t)hoo_read_u32le(header + 76);
 
 	uint8_t digest[32];
-	hoo_matmul(d_hoo_matrix, firstPass, digest, non);
+	hoo_matmul(d_hoo_matrix, d_hoo_matrix_div, firstPass, digest, non);
 
 	uint8_t* out = (uint8_t*)(outputHash + thread * 16);
 	#pragma unroll
@@ -126,14 +129,16 @@ static bool hoohash_kat_run(const uint8_t hdr[80], uint32_t nonce, uint8_t out_b
 		return selftest_cuda_fault();
 	}
 
-	uint32_t got16[16];
-	cudaError_t err = cudaMemcpy(got16, d_out, 16 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
+	// Copy only what the kernel writes: the 32-byte digest in the first half of
+	// its 64-byte slot. Taking the whole slot reads uninitialised device memory.
+	uint32_t got[8];
+	cudaError_t err = cudaMemcpy(got, d_out, sizeof(got), cudaMemcpyDeviceToHost);
 	cudaFree(d_out);
 	if (err != cudaSuccess)
 		return selftest_cuda_fault();
 
-	// First 32 bytes of the slot hold the REVERSED digest; un-reverse to big-endian.
-	const uint8_t* gr = (const uint8_t*)got16;
+	// Those 32 bytes hold the REVERSED digest; un-reverse to big-endian.
+	const uint8_t* gr = (const uint8_t*)got;
 	for (int i = 0; i < 32; i++) out_be[i] = gr[31 - i];
 	return true;
 }
