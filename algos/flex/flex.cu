@@ -426,12 +426,10 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 		const size_t per_lane = (size_t)(FLEX_CN_MEM_MEAN * 1.06) + 1024;
 		uint32_t throughput = (uint32_t)(budget / per_lane);
 
-		/* Cap the live batch below the VRAM maximum. A launch cannot be preempted,
-		 * so a batch still running when a new job arrives was chained against a
-		 * retired header and is wasted entirely. Measured on one card against one
-		 * pool's job cadence, so treat it as unknown elsewhere; the batch duration,
-		 * not the lane count, is what matters. An explicit -i overrides it. */
-		const uint32_t lane_cap = 8192;
+		/* Cap the live batch below the VRAM maximum: a launch cannot be preempted,
+		 * so a batch running at a job change is wasted. Per arch because the CN
+		 * groups run concurrently and the best size differs. -i overrides it. */
+		const uint32_t lane_cap = (device_sm[device_map[thr_id]] < 700) ? 4096 : 8192;
 		if (gpus_intensity[thr_id] > 0) {
 			if (gpus_intensity[thr_id] < throughput)
 				throughput = gpus_intensity[thr_id];
@@ -501,6 +499,7 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 	 * the filter is what establishes that, so a selection made under a stale
 	 * header leaves most lanes without a round-0 stage at all. */
 	const int flex_use_filter = flex_filter_enabled() ? 1 : 0;
+	flex_prof_begin();
 
 	const uint32_t scan_base = pdata[19];
 	const uint32_t span = flex_use_filter
@@ -553,8 +552,24 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 	if (flex_use_filter)
 		cudaMemcpy(c->h_nonces, c->d_nonces, sizeof(uint32_t) * yield, cudaMemcpyDeviceToHost);
 
+	flex_prof_mark(FLEX_PH_FILTER);
+	{
+		static int ab = -1;
+		if (ab < 0) {
+			const char *ev = getenv("CN_MIDBATCH_ABORT");
+			ab = ev ? (atoi(ev) != 0) : 1;
+		}
+		c->abort_on_restart = (ab == 1);
+	}
 	flex_pipeline_run(c, thr_id, endiandata, pdata, pdata[19], -1,
 	                  flex_use_filter ? c->d_nonces : NULL, flex_use_filter ? yield : 0);
+	c->abort_on_restart = false;
+
+	/* Abandoned at a job change: nothing was hashed against a live header. */
+	if (c->lanes == 0 && work_restart[thr_id].restart) {
+		*hashes_done = 0;
+		return 0;
+	}
 
 	/* The pipeline may have trimmed the batch to fit this mix of CN
 	 * variants, so the screen and the nonce cursor must both use the lanes
@@ -570,6 +585,8 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 	                                       flex_use_filter ? 0 : pdata[19], c->d_hash);
 	work->nonces[0] = (!flex_use_filter || lane0 == UINT32_MAX) ? lane0
 	                : (lane0 < hashed ? c->h_nonces[lane0] : UINT32_MAX);
+	flex_prof_mark(FLEX_PH_SCREEN);
+	flex_prof_end(thr_id, hashed);
 
 	static int flex_verify = -1;
 	if (flex_verify < 0) {
@@ -615,10 +632,13 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 					continue;
 				be32enc(&endiandata[19], n);
 				flex_hash(vhash, endiandata);
-				/* The screen compares the top word only, so guard every further
-				 * nonce exactly like the first. */
-				if (vhash[7] > ptarget[7] || !fulltest(vhash, ptarget))
+				/* Guard every further nonce like the first; a failure is a GPU/CPU mismatch. */
+				if (vhash[7] > ptarget[7] || !fulltest(vhash, ptarget)) {
+					gpu_increment_reject(thr_id);
+					if (!opt_quiet)
+						gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", n);
 					continue;
+				}
 				bn_set_target_ratio(work, vhash, work->valid_nonces);
 				work->nonces[work->valid_nonces] = n;
 				work->valid_nonces++;
@@ -670,6 +690,7 @@ extern "C" void free_flex(int thr_id)
 	cudaDeviceSynchronize();
 
 	flex_pipeline_free(&ctx[thr_id]);
+	cryptonight_core_cuda_flex_free(thr_id);
 	flex_stage_free_all(thr_id);
 	cuda_check_cpu_free(thr_id);
 

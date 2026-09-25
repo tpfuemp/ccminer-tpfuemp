@@ -631,7 +631,7 @@ CryptoNight specific options:\n\
   -l, --launch-config   gives the launch configuration for each kernel\n\
                         in a comma separated list, one per device.\n\
       --bfactor=[0-12]  Run Cryptonight core kernel in smaller pieces,\n\
-                        From 0 (ui freeze) to 12 (smooth), win default is 11\n\
+                        From 0 (ui freeze) to 12 (smooth), win default is 6\n\
                         This is a per-device setting like the launch config.\n\
 ";
 
@@ -960,10 +960,12 @@ static bool work_decode(const json_t *val, struct work *work)
 		if (!have_longpoll && work->height > net_blocks + 1) {
 			char netinfo[64] = { 0 };
 			if (opt_showdiff && net_diff > 0.) {
+				char nd[FORMAT_DIFF_LEN], pd[FORMAT_DIFF_LEN];
 				if (net_diff != work->targetdiff)
-					sprintf(netinfo, ", diff %.3f, pool %.1f", net_diff, work->targetdiff);
+					snprintf(netinfo, sizeof(netinfo), ", diff %s, pool %s", format_diff(net_diff, nd, sizeof(nd)),
+						format_diff(work->targetdiff, pd, sizeof(pd)));
 				else
-					sprintf(netinfo, ", diff %.3f", net_diff);
+					snprintf(netinfo, sizeof(netinfo), ", diff %s", format_diff(net_diff, nd, sizeof(nd)));
 			}
 			applog(LOG_BLUE, "%s block %d%s",
 				algo_names[opt_algo], work->height, netinfo);
@@ -1003,8 +1005,10 @@ int share_result(int result, int pooln, double sharediff, const char *reason)
 	global_hashrate = llround(hashrate);
 
 	format_hashrate(hashrate, s);
-	if (opt_showdiff)
-		sprintf(suppl, "diff %.3f", sharediff);
+	if (opt_showdiff) {
+		char sd[FORMAT_DIFF_LEN];
+		snprintf(suppl, sizeof(suppl), "diff %s", format_diff(sharediff, sd, sizeof(sd)));
+	}
 	else // accepted percent
 		sprintf(suppl, "%.2f%%", 100. * p->accepted_count / (p->accepted_count + p->rejected_count));
 
@@ -1313,12 +1317,13 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 		stratum.sharediff = work->sharediff[idnonce];
 		submit_id_remember(sub_id, stratum.sharediff);
 
+		char sdiff_s[FORMAT_DIFF_LEN];
 		if (net_diff && stratum.sharediff > net_diff && (opt_debug || opt_debug_diff))
-			applog(LOG_INFO, "share diff: %.5f, possible block found!!!",
-				stratum.sharediff);
+			applog(LOG_INFO, "share diff: %s, possible block found!!!",
+				format_diff(stratum.sharediff, sdiff_s, sizeof(sdiff_s)));
 		else if (opt_debug_diff)
-			applog(LOG_DEBUG, "share diff: %.5f (x %.1f)",
-				stratum.sharediff, work->shareratio[idnonce]);
+			applog(LOG_DEBUG, "share diff: %s (x %.1f)",
+				format_diff(stratum.sharediff, sdiff_s, sizeof(sdiff_s)), work->shareratio[idnonce]);
 
 		if (opt_vote) { // ALGO_HEAVY
 			nvotestr = bin2hex((const uchar*)(&nvote), 2);
@@ -1421,7 +1426,8 @@ static bool gbt_work_decode(const json_t *val, struct work *work)
 				if (net_diff > 0.) {
 					char netinfo[64] = { 0 };
 					char srate[32] = { 0 };
-					sprintf(netinfo, "diff %.2f", net_diff);
+					char nd[FORMAT_DIFF_LEN];
+					snprintf(netinfo, sizeof(netinfo), "diff %s", format_diff(net_diff, nd, sizeof(nd)));
 					if (net_hashrate) {
 						format_hashrate((double) net_hashrate, srate);
 						strcat(netinfo, ", net ");
@@ -2202,11 +2208,13 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 
 	if (stratum_diff != sctx->job.diff) {
 		char sdiff[32] = { 0 };
+		char sd[FORMAT_DIFF_LEN], td[FORMAT_DIFF_LEN];
 		// store for api stats
 		stratum_diff = sctx->job.diff;
 		if (opt_showdiff && work->targetdiff != stratum_diff)
-			snprintf(sdiff, 32, " (%.5f)", work->targetdiff);
-		applog(LOG_WARNING, "Stratum difficulty set to %g%s", stratum_diff, sdiff);
+			snprintf(sdiff, sizeof(sdiff), " (%s)", format_diff(work->targetdiff, td, sizeof(td)));
+		applog(LOG_WARNING, "Stratum difficulty set to %s%s",
+			format_diff(stratum_diff, sd, sizeof(sd)), sdiff);
 	}
 
 	return true;
@@ -3537,11 +3545,12 @@ longpoll_retry:
 				restart_threads();
 				if (!opt_quiet) {
 					char netinfo[64] = { 0 };
+					char nd[FORMAT_DIFF_LEN];
 					if (net_diff > 0.) {
-						sprintf(netinfo, ", diff %.3f", net_diff);
+						snprintf(netinfo, sizeof(netinfo), ", diff %s", format_diff(net_diff, nd, sizeof(nd)));
 					}
 					if (opt_showdiff) {
-						sprintf(&netinfo[strlen(netinfo)], ", target %.3f", g_work.targetdiff);
+						snprintf(&netinfo[strlen(netinfo)], sizeof(netinfo) - strlen(netinfo), ", target %s", format_diff(g_work.targetdiff, nd, sizeof(nd)));
 					}
 					if (g_work.height)
 						applog(LOG_BLUE, "%s block %u%s", algo_names[opt_algo], g_work.height, netinfo);
@@ -3741,10 +3750,11 @@ wait_stratum_url:
 				static uint32_t last_block_height;
 				if ((!opt_quiet || !firstwork_time) && stratum.job.height != last_block_height) {
 					last_block_height = stratum.job.height;
-					if (net_diff > 0.)
-						applog(LOG_BLUE, "%s block %d, diff %.3f", algo_names[opt_algo],
-							stratum.job.height, net_diff);
-					else
+					if (net_diff > 0.) {
+						char nd[FORMAT_DIFF_LEN];
+						applog(LOG_BLUE, "%s block %d, diff %s", algo_names[opt_algo],
+							stratum.job.height, format_diff(net_diff, nd, sizeof(nd)));
+					} else
 						applog(LOG_BLUE, "%s %s block %d", pool->short_url, algo_names[opt_algo],
 							stratum.job.height);
 				}
@@ -4826,7 +4836,7 @@ int main(int argc, char *argv[])
 		device_name[i] = NULL;
 		device_config[i] = NULL;
 		device_backoff[i] = is_windows() ? 12 : 2;
-		device_bfactor[i] = is_windows() ? 11 : 0;
+		device_bfactor[i] = is_windows() ? 6 : 0;
 		device_lookup_gap[i] = 1;
 		device_batchsize[i] = 1024;
 		device_interactive[i] = -1;

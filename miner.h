@@ -728,6 +728,8 @@ void cuda_clear_lasterror();
 #define CL_WHT  "\x1B[01;37m" /* white */
 
 extern void format_hashrate(double hashrate, char *output);
+#define FORMAT_DIFF_LEN 24 /* > the 21-char longest format_diff() result */
+extern const char* format_diff(double diff, char *output, size_t len);
 extern void format_hashrate_unit(double hashrate, char *output, const char* unit);
 extern void applog(int prio, const char *fmt, ...);
 extern void gpulog(int prio, int thr_id, const char *fmt, ...);

@@ -166,6 +166,18 @@ static int mike_order_changed(int thr_id, const char *s)
 static size_t   mike_scratch_bytes[MAX_GPUS]  = { 0 };
 static uint32_t mike_max_throughput[MAX_GPUS] = { 0 };
 
+/* CN_MIDBATCH_ABORT=0 disables the job-change checks between CN groups (for
+ * A/B); default on. Read once. */
+static int mike_midbatch_abort = -1;
+static inline bool mike_midbatch_abort_enabled()
+{
+	if (mike_midbatch_abort < 0) {
+		const char *ev = getenv("CN_MIDBATCH_ABORT");
+		mike_midbatch_abort = ev ? (atoi(ev) != 0) : 1;
+	}
+	return mike_midbatch_abort == 1;
+}
+
 // One CryptoNight-v1 round: 64-byte d_hash -> 32-byte d_hash (+ zero high 32).
 // stride64 = the job's per-thread slot (largest CN variant) in uint64 words.
 static void mike_cn_round(int thr_id, int blocks, int threads, int variant, uint32_t stride64, uint32_t *d_h, int zero_high)
@@ -628,6 +640,16 @@ extern "C" int scanhash_mike(int thr_id, struct work* work, uint32_t max_nonce, 
 	mike_core_hash_64(coreOrder[4], thr_id, throughput, pdata[19], dh, order++);
 	mike_cn_round(thr_id, blocks, threads, cnOrder[0], stride64, dh, 1);
 
+	/* A job change mid-batch retires the header, so stop enqueuing. The sync
+	 * makes the check timely; the batch is otherwise queued within milliseconds. */
+	if (mike_midbatch_abort_enabled()) {
+		cudaDeviceSynchronize();
+		if (work_restart[thr_id].restart) {
+			*hashes_done = 0;
+			return 0;
+		}
+	}
+
 	// Group 2
 	mike_core_hash_64(coreOrder[5], thr_id, throughput, pdata[19], dh, order++);
 	mike_core_hash_64(coreOrder[6], thr_id, throughput, pdata[19], dh, order++);
@@ -635,6 +657,15 @@ extern "C" int scanhash_mike(int thr_id, struct work* work, uint32_t max_nonce, 
 	mike_core_hash_64(coreOrder[8], thr_id, throughput, pdata[19], dh, order++);
 	mike_core_hash_64(coreOrder[9], thr_id, throughput, pdata[19], dh, order++);
 	mike_cn_round(thr_id, blocks, threads, cnOrder[1], stride64, dh, 1);
+
+	/* Same mid-batch job-change check as after group 1. */
+	if (mike_midbatch_abort_enabled()) {
+		cudaDeviceSynchronize();
+		if (work_restart[thr_id].restart) {
+			*hashes_done = 0;
+			return 0;
+		}
+	}
 
 	// Group 3 -- ONE core round; the 11-wide pool ends at index 10.
 	mike_core_hash_64(coreOrder[10], thr_id, throughput, pdata[19], dh, order++);
@@ -678,8 +709,8 @@ extern "C" int scanhash_mike(int thr_id, struct work* work, uint32_t max_nonce, 
 		if (vhash[7] <= ptarget[7] && fulltest(vhash, ptarget)) {
 			work->valid_nonces = 1;
 			work_set_target_ratio(work, vhash);
-			/* Every candidate in ONE launch. Each is host re-verified: the GPU
-			 * screen compares the top word only. */
+			/* Every candidate of the launch, each host re-verified. The screen is exact,
+			 * so a failure is a GPU/CPU mismatch and is counted like the first. */
 			uint32_t cand[MAX_NONCES];
 			uint32_t found = 0;
 			const uint32_t keep = cuda_check_hash_suppl_all(thr_id, throughput,
@@ -690,8 +721,12 @@ extern "C" int scanhash_mike(int thr_id, struct work* work, uint32_t max_nonce, 
 				if (n > hi) hi = n;          /* highest RETURNED, accepted or not */
 				be32enc(&endiandata[19], n);
 				mike_hash(vhash, endiandata);
-				if (vhash[7] > ptarget[7] || !fulltest(vhash, ptarget))
+				if (vhash[7] > ptarget[7] || !fulltest(vhash, ptarget)) {
+					gpu_increment_reject(thr_id);
+					if (!opt_quiet)
+						gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", n);
 					continue;
+				}
 				bn_set_target_ratio(work, vhash, work->valid_nonces);
 				work->nonces[work->valid_nonces] = n;
 				work->valid_nonces++;

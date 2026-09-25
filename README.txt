@@ -239,7 +239,7 @@ CryptoNight specific options:
   -l, --launch-config   gives the launch configuration for each kernel
                         in a comma separated list, one per device.
       --bfactor=[0-12]  Run Cryptonight core kernel in smaller pieces,
-                        From 0 (ui freeze) to 12 (smooth), win default is 11
+                        From 0 (ui freeze) to 12 (smooth), win default is 6
                         This is a per-device setting like the launch config.
 
 Wildkeccak specific:

@@ -17,6 +17,7 @@
 #include <ctype.h>
 #include <stdarg.h>
 #include <string.h>
+#include <math.h>
 #include <inttypes.h>
 #include <unistd.h>
 #include <jansson.h>
@@ -237,6 +238,30 @@ void format_hashrate_unit(double hashrate, char *output, const char *unit)
 	}
 
 	sprintf(output, "%.2f %s%s", hashrate, prefix, unit);
+}
+
+/* Difficulty for display: 3 decimals from 1 up, 6 below 1, and below 0.001
+ * enough for 3 significant digits (no exponent). At most 21 chars, so
+ * FORMAT_DIFF_LEN always holds it; past 1e20 it falls back to "%g". */
+const char* format_diff(double diff, char *output, size_t len)
+{
+	const double a = fabs(diff);
+	int prec = 3;
+	if (!(a < 1e20)) {  /* also inf and nan */
+		snprintf(output, len, "%g", diff);
+		return output;
+	}
+	if (a >= 1e12)
+		prec = 0;
+	else if (a > 0. && a < 1.) {
+		prec = 6;
+		if (a < 1e-3) {
+			prec = 2 - (int) floor(log10(a));
+			if (prec > 12) prec = 12;
+		}
+	}
+	snprintf(output, len, "%.*f", prec, diff);
+	return output;
 }
 
 static void databuf_free(struct data_buffer *db)

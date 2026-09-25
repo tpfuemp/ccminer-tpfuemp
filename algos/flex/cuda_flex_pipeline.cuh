@@ -35,6 +35,105 @@
 
 #ifdef __CUDACC__
 
+/* ---------------------------------------------------------------------------
+ * Per-phase batch profile (FLEX_PROFILE=1). Each mark syncs the device and
+ * books the host time since the previous mark to one phase; the syncs remove
+ * phase overlap, so read the split, not the rate. Off: one branch per mark.
+ * --------------------------------------------------------------------------- */
+enum {
+	FLEX_PH_FILTER = 0, FLEX_PH_ORDER, FLEX_PH_ROUND0, FLEX_PH_CORE,
+	FLEX_PH_CN_PREP, FLEX_PH_CN_CORE, FLEX_PH_CN_FINAL, FLEX_PH_SHA3,
+	FLEX_PH_SCREEN, FLEX_PH_COUNT
+};
+static const char *flex_ph_name[FLEX_PH_COUNT] = {
+	"filter", "order", "round0", "core1-14", "cn-prep", "cn-core", "cn-final", "sha3", "screen"
+};
+static int flex_prof_on = -1;
+static double flex_prof_ms[FLEX_PH_COUNT];
+static double flex_prof_t;
+static uint32_t flex_prof_batches;
+/* per CN variant: summed group time, group count and lanes, across the 3 rounds */
+static double flex_prof_v_ms[6];
+static uint32_t flex_prof_v_groups[6];
+static double flex_prof_v_lanes[6];
+
+
+static inline bool flex_prof_enabled()
+{
+	if (flex_prof_on < 0)
+		flex_prof_on = getenv("FLEX_PROFILE") ? 1 : 0;
+	return flex_prof_on == 1;
+}
+
+static inline double flex_prof_now_ms()
+{
+	struct timeval tv;
+	gettimeofday(&tv, NULL);
+	return tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0;
+}
+
+/* Start a batch: the next mark books from here. */
+static inline void flex_prof_begin()
+{
+	if (!flex_prof_enabled()) return;
+	cudaDeviceSynchronize();
+	flex_prof_t = flex_prof_now_ms();
+}
+
+static inline void flex_prof_mark(int phase)
+{
+	if (!flex_prof_enabled()) return;
+	cudaDeviceSynchronize();
+	const double now = flex_prof_now_ms();
+	flex_prof_ms[phase] += now - flex_prof_t;
+	flex_prof_t = now;
+}
+
+/* Book one CN variant group (the device work since the previous mark). */
+static inline void flex_prof_group(int v, uint32_t lanes)
+{
+	if (!flex_prof_enabled()) return;
+	cudaDeviceSynchronize();
+	const double now = flex_prof_now_ms();
+	flex_prof_v_ms[v] += now - flex_prof_t;
+	flex_prof_ms[FLEX_PH_CN_CORE] += now - flex_prof_t;
+	flex_prof_v_groups[v]++;
+	flex_prof_v_lanes[v] += lanes;
+	flex_prof_t = now;
+}
+
+/* End a batch; every 20 batches log the mean per phase and reset. */
+static inline void flex_prof_end(int thr_id, uint32_t lanes)
+{
+	if (!flex_prof_enabled()) return;
+	if (++flex_prof_batches < 20) return;
+	char buf[512];
+	int n = 0;
+	double total = 0;
+	for (int i = 0; i < FLEX_PH_COUNT; i++) total += flex_prof_ms[i];
+	for (int i = 0; i < FLEX_PH_COUNT; i++)
+		n += snprintf(buf + n, sizeof(buf) - n, " %s %.0f", flex_ph_name[i],
+		              flex_prof_ms[i] / flex_prof_batches);
+	gpulog(LOG_INFO, thr_id, "flex profile, ms/batch over %u batches (%u lanes): total %.0f |%s",
+	       flex_prof_batches, lanes, total / flex_prof_batches, buf);
+	/* per variant: ms per GROUP and mean lanes per group */
+	static const char *vn[6] = { "dark", "darklite", "fast", "lite", "turtle", "turtlelite" };
+	n = 0;
+	for (int v = 0; v < 6; v++) {
+		if (!flex_prof_v_groups[v]) continue;
+		n += snprintf(buf + n, sizeof(buf) - n, " %s %.1fms/%.0fl x%.1f", vn[v],
+		              flex_prof_v_ms[v] / flex_prof_v_groups[v],
+		              flex_prof_v_lanes[v] / flex_prof_v_groups[v],
+		              (double)flex_prof_v_groups[v] / flex_prof_batches);
+	}
+	gpulog(LOG_INFO, thr_id, "flex profile, per CN group (ms/group, lanes/group, groups/batch):%s", buf);
+	memset(flex_prof_ms, 0, sizeof(flex_prof_ms));
+	memset(flex_prof_v_ms, 0, sizeof(flex_prof_v_ms));
+	memset(flex_prof_v_groups, 0, sizeof(flex_prof_v_groups));
+	memset(flex_prof_v_lanes, 0, sizeof(flex_prof_v_lanes));
+	flex_prof_batches = 0;
+}
+
 /* CryptoNight-v1 GPU path. prepare and the core are shared with ghostrider
  * UNCHANGED (demonstrated in the an earlier device gate); only the finalization is flex's. */
 extern "C" void cryptonight_extra_cpu_prepare_gr(int thr_id, uint32_t threads, uint64_t *d_hash,
@@ -44,6 +143,22 @@ extern "C" void cryptonight_core_cuda_flex(int thr_id, int blocks, int threads, 
 	int variant, uint32_t stride64,
 	uint64_t *d_long_state, uint64_t *d_ctx_state, uint32_t *d_ctx_a, uint32_t *d_ctx_b,
 	uint32_t *d_ctx_key1, uint32_t *d_ctx_key2, uint64_t *d_ctx_tweak);
+extern "C" void cryptonight_core_cuda_flex_multi(int thr_id, int threads, int ngroups,
+	const uint32_t *nlanes, const int *variant, const uint32_t *stride64,
+	uint64_t * const *d_long_state, uint64_t * const *d_ctx_state,
+	uint32_t * const *d_ctx_a, uint32_t * const *d_ctx_b,
+	uint32_t * const *d_ctx_key1, uint32_t * const *d_ctx_key2, uint64_t * const *d_ctx_tweak);
+extern "C" void cryptonight_core_cuda_flex_free(int thr_id);
+
+/* FLEX_CN_SERIAL=1 runs the variant groups one after another (the old path,
+ * kept for A/B and for the per-group profile); default is concurrent. */
+static int flex_cn_serial = -1;
+static inline bool flex_cn_serial_enabled()
+{
+	if (flex_cn_serial < 0)
+		flex_cn_serial = getenv("FLEX_CN_SERIAL") ? 1 : 0;
+	return flex_cn_serial == 1;
+}
 extern "C" void cryptonight_extra_cpu_final_flex(int thr_id, uint32_t threads,
 	uint64_t *d_ctx_state, uint64_t *d_hash);
 
@@ -213,6 +328,10 @@ struct flex_ctx {
 	 * what keeps the span correct if the admitted set or the unit threshold
 	 * ever changes, instead of leaving a stale constant nobody re-measures. */
 	double    accept_est;
+
+	/* Stop at a job change (flex_pipeline_abandoned). Set only around the
+	 * mining call, so the startup guards run to the end. */
+	bool      abort_on_restart;
 };
 
 static bool flex_pipeline_init(flex_ctx *c, int thr_id, uint32_t threads, size_t scratch_bytes)
@@ -399,6 +518,7 @@ static void flex_cn_round(flex_ctx *c, int thr_id, uint32_t cn_round)
 	 * compacted batch; ctx slot p then belongs to compact slot p. */
 	cryptonight_extra_cpu_prepare_gr(thr_id, T, (uint64_t*)c->d_scratch,
 		c->d_ctx_state, c->d_ctx_a, c->d_ctx_b, c->d_ctx_key1, c->d_ctx_key2, c->d_ctx_tweak);
+	flex_prof_mark(FLEX_PH_CN_PREP);
 
 	/* ---- variable-stride packing ----
 	 * Each variant group gets its OWN stride, and the groups are laid end to
@@ -410,31 +530,56 @@ static void flex_cn_round(flex_ctx *c, int thr_id, uint32_t cn_round)
 	 * kernel indexes purely relative to the pointers it is handed -- the group
 	 * base is applied here, by the caller, exactly as for the ctx arrays. */
 	size_t byteoff = 0;
+	const bool serial = flex_cn_serial_enabled();
+	int ng = 0;
+	uint32_t g_lanes[FLEX_CN_ALGO_COUNT], g_stride[FLEX_CN_ALGO_COUNT];
+	int g_var[FLEX_CN_ALGO_COUNT];
+	uint64_t *g_ls[FLEX_CN_ALGO_COUNT], *g_st[FLEX_CN_ALGO_COUNT], *g_tw[FLEX_CN_ALGO_COUNT];
+	uint32_t *g_a[FLEX_CN_ALGO_COUNT], *g_b[FLEX_CN_ALGO_COUNT];
+	uint32_t *g_k1[FLEX_CN_ALGO_COUNT], *g_k2[FLEX_CN_ALGO_COUNT];
 	for (uint32_t v = 0; v < FLEX_CN_ALGO_COUNT; v++) {
 		const uint32_t off = c->h_off[v];
 		const uint32_t cnt = c->h_off[v + 1] - off;
 		if (!cnt) continue;
 
 		const uint32_t stride64 = flex_cn_mem[v] >> 3;
-		const int blocks = (int)((cnt + FLEX_CN_TPB - 1) / FLEX_CN_TPB);
 
-		cryptonight_core_cuda_flex(thr_id, blocks, FLEX_CN_TPB, cnt, (int)v, stride64,
-			c->d_long_state + (byteoff >> 3),
-			c->d_ctx_state  + (size_t)off * 26,
-			c->d_ctx_a      + (size_t)off * 4,
-			c->d_ctx_b      + (size_t)off * 4,
-			c->d_ctx_key1   + (size_t)off * 40,
-			c->d_ctx_key2   + (size_t)off * 40,
-			c->d_ctx_tweak  + off);
+		if (serial) {
+			const int blocks = (int)((cnt + FLEX_CN_TPB - 1) / FLEX_CN_TPB);
+			cryptonight_core_cuda_flex(thr_id, blocks, FLEX_CN_TPB, cnt, (int)v, stride64,
+				c->d_long_state + (byteoff >> 3),
+				c->d_ctx_state  + (size_t)off * 26,
+				c->d_ctx_a      + (size_t)off * 4,
+				c->d_ctx_b      + (size_t)off * 4,
+				c->d_ctx_key1   + (size_t)off * 40,
+				c->d_ctx_key2   + (size_t)off * 40,
+				c->d_ctx_tweak  + off);
+			flex_prof_group((int)v, cnt);
+		} else {
+			g_lanes[ng] = cnt; g_var[ng] = (int)v; g_stride[ng] = stride64;
+			g_ls[ng] = c->d_long_state + (byteoff >> 3);
+			g_st[ng] = c->d_ctx_state  + (size_t)off * 26;
+			g_a[ng]  = c->d_ctx_a      + (size_t)off * 4;
+			g_b[ng]  = c->d_ctx_b      + (size_t)off * 4;
+			g_k1[ng] = c->d_ctx_key1   + (size_t)off * 40;
+			g_k2[ng] = c->d_ctx_key2   + (size_t)off * 40;
+			g_tw[ng] = c->d_ctx_tweak  + off;
+			ng++;
+		}
 
 		byteoff += (size_t)cnt * flex_cn_mem[v];
 	}
+	if (ng)
+		cryptonight_core_cuda_flex_multi(thr_id, FLEX_CN_TPB, ng, g_lanes, g_var, g_stride,
+			g_ls, g_st, g_a, g_b, g_k1, g_k2, g_tw);
+	flex_prof_mark(FLEX_PH_CN_CORE);
 
 	cryptonight_extra_cpu_final_flex(thr_id, T, c->d_ctx_state, (uint64_t*)c->d_scratch);
 
 	/* 64 bytes back, not 32: on the blake branch the high half is this
 	 * round's own input and the closing SHA3-256 hashes all of it. */
 	flex_scatter64(T, c->d_hash, c->d_scratch, c->d_idx);
+	flex_prof_mark(FLEX_PH_CN_FINAL);
 }
 
 /* ===========================================================================
@@ -451,6 +596,19 @@ static void flex_cn_round(flex_ctx *c, int thr_id, uint32_t cn_round)
  * failing batch be bisected to a single round instead of just reported.
  * =========================================================================== */
 #define FLEX_PIPELINE_STEPS (FLEX_CORE_CHAIN_LEN + FLEX_CN_ROUNDS + 1)   /* 19 */
+
+/* A job change mid-batch retires the header, so the rest of the batch cannot
+ * produce a share. Checked after round 0 and each CN round; the sync makes
+ * the check see the change when it happens. An abandoned batch reports zero
+ * lanes. */
+static inline bool flex_pipeline_abandoned(flex_ctx *c, int thr_id)
+{
+	if (!c->abort_on_restart) return false;
+	cudaDeviceSynchronize();
+	if (!work_restart[thr_id].restart) return false;
+	c->lanes = 0;
+	return true;
+}
 
 /* `d_nonces` is the nonce filter's compacted list, or NULL for the contiguous
  * path. When it is set, `lanes` is the filter's YIELD and `startNonce` is the
@@ -523,6 +681,7 @@ static void flex_pipeline_run(flex_ctx *c, int thr_id, uint32_t *endiandata,
 	 * trim must use it, never the capacity. */
 	const uint32_t L = c->lanes;
 	const dim3 grid((L + tpb - 1) / tpb), block(tpb);
+	flex_prof_mark(FLEX_PH_ORDER);
 
 	/* 2. round 0: each of the 14 over the whole batch, keep the lanes that
 	 * wanted it (see flex_select_round0_gpu for why). */
@@ -572,6 +731,9 @@ static void flex_pipeline_run(flex_ctx *c, int thr_id, uint32_t *endiandata,
 		}
 	}
 
+	flex_prof_mark(FLEX_PH_ROUND0);
+	if (flex_pipeline_abandoned(c, thr_id)) return;
+
 	/* 3. rounds 1..14, with a CN round closing each group of five. */
 	for (uint32_t r = 1; r < FLEX_CORE_CHAIN_LEN; r++) {
 		if (step++ >= steps) return;
@@ -593,15 +755,18 @@ static void flex_pipeline_run(flex_ctx *c, int thr_id, uint32_t *endiandata,
 			flex_scatter64(L, c->d_hash, c->d_scratch, c->d_idx);
 		}
 
+		flex_prof_mark(FLEX_PH_CORE);
 		if (r == 4 || r == 9 || r == 14) {
 			if (step++ >= steps) return;
 			flex_cn_round(c, thr_id, (r == 4) ? 0 : (r == 9) ? 1 : 2);
+			if (flex_pipeline_abandoned(c, thr_id)) return;
 		}
 	}
 
 	/* 4. the closing SHA3-256 over all 64 bytes */
 	if (step++ >= steps) return;
 	flex_sha3_256_final_gpu <<<grid, block>>> (L, (uint2*)c->d_hash);
+	flex_prof_mark(FLEX_PH_SHA3);
 }
 
 #endif /* __CUDACC__ */

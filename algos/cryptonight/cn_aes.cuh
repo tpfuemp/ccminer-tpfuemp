@@ -266,54 +266,6 @@ void cn_aes_pseudo_round_mut_uint4(uint32_t * const sharedMemory, uint4 &val, ui
 	round_perm4(val, 9);
 }
 
-/*
-__device__ __forceinline__
-void cn_aes_gpu_init2(uint32_t* sharedMemory)
-{
-#if 0
-	if(blockDim.x >= 64)
-	{
-		if(threadIdx.x < 64) {
-			#define thrX (threadIdx.x << 2U) // ensure offsets aligned (16) to vector
-			#pragma unroll 4
-			for (uint32_t i = 0; i < 1024U; i += 256U) // 32x32 = 1024, 4 * 256 also
-				AS_UINT4(&sharedMemory[i + thrX]) = AS_UINT4(&d_t_fn[i + thrX]);
-		}
-
-	} else
-#endif
-	if(blockDim.x >= 32) {
-
-		if(threadIdx.x < 32) {
-#if 0
-			#pragma unroll 32
-			for(uint32_t i = 0; i < 1024; i += 32)
-				sharedMemory[threadIdx.x + i] = d_t_fn[threadIdx.x + i];
-#else
-			#define thrX (threadIdx.x << 2U) // ensure offsets aligned (16) to vector
-			#pragma unroll 8
-			for (uint32_t i = 0; i < 1024; i += 128U) // 32x32 = 1024, 8 * 128 also
-				AS_UINT4(&sharedMemory[i + thrX]) = AS_UINT4(&d_t_fn[i + thrX]);
-#endif
-		}
-
-	} else {
-
-		if(threadIdx.x < 4) {
-#if 0
-			for (uint32_t i = 0; i < 1024; i += 4)
-				sharedMemory[threadIdx.x + i] = d_t_fn[threadIdx.x + i];
-#else
-			#define thrX (threadIdx.x << 2U) // ensure offsets aligned (16) to vector
-			#pragma unroll 64
-			for (uint32_t i = 0; i < 1024; i += 16U)
-				AS_UINT4(&sharedMemory[i + thrX]) = AS_UINT4(&d_t_fn[i + thrX]);
-#endif
-		}
-	}
-}
-*/
-
 __device__ __forceinline__
 void cn_aes_gpu_init(uint32_t* sharedMemory)
 {
@@ -986,4 +938,86 @@ void cn_aes_gpu_init_u4(uint32_t* sharedMemory)
 		AS_UINT4(&sharedMemory[0x3FC]) = make_uint4(0x7bcbb0b0, 0xa8fc5454, 0x6dd6bbbb, 0x2c3a1616);
 		break;
 	}
+}
+
+/* ---------------------------------------------------------------------------
+ * Bank-conflict-free T-table layout: only T0 is stored, 32 copies, copy c of
+ * entry e at word (e << 5) + c, so lane c always reads bank c. T_k is
+ * ROTL(T0, 8k). Same layout as aes_round_32 in cuda/aes_sp_device.cuh;
+ * 32 KB of shared per block.
+ * --------------------------------------------------------------------------- */
+#define CN_AES_REP_WORDS (256 * 32)
+
+/* T0 only; read warp-uniformly by cn_aes_gpu_init_rep. */
+static __constant__ __align__(16) uint32_t d_cn_t0[256] = {
+	0xa56363c6U, 0x847c7cf8U, 0x997777eeU, 0x8d7b7bf6U, 0x0df2f2ffU, 0xbd6b6bd6U, 0xb16f6fdeU, 0x54c5c591U,
+	0x50303060U, 0x03010102U, 0xa96767ceU, 0x7d2b2b56U, 0x19fefee7U, 0x62d7d7b5U, 0xe6abab4dU, 0x9a7676ecU,
+	0x45caca8fU, 0x9d82821fU, 0x40c9c989U, 0x877d7dfaU, 0x15fafaefU, 0xeb5959b2U, 0xc947478eU, 0x0bf0f0fbU,
+	0xecadad41U, 0x67d4d4b3U, 0xfda2a25fU, 0xeaafaf45U, 0xbf9c9c23U, 0xf7a4a453U, 0x967272e4U, 0x5bc0c09bU,
+	0xc2b7b775U, 0x1cfdfde1U, 0xae93933dU, 0x6a26264cU, 0x5a36366cU, 0x413f3f7eU, 0x02f7f7f5U, 0x4fcccc83U,
+	0x5c343468U, 0xf4a5a551U, 0x34e5e5d1U, 0x08f1f1f9U, 0x937171e2U, 0x73d8d8abU, 0x53313162U, 0x3f15152aU,
+	0x0c040408U, 0x52c7c795U, 0x65232346U, 0x5ec3c39dU, 0x28181830U, 0xa1969637U, 0x0f05050aU, 0xb59a9a2fU,
+	0x0907070eU, 0x36121224U, 0x9b80801bU, 0x3de2e2dfU, 0x26ebebcdU, 0x6927274eU, 0xcdb2b27fU, 0x9f7575eaU,
+	0x1b090912U, 0x9e83831dU, 0x742c2c58U, 0x2e1a1a34U, 0x2d1b1b36U, 0xb26e6edcU, 0xee5a5ab4U, 0xfba0a05bU,
+	0xf65252a4U, 0x4d3b3b76U, 0x61d6d6b7U, 0xceb3b37dU, 0x7b292952U, 0x3ee3e3ddU, 0x712f2f5eU, 0x97848413U,
+	0xf55353a6U, 0x68d1d1b9U, 0x00000000U, 0x2cededc1U, 0x60202040U, 0x1ffcfce3U, 0xc8b1b179U, 0xed5b5bb6U,
+	0xbe6a6ad4U, 0x46cbcb8dU, 0xd9bebe67U, 0x4b393972U, 0xde4a4a94U, 0xd44c4c98U, 0xe85858b0U, 0x4acfcf85U,
+	0x6bd0d0bbU, 0x2aefefc5U, 0xe5aaaa4fU, 0x16fbfbedU, 0xc5434386U, 0xd74d4d9aU, 0x55333366U, 0x94858511U,
+	0xcf45458aU, 0x10f9f9e9U, 0x06020204U, 0x817f7ffeU, 0xf05050a0U, 0x443c3c78U, 0xba9f9f25U, 0xe3a8a84bU,
+	0xf35151a2U, 0xfea3a35dU, 0xc0404080U, 0x8a8f8f05U, 0xad92923fU, 0xbc9d9d21U, 0x48383870U, 0x04f5f5f1U,
+	0xdfbcbc63U, 0xc1b6b677U, 0x75dadaafU, 0x63212142U, 0x30101020U, 0x1affffe5U, 0x0ef3f3fdU, 0x6dd2d2bfU,
+	0x4ccdcd81U, 0x140c0c18U, 0x35131326U, 0x2fececc3U, 0xe15f5fbeU, 0xa2979735U, 0xcc444488U, 0x3917172eU,
+	0x57c4c493U, 0xf2a7a755U, 0x827e7efcU, 0x473d3d7aU, 0xac6464c8U, 0xe75d5dbaU, 0x2b191932U, 0x957373e6U,
+	0xa06060c0U, 0x98818119U, 0xd14f4f9eU, 0x7fdcdca3U, 0x66222244U, 0x7e2a2a54U, 0xab90903bU, 0x8388880bU,
+	0xca46468cU, 0x29eeeec7U, 0xd3b8b86bU, 0x3c141428U, 0x79dedea7U, 0xe25e5ebcU, 0x1d0b0b16U, 0x76dbdbadU,
+	0x3be0e0dbU, 0x56323264U, 0x4e3a3a74U, 0x1e0a0a14U, 0xdb494992U, 0x0a06060cU, 0x6c242448U, 0xe45c5cb8U,
+	0x5dc2c29fU, 0x6ed3d3bdU, 0xefacac43U, 0xa66262c4U, 0xa8919139U, 0xa4959531U, 0x37e4e4d3U, 0x8b7979f2U,
+	0x32e7e7d5U, 0x43c8c88bU, 0x5937376eU, 0xb76d6ddaU, 0x8c8d8d01U, 0x64d5d5b1U, 0xd24e4e9cU, 0xe0a9a949U,
+	0xb46c6cd8U, 0xfa5656acU, 0x07f4f4f3U, 0x25eaeacfU, 0xaf6565caU, 0x8e7a7af4U, 0xe9aeae47U, 0x18080810U,
+	0xd5baba6fU, 0x887878f0U, 0x6f25254aU, 0x722e2e5cU, 0x241c1c38U, 0xf1a6a657U, 0xc7b4b473U, 0x51c6c697U,
+	0x23e8e8cbU, 0x7cdddda1U, 0x9c7474e8U, 0x211f1f3eU, 0xdd4b4b96U, 0xdcbdbd61U, 0x868b8b0dU, 0x858a8a0fU,
+	0x907070e0U, 0x423e3e7cU, 0xc4b5b571U, 0xaa6666ccU, 0xd8484890U, 0x05030306U, 0x01f6f6f7U, 0x120e0e1cU,
+	0xa36161c2U, 0x5f35356aU, 0xf95757aeU, 0xd0b9b969U, 0x91868617U, 0x58c1c199U, 0x271d1d3aU, 0xb99e9e27U,
+	0x38e1e1d9U, 0x13f8f8ebU, 0xb398982bU, 0x33111122U, 0xbb6969d2U, 0x70d9d9a9U, 0x898e8e07U, 0xa7949433U,
+	0xb69b9b2dU, 0x221e1e3cU, 0x92878715U, 0x20e9e9c9U, 0x49cece87U, 0xff5555aaU, 0x78282850U, 0x7adfdfa5U,
+	0x8f8c8c03U, 0xf8a1a159U, 0x80898909U, 0x170d0d1aU, 0xdabfbf65U, 0x31e6e6d7U, 0xc6424284U, 0xb86868d0U,
+	0xc3414182U, 0xb0999929U, 0x772d2d5aU, 0x110f0f1eU, 0xcbb0b07bU, 0xfc5454a8U, 0xd6bbbb6dU, 0x3a16162cU
+};
+
+
+__device__ __forceinline__
+void cn_aes_gpu_init_rep(uint32_t * const sharedMemory)
+{
+	for (uint32_t i = threadIdx.x; i < CN_AES_REP_WORDS; i += blockDim.x)
+		sharedMemory[i] = d_cn_t0[i >> 5];
+}
+
+#define REP_T0(x) (sharedMemory[lane | (((x) & 0xFFu) << 5)])
+#define REP_T1(x) ROTL32(sharedMemory[lane | (__byte_perm(x, 0, 0x4441) << 5)], 8)
+#define REP_T2(x) ROTL32(sharedMemory[lane | (__byte_perm(x, 0, 0x4442) << 5)], 16)
+#define REP_T3(x) ROTL32(sharedMemory[lane | (__byte_perm(x, 0, 0x4443) << 5)], 24)
+
+#define round_perm4_rep(in, k) {\
+	uint4 tmp; \
+	tmp.x = REP_T0(in.x) ^ REP_T1(in.y) ^ REP_T2(in.z) ^ REP_T3(in.w); \
+	tmp.y = REP_T0(in.y) ^ REP_T1(in.z) ^ REP_T2(in.w) ^ REP_T3(in.x); \
+	tmp.z = REP_T0(in.z) ^ REP_T1(in.w) ^ REP_T2(in.x) ^ REP_T3(in.y); \
+	tmp.w = REP_T0(in.w) ^ REP_T1(in.x) ^ REP_T2(in.y) ^ REP_T3(in.z); \
+	val = tmp ^ key[k]; \
+}
+
+__device__ __forceinline__
+void cn_aes_pseudo_round_mut_uint4_rep(const uint32_t * const sharedMemory, uint4 &val, uint4 const key[10])
+{
+	const uint32_t lane = threadIdx.x & 31;
+	round_perm4_rep(val, 0);
+	round_perm4_rep(val, 1);
+	round_perm4_rep(val, 2);
+	round_perm4_rep(val, 3);
+	round_perm4_rep(val, 4);
+	round_perm4_rep(val, 5);
+	round_perm4_rep(val, 6);
+	round_perm4_rep(val, 7);
+	round_perm4_rep(val, 8);
+	round_perm4_rep(val, 9);
 }
