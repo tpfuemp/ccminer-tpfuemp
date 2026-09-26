@@ -41,7 +41,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `-a` name | Coin / description |
 |---|---|
 | `0x10` | ChainOX |
-| `allium` | Lyra2 + Blake2s (Garlicoin) |
+| `allium` | Blake-256 + Keccak + Lyra2 x2 + CubeHash + Skein + Groestl (Garlicoin) |
 | `anime` | Animecoin |
 | `argon2d500` | Dynamic (DYN) |
 | `argon2d1000` | Zero Dynamics Cash |
@@ -64,7 +64,9 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `decred` | Decred BLAKE3 (DCP-0011) |
 | `deep` | Deepcoin |
 | `dmd-gr` (`diamond`) | Diamond-Groestl |
-| `equihash` (`equi`, `equihash144`) | Zcash Equihash 200/9 (+ 144/5 Tromp) |
+| `equihash` (`equi`) | Equihash 200/9 (Zcash) |
+| `equihash144` (`equihash144_5`) | Equihash 144/5 |
+| `equihash192` (`equihash192_7`) | Equihash 192/7 |
 | `evohash` | EvoAI |
 | `evrprogpow` | EvrProgPow (Evrmore) |
 | `firopow` | FiroPoW (Firo, StakeCube) |

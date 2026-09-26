@@ -16,68 +16,226 @@
 #define Ncol 8
 #define memshift 3
 
-#define BUF_COUNT 0
-
 __device__ uint2 *DMatrix;
 
-#define LYRA2_TPB TPB52   // launch shape shared with the header
-#define LYRA2_CONST_IDX          // measured +2.0% here (see the header)
-#include "cuda/lyra2_device.cuh"
+/* The wander matrix: the first L2_SCOL columns in dynamic shared memory, the last
+ * L2_RCOL in registers (half the shared memory, twice the hashes per SM). Register
+ * cells take only a compile-time column; a data-dependent row is a select. */
+#define L2_RCOL 4
+#define L2_SCOL (Ncol - L2_RCOL)
+#define L2_BDIMX 4                     // lanes per hash
+#define L2_BDIMY (TPB52 / L2_BDIMX)    // hashes per block
 
-static __device__ __forceinline__
-void reduceDuplexRowt_8(const int rowInOut, uint2* state, const uint32_t thread, const uint32_t threads)
+typedef uint2 lyra2_regs_t[Nrow][L2_RCOL][3];
+
+__device__ __forceinline__ void l2_lds(uint2 d[3], const int row, const int col)
 {
-	uint2 state1[3], state2[3], last[3];
-
-	LD4S(state1, 2, 0, thread, threads);
-	LD4S(last, rowInOut, 0, thread, threads);
-
+	extern __shared__ uint2 shared_mem[];
+	const int s0 = (L2_SCOL * row + col) * memshift;
 	#pragma unroll
 	for (int j = 0; j < 3; j++)
-		state[j] ^= state1[j] + last[j];
+		d[j] = shared_mem[((s0 + j) * L2_BDIMY + threadIdx.y) * L2_BDIMX + threadIdx.x];
+}
 
-	round_lyra(state);
+__device__ __forceinline__ void l2_sts(const int row, const int col, const uint2 d[3])
+{
+	extern __shared__ uint2 shared_mem[];
+	const int s0 = (L2_SCOL * row + col) * memshift;
+	#pragma unroll
+	for (int j = 0; j < 3; j++)
+		shared_mem[((s0 + j) * L2_BDIMY + threadIdx.y) * L2_BDIMX + threadIdx.x] = d[j];
+}
 
-	// simultaneously receive data from preceding thread and send data to following thread
-	uint2 Data0 = state[0];
-	uint2 Data1 = state[1];
-	uint2 Data2 = state[2];
-	WarpShuffle3(Data0, Data1, Data2, threadIdx.x - 1, threadIdx.x - 1, threadIdx.x - 1, 4);
+// depth-3 tree, not a chain: the read sits on the sponge's critical path
+__device__ __forceinline__ uint32_t l2_sel8(const bool b0, const bool b1, const bool b2,
+	uint32_t v0, uint32_t v1, uint32_t v2, uint32_t v3, uint32_t v4, uint32_t v5, uint32_t v6, uint32_t v7)
+{
+	const uint32_t a = b0 ? v1 : v0, b = b0 ? v3 : v2, c = b0 ? v5 : v4, d = b0 ? v7 : v6;
+	const uint32_t e = b1 ? b : a, f = b1 ? d : c;
+	return b2 ? f : e;
+}
 
-	if (threadIdx.x == 0)
-	{
-		last[0] ^= Data2;
-		last[1] ^= Data0;
-		last[2] ^= Data1;
+__device__ __forceinline__ void l2_rld(uint2 d[3], lyra2_regs_t &R, const int row, const int c)
+{
+	const bool b0 = row & 1, b1 = row & 2, b2 = row & 4;
+	#pragma unroll
+	for (int j = 0; j < 3; j++) {
+		d[j].x = l2_sel8(b0, b1, b2, R[0][c][j].x, R[1][c][j].x, R[2][c][j].x, R[3][c][j].x,
+		                             R[4][c][j].x, R[5][c][j].x, R[6][c][j].x, R[7][c][j].x);
+		d[j].y = l2_sel8(b0, b1, b2, R[0][c][j].y, R[1][c][j].y, R[2][c][j].y, R[3][c][j].y,
+		                             R[4][c][j].y, R[5][c][j].y, R[6][c][j].y, R[7][c][j].y);
+	}
+}
+
+__device__ __forceinline__ void l2_rst(lyra2_regs_t &R, const int row, const int c, const uint2 d[3])
+{
+	#pragma unroll
+	for (int r = 0; r < Nrow; r++) {
+		#pragma unroll
+		for (int j = 0; j < 3; j++) {
+			R[r][c][j].x = (row == r) ? d[j].x : R[r][c][j].x;
+			R[r][c][j].y = (row == r) ? d[j].y : R[r][c][j].y;
+		}
+	}
+}
+
+// rotW of the sponge output into the rowInOut cell (lane 0 shifts by one word)
+__device__ __forceinline__ void l2_rotw_xor(uint2 io[3], const uint2 state[4])
+{
+	uint2 D0 = state[0], D1 = state[1], D2 = state[2];
+	WarpShuffle3(D0, D1, D2, threadIdx.x - 1, threadIdx.x - 1, threadIdx.x - 1, 4);
+	if (threadIdx.x == 0) {
+		io[0] ^= D2; io[1] ^= D0; io[2] ^= D1;
 	} else {
-		last[0] ^= Data0;
-		last[1] ^= Data1;
-		last[2] ^= Data2;
+		io[0] ^= D0; io[1] ^= D1; io[2] ^= D2;
 	}
+}
 
-	if (rowInOut == 5)
-	{
-		#pragma unroll
-		for (int j = 0; j < 3; j++)
-			last[j] ^= state[j];
-	}
+/* Setup writes rowOut back to front (column Ncol-1-i) while rowIn/rowInOut go
+ * front to back, so each setup loop splits where either side turns resident. */
 
-	for (int i = 1; i < Nrow; i++)
-	{
-		LD4S(state1, 2, i, thread, threads);
-		LD4S(state2, rowInOut, i, thread, threads);
-
-		#pragma unroll
-		for (int j = 0; j < 3; j++)
-			state[j] ^= state1[j] + state2[j];
-
+// rows 0 and 1
+static __device__ __forceinline__ void l2_duplex(uint2 state[4], lyra2_regs_t &R)
+{
+	#pragma unroll
+	for (int i = 0; i < Ncol; i++) {
+		const int col = Ncol - i - 1;
+		if (col >= L2_SCOL) l2_rst(R, 0, col - L2_SCOL, state);
+		else                l2_sts(0, col, state);
 		round_lyra(state);
 	}
 
+	uint2 a[3];
 	#pragma unroll
-	for (int j = 0; j < 3; j++)
-		state[j] ^= last[j];
+	for (int i = 0; i < L2_RCOL; i++) {
+		l2_lds(a, 0, i);
+		for (int j = 0; j < 3; j++) state[j] ^= a[j];
+		round_lyra(state);
+		for (int j = 0; j < 3; j++) a[j] ^= state[j];
+		l2_rst(R, 1, L2_RCOL - 1 - i, a);
+	}
+	#pragma unroll 4
+	for (int i = L2_RCOL; i < L2_SCOL; i++) {
+		l2_lds(a, 0, i);
+		for (int j = 0; j < 3; j++) state[j] ^= a[j];
+		round_lyra(state);
+		for (int j = 0; j < 3; j++) a[j] ^= state[j];
+		l2_sts(1, Ncol - i - 1, a);
+	}
+	#pragma unroll
+	for (int i = L2_SCOL; i < Ncol; i++) {
+		l2_rld(a, R, 0, i - L2_SCOL);
+		for (int j = 0; j < 3; j++) state[j] ^= a[j];
+		round_lyra(state);
+		for (int j = 0; j < 3; j++) a[j] ^= state[j];
+		l2_sts(1, Ncol - i - 1, a);
+	}
 }
+
+// rows 2..Nrow-1; rowOut is never rowIn or rowInOut here
+static __device__ __forceinline__
+void l2_setup(const int rowIn, const int rowInOut, const int rowOut, uint2 state[4], lyra2_regs_t &R)
+{
+	uint2 a[3], b[3];
+
+	#pragma unroll
+	for (int i = 0; i < L2_RCOL; i++) {
+		l2_lds(a, rowIn, i);
+		l2_lds(b, rowInOut, i);
+		for (int j = 0; j < 3; j++) state[j] ^= a[j] + b[j];
+		round_lyra(state);
+		for (int j = 0; j < 3; j++) a[j] ^= state[j];
+		l2_rst(R, rowOut, L2_RCOL - 1 - i, a);
+		l2_rotw_xor(b, state);
+		l2_sts(rowInOut, i, b);
+	}
+	#pragma unroll 1
+	for (int i = L2_RCOL; i < L2_SCOL; i++) {
+		l2_lds(a, rowIn, i);
+		l2_lds(b, rowInOut, i);
+		for (int j = 0; j < 3; j++) state[j] ^= a[j] + b[j];
+		round_lyra(state);
+		for (int j = 0; j < 3; j++) a[j] ^= state[j];
+		l2_sts(rowOut, Ncol - i - 1, a);
+		l2_rotw_xor(b, state);
+		l2_sts(rowInOut, i, b);
+	}
+	#pragma unroll
+	for (int i = L2_SCOL; i < Ncol; i++) {
+		l2_rld(a, R, rowIn, i - L2_SCOL);
+		l2_rld(b, R, rowInOut, i - L2_SCOL);
+		for (int j = 0; j < 3; j++) state[j] ^= a[j] + b[j];
+		round_lyra(state);
+		for (int j = 0; j < 3; j++) a[j] ^= state[j];
+		l2_sts(rowOut, Ncol - i - 1, a);
+		l2_rotw_xor(b, state);
+		l2_rst(R, rowInOut, i - L2_SCOL, b);
+	}
+}
+
+// wandering step; rowInOut is data-dependent and may equal rowIn or rowOut
+static __device__ __forceinline__
+void l2_wander(const int rowIn, const int rowInOut, const int rowOut, uint2 state[4], lyra2_regs_t &R)
+{
+	uint2 a[3], b[3], c[3];
+
+	for (int i = 0; i < L2_SCOL; i++) {
+		l2_lds(a, rowIn, i);
+		l2_lds(b, rowInOut, i);
+		for (int j = 0; j < 3; j++) state[j] ^= a[j] + b[j];
+		round_lyra(state);
+		l2_rotw_xor(b, state);
+		l2_sts(rowInOut, i, b);
+		l2_lds(c, rowOut, i);                    // after the rowInOut store
+		for (int j = 0; j < 3; j++) c[j] ^= state[j];
+		l2_sts(rowOut, i, c);
+	}
+	#pragma unroll
+	for (int i = L2_SCOL; i < Ncol; i++) {
+		l2_rld(a, R, rowIn, i - L2_SCOL);
+		l2_rld(b, R, rowInOut, i - L2_SCOL);
+		for (int j = 0; j < 3; j++) state[j] ^= a[j] + b[j];
+		round_lyra(state);
+		l2_rotw_xor(b, state);
+		l2_rst(R, rowInOut, i - L2_SCOL, b);
+		l2_rld(c, R, rowOut, i - L2_SCOL);       // after the rowInOut store
+		for (int j = 0; j < 3; j++) c[j] ^= state[j];
+		l2_rst(R, rowOut, i - L2_SCOL, c);
+	}
+}
+
+// last wandering step: reads row 2 and rowInOut only
+static __device__ __forceinline__
+void l2_wander_last(const int rowInOut, uint2 state[4], lyra2_regs_t &R)
+{
+	uint2 a[3], b[3], last[3];
+
+	l2_lds(a, 2, 0);
+	l2_lds(last, rowInOut, 0);
+	for (int j = 0; j < 3; j++) state[j] ^= a[j] + last[j];
+	round_lyra(state);
+	l2_rotw_xor(last, state);
+	if (rowInOut == 5) {
+		for (int j = 0; j < 3; j++) last[j] ^= state[j];
+	}
+
+	for (int i = 1; i < L2_SCOL; i++) {
+		l2_lds(a, 2, i);
+		l2_lds(b, rowInOut, i);
+		for (int j = 0; j < 3; j++) state[j] ^= a[j] + b[j];
+		round_lyra(state);
+	}
+	#pragma unroll
+	for (int i = L2_SCOL; i < Ncol; i++) {
+		l2_rld(a, R, 2, i - L2_SCOL);
+		l2_rld(b, R, rowInOut, i - L2_SCOL);
+		for (int j = 0; j < 3; j++) state[j] ^= a[j] + b[j];
+		round_lyra(state);
+	}
+
+	for (int j = 0; j < 3; j++) state[j] ^= last[j];
+}
+
 
 __constant__ uint2x4 blake2b_IV[2] = {
 	0xf3bcc908lu, 0x6a09e667lu,
@@ -118,44 +276,39 @@ __global__
 __launch_bounds__(TPB52, 1)
 void lyra2_gpu_hash_32_2(const uint32_t threads, uint64_t *g_hash)
 {
-	const uint32_t thread = LYRA2_IDX_Y * blockIdx.x + threadIdx.y;
+	const uint32_t thread = L2_BDIMY * blockIdx.x + threadIdx.y;
 	if (thread < threads)
 	{
 		uint2 state[4];
-		state[0] = __ldg(&DMatrix[(0 * threads + thread) * LYRA2_IDX_X + threadIdx.x]);
-		state[1] = __ldg(&DMatrix[(1 * threads + thread) * LYRA2_IDX_X + threadIdx.x]);
-		state[2] = __ldg(&DMatrix[(2 * threads + thread) * LYRA2_IDX_X + threadIdx.x]);
-		state[3] = __ldg(&DMatrix[(3 * threads + thread) * LYRA2_IDX_X + threadIdx.x]);
+		lyra2_regs_t R;
+		state[0] = __ldg(&DMatrix[(0 * threads + thread) * L2_BDIMX + threadIdx.x]);
+		state[1] = __ldg(&DMatrix[(1 * threads + thread) * L2_BDIMX + threadIdx.x]);
+		state[2] = __ldg(&DMatrix[(2 * threads + thread) * L2_BDIMX + threadIdx.x]);
+		state[3] = __ldg(&DMatrix[(3 * threads + thread) * L2_BDIMX + threadIdx.x]);
 
-		reduceDuplex(state, thread, threads);
-		reduceDuplexRowSetup(1, 0, 2, state, thread, threads);
-		reduceDuplexRowSetup(2, 1, 3, state, thread, threads);
-		reduceDuplexRowSetup(3, 0, 4, state, thread, threads);
-		reduceDuplexRowSetup(4, 3, 5, state, thread, threads);
-		reduceDuplexRowSetup(5, 2, 6, state, thread, threads);
-		reduceDuplexRowSetup(6, 1, 7, state, thread, threads);
+		l2_duplex(state, R);
 
-		uint32_t rowa = WarpShuffle(state[0].x, 0, 4) & 7;
-		reduceDuplexRowt(7, rowa, 0, state, thread, threads);
-		rowa = WarpShuffle(state[0].x, 0, 4) & 7;
-		reduceDuplexRowt(0, rowa, 3, state, thread, threads);
-		rowa = WarpShuffle(state[0].x, 0, 4) & 7;
-		reduceDuplexRowt(3, rowa, 6, state, thread, threads);
-		rowa = WarpShuffle(state[0].x, 0, 4) & 7;
-		reduceDuplexRowt(6, rowa, 1, state, thread, threads);
-		rowa = WarpShuffle(state[0].x, 0, 4) & 7;
-		reduceDuplexRowt(1, rowa, 4, state, thread, threads);
-		rowa = WarpShuffle(state[0].x, 0, 4) & 7;
-		reduceDuplexRowt(4, rowa, 7, state, thread, threads);
-		rowa = WarpShuffle(state[0].x, 0, 4) & 7;
-		reduceDuplexRowt(7, rowa, 2, state, thread, threads);
-		rowa = WarpShuffle(state[0].x, 0, 4) & 7;
-		reduceDuplexRowt_8(rowa, state, thread, threads);
+		// one body for all steps (rowIn, rowInOut, rowOut): (1,0,2) (2,1,3) (3,0,4) (4,3,5) (5,2,6) (6,1,7)
+		#pragma unroll 1
+		for (int s = 0; s < 6; s++)
+			l2_setup(s + 1, (0x123010u >> (4 * s)) & 0xF, s + 2, state, R);
 
-		DMatrix[(0 * threads + thread) * LYRA2_IDX_X + threadIdx.x] = state[0];
-		DMatrix[(1 * threads + thread) * LYRA2_IDX_X + threadIdx.x] = state[1];
-		DMatrix[(2 * threads + thread) * LYRA2_IDX_X + threadIdx.x] = state[2];
-		DMatrix[(3 * threads + thread) * LYRA2_IDX_X + threadIdx.x] = state[3];
+		// rowOut 0 3 6 1 4 7 2 = 3s mod 8; rowIn is 7, then the previous rowOut
+		int rowIn = 7;
+		#pragma unroll 1
+		for (int s = 0; s < 7; s++) {
+			const int rowOut = (3 * s) & 7;
+			const uint32_t rowa = WarpShuffle(state[0].x, 0, 4) & 7;
+			l2_wander(rowIn, rowa, rowOut, state, R);
+			rowIn = rowOut;
+		}
+		const uint32_t rowa = WarpShuffle(state[0].x, 0, 4) & 7;
+		l2_wander_last(rowa, state, R);
+
+		DMatrix[(0 * threads + thread) * L2_BDIMX + threadIdx.x] = state[0];
+		DMatrix[(1 * threads + thread) * L2_BDIMX + threadIdx.x] = state[1];
+		DMatrix[(2 * threads + thread) * L2_BDIMX + threadIdx.x] = state[2];
+		DMatrix[(3 * threads + thread) * L2_BDIMX + threadIdx.x] = state[3];
 	}
 }
 
@@ -236,6 +389,9 @@ void lyra2_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix)
 {
 	// just assign the device pointer allocated in main loop
 	cudaMemcpyToSymbol(DMatrix, &d_matrix, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice);
+	// four blocks per SM need the largest shared carveout (Ampere)
+	cudaFuncSetAttribute(lyra2_gpu_hash_32_2, cudaFuncAttributePreferredSharedMemoryCarveout,
+		cudaSharedmemCarveoutMaxShared);
 }
 
 __host__
@@ -243,12 +399,11 @@ void lyra2_cpu_hash_32(int thr_id, uint32_t threads, uint64_t *d_hash)
 {
 	const uint32_t tpb = TPB52;
 
-	// the wander matrix lives in dynamic shared memory: memshift * Ncol rows per
-	// row kept in shared, for every thread of the block
-	const size_t shared_mem = memshift * Ncol * (Nrow - BUF_COUNT) * sizeof(uint2) * tpb;
+	// the shared-memory columns of the wander matrix, for every thread of the block
+	const size_t shared_mem = memshift * L2_SCOL * Nrow * sizeof(uint2) * tpb;
 
 	dim3 grid1((threads * 4 + tpb - 1) / tpb);
-	dim3 block1(LYRA2_BDIMX, LYRA2_BDIMY);
+	dim3 block1(L2_BDIMX, L2_BDIMY);
 
 	dim3 grid2((threads + 64 - 1) / 64);
 	dim3 block2(64);
@@ -262,10 +417,10 @@ __host__
 void lyra2_cuda_hash_64(int thr_id, const uint32_t threads, uint64_t* d_hash_256, uint32_t* d_hash_512)
 {
 	const uint32_t tpb = TPB52;
-	const size_t shared_mem = memshift * Ncol * (Nrow - BUF_COUNT) * sizeof(uint2) * tpb; // 49152
+	const size_t shared_mem = memshift * L2_SCOL * Nrow * sizeof(uint2) * tpb; // 24576
 
 	dim3 grid1((size_t(threads) * 4 + tpb - 1) / tpb);
-	dim3 block1(LYRA2_BDIMX, LYRA2_BDIMY);
+	dim3 block1(L2_BDIMX, L2_BDIMY);
 
 	dim3 grid2((threads + 64 - 1) / 64);
 	dim3 block2(64);

@@ -1010,7 +1010,9 @@ static bool profile_apply(const ctl_profile_req *p, char *err, size_t errlen)
 	if (algo_changed || variant_changed) {
 		/* pool_switch() cannot bump this here: opt_algo was assigned above.  A
 		 * variant-only change must bump it too, since yespower sizes its buffers
-		 * and uploads `pers` under its init guard.  Last, after every rollback. */
+		 * and uploads `pers` under its init guard.  Last, after every rollback.
+		 * The stats reset is skipped there for the same reason. */
+		pool_reset_algo_stats();
 		algo_switch_gen++;
 		if (algo_changed)
 		applog(LOG_NOTICE, "control: algo %s -> %s",

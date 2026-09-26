@@ -281,7 +281,7 @@ Usage: " PROGRAM_NAME " [OPTIONS]\n\
 Options:\n\
   -a, --algo=ALGO       specify the hash algorithm to use\n\
 			0x10		ChainOX\n\
-			allium		Lyra2 blake2s\n\
+			allium		Garlicoin (Lyra2 chain)\n\
 			anime		Animecoin\n\
 			argon2d500	Dynamic (DYN)\n\
 			argon2d1000	Zero Dynamics Cash\n\
@@ -304,7 +304,9 @@ Options:\n\
 			decred		Decred BLAKE3\n\
 			deep		Deepcoin\n\
 			dmd-gr		Diamond-Groestl\n\
-			equihash	Zcash Equihash\n\
+			equihash	Equihash 200/9 (Zcash)\n\
+			equihash144	Equihash 144/5\n\
+			equihash192	Equihash 192/7\n\
 			evohash		EvoAI\n\
 			evrprogpow	EvrProgPow (Evrmore)\n\
 			firopow		FiroPoW (Firo, StakeCube)\n\

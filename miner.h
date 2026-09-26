@@ -963,6 +963,7 @@ bool pool_switch_url(char *params);
 bool pool_switch_url_algo(char *params, int algo);
 bool pool_switch(int thr_id, int pooln);
 bool pool_switch_next(int thr_id);
+void pool_reset_algo_stats(void);
 int pool_get_first_valid(int startfrom);
 bool parse_pool_array(json_t *obj);
 void pool_dump_infos(void);

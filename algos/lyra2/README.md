@@ -30,12 +30,19 @@ Two shared device headers:
   `uint2[4]`, single-thread `uint2x4[4]`) and the quad-scoped variants z330 needs.
 - `cuda/lyra2_device.cuh` — the shared-memory row ops (`LD4S`/`ST4S`,
   `reduceDuplex`, `reduceDuplexRowSetup`, `reduceDuplexRowt`), macro-driven off the
-  includer's `Nrow`/`Ncol`/`memshift`/`BUF_COUNT`. Used by lyra2 and lyra2z (both
-  8 × 8, memshift 3, BUF_COUNT 0).
+  includer's `Nrow`/`Ncol`/`memshift`/`BUF_COUNT`. Used by lyra2z (8 x 8, memshift 3,
+  BUF_COUNT 0).
 
-The row ops are not shared further: **lyra2v2** uses flat-indexed unrolled
-accessors (`ST4S(index, data)`, `reduceDuplexRowSetupV2`) rather than (row, col)
-ops, and **lyra2z330** streams a global matrix, so its accessors take the matrix
+The v1 stage (`cuda_lyra2.cu`, used by lyra2, allium and evohash) has its own row
+ops: it keeps the first four columns of each matrix row in shared memory and the
+last four in registers, which halves the shared memory per hash and doubles the
+hashes resident per SM. Register cells are only indexed by a compile-time column;
+the data-dependent wander row becomes a select.
+
+The v2 stage (`cuda_lyra2v2.cu`, used by lyra2v2, x21s and x25x) does the same on
+its 4 x 4 matrix: two columns in shared memory, two in registers. Its shared-memory
+columns stay in rolled loops, because fully unrolled the kernel is much slower on
+sm_61. **lyra2z330** streams a global matrix, so its accessors take the matrix
 pointer and interleave by thread. The `blake2b_IV` tables likewise stay per-TU —
 v1/v2 `__constant__`, Z kernel-local `const`, z330 a lane-indexed `uint2` view.
 
@@ -68,7 +75,7 @@ pre-zeroes the matrix — Setup writes every row before it can be read.
 
 ### GPU kernel (`algos/stages/cuda_lyra2Z330.cu`)
 
-The other matrix stages hold the whole matrix in shared memory (~3 KB per hash);
+The other matrix stages hold the whole matrix on chip (a few KB per hash);
 7.7 MB cannot fit, so this one keeps it in global memory and **streams** it — the row
 operations walk a row column by column with only the 16-word sponge state live.
 Everything is one launch: absorb → rows 0/1 → Setup → Wandering → wrap-up → squeeze.

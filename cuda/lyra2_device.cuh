@@ -35,17 +35,10 @@
 #define LYRA2_BDIMX 4
 #define LYRA2_BDIMY (LYRA2_TPB / LYRA2_BDIMX)
 
-/* Whether the index math uses those constants is opt-in per includer: it measured
- * faster for the v1 stage and slower for Lyra2Z, where a compile-time index lets
- * ptxas fully unroll the wander kernel several times over (a source #pragma unroll
- * does not suppress that). cuda_lyra2.cu opts in; cuda_lyra2Z.cu does not. */
-#ifdef LYRA2_CONST_IDX
-#define LYRA2_IDX_X LYRA2_BDIMX
-#define LYRA2_IDX_Y LYRA2_BDIMY
-#else
+/* Runtime block size on purpose: a compile-time index lets ptxas fully unroll the
+ * Lyra2Z wander, which is slower (#pragma unroll does not stop it). */
 #define LYRA2_IDX_X blockDim.x
 #define LYRA2_IDX_Y blockDim.y
-#endif
 
 __device__ __forceinline__ void LD4S(uint2 res[3], const int row, const int col, const int thread, const int threads)
 {

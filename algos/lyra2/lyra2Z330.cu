@@ -222,7 +222,6 @@ extern "C" int scanhash_lyra2z330(int thr_id, struct work* work, uint32_t max_no
 				work->nonces[0] = h_resNonces[0];
 				work->valid_nonces = 1;
 				work_set_target_ratio(work, vhash);
-				pdata[19] = work->nonces[0] + 1;
 
 				if (h_resNonces[1] != UINT32_MAX) {
 					be32enc(&endiandata[19], h_resNonces[1]);
@@ -232,15 +231,28 @@ extern "C" int scanhash_lyra2z330(int thr_id, struct work* work, uint32_t max_no
 						work->nonces[1] = h_resNonces[1];
 						bn_set_target_ratio(work, vhash, 1);
 						work->valid_nonces++;
+					} else if (vhash[7] > ptarget[7]) {
+						gpu_increment_reject(thr_id);
+						if (!opt_quiet) gpulog(LOG_WARNING, thr_id,
+							"result for %08x does not validate on CPU!", h_resNonces[1]);
 					}
+					// the device reports at most two: rescan above them
 					pdata[19] = max(work->nonces[0], h_resNonces[1]) + 1;
+				} else {
+					// sole candidate: skip the rest of the batch (the caller adds 1)
+					const uint64_t next = (uint64_t)pdata[19] + throughput;
+					pdata[19] = (next > max_nonce) ? max_nonce : (uint32_t)next - 1;
 				}
 				return work->valid_nonces;
 			}
-			else if (vhash[7] > ptarget[7]) {
+			// a screen near-miss is no GPU error
+			if (vhash[7] > ptarget[7]) {
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet) gpulog(LOG_WARNING, thr_id,
 					"result for %08x does not validate on CPU!", h_resNonces[0]);
+			}
+			// rescan above it only if slot 1 holds another candidate; else the batch is done
+			if (h_resNonces[1] != UINT32_MAX) {
 				pdata[19] = h_resNonces[0] + 1;
 				continue;
 			}

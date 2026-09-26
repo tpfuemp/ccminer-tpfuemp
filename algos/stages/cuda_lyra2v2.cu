@@ -13,352 +13,174 @@
 
 __device__ uint2x4 *DState;
 
-__device__ __forceinline__ uint2 LD4S(const int index)
+/* The 4 x 4 wander matrix: the first V2_SCOL columns in dynamic shared memory, the
+ * last V2_RCOL in registers (half the shared memory, more blocks per SM). Register
+ * cells take only a compile-time column; the wander row is a select. Shared columns
+ * stay in rolled loops: unrolled, the kernel is much slower on sm_61. */
+#define V2_RCOL 2
+#define V2_SCOL (Ncol - V2_RCOL)
+
+typedef uint2 v2_regs_t[Nrow][V2_RCOL][3];
+
+__device__ __forceinline__ void v2_lds(uint2 d[3], const int row, const int col)
 {
 	extern __shared__ uint2 shared_mem[];
-
-	return shared_mem[(index * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x];
+	const int s = (row * V2_SCOL + col) * memshift;
+	#pragma unroll
+	for (int j = 0; j < 3; j++)
+		d[j] = shared_mem[((s + j) * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x];
 }
 
-__device__ __forceinline__ void ST4S(const int index, const uint2 data)
+__device__ __forceinline__ void v2_sts(const int row, const int col, const uint2 d[3])
 {
 	extern __shared__ uint2 shared_mem[];
-
-	shared_mem[(index * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x] = data;
+	const int s = (row * V2_SCOL + col) * memshift;
+	#pragma unroll
+	for (int j = 0; j < 3; j++)
+		shared_mem[((s + j) * blockDim.y + threadIdx.y) * blockDim.x + threadIdx.x] = d[j];
 }
 
-
-
-__device__ __forceinline__ void reduceDuplexRowSetupV2(uint2 state[4])
+__device__ __forceinline__ void v2_rld(uint2 d[3], v2_regs_t &R, const int row, const int c)
 {
-	int i, j;
-	uint2 state1[Ncol][3], state0[Ncol][3], state2[3];
-
-#pragma unroll
-	for (int i = 0; i < Ncol; i++)
-	{
-#pragma unroll
-		for (j = 0; j < 3; j++)
-			state0[Ncol - i - 1][j] = state[j];
-		round_lyra(state);
-	}
-
-	//#pragma unroll 4
-	for (i = 0; i < Ncol; i++)
-	{
-#pragma unroll
-		for (j = 0; j < 3; j++)
-			state[j] ^= state0[i][j];
-
-		round_lyra(state);
-
-#pragma unroll
-		for (j = 0; j < 3; j++)
-			state1[Ncol - i - 1][j] = state0[i][j];
-
-#pragma unroll
-		for (j = 0; j < 3; j++)
-			state1[Ncol - i - 1][j] ^= state[j];
-	}
-
-	uint32_t s0 = 0;
-	uint32_t s2 = 33;
-	for (i = 0; i < Ncol; i++)
-	{
-#pragma unroll
-		for (j = 0; j < 3; j++)
-			state[j] ^= state1[i][j] + state0[i][j];
-
-		round_lyra(state);
-
-#pragma unroll
-		for (j = 0; j < 3; j++)
-			state2[j] = state1[i][j];
-
-#pragma unroll
-		for (j = 0; j < 3; j++)
-			state2[j] ^= state[j];
-
-#pragma unroll
-		for (j = 0; j < 3; j++)
-			ST4S(s2 + j, state2[j]);
-
-		//���O�̃X���b�h����f�[�^��Ⴄ(�����Ɉ��̃X���b�h�Ƀf�[�^�𑗂�)
-		uint2 Data0 = state[0];
-		uint2 Data1 = state[1];
-		uint2 Data2 = state[2];
-		WarpShuffle3(Data0, Data1, Data2, threadIdx.x - 1, threadIdx.x - 1, threadIdx.x - 1, 4);
-
-		if (threadIdx.x == 0)
-		{
-			state0[i][0] ^= Data2;
-			state0[i][1] ^= Data0;
-			state0[i][2] ^= Data1;
-		}
-		else
-		{
-			state0[i][0] ^= Data0;
-			state0[i][1] ^= Data1;
-			state0[i][2] ^= Data2;
-		}
-
-#pragma unroll
-		for (j = 0; j < 3; j++)
-			ST4S(s0 + j, state0[i][j]);
-
-#pragma unroll
-		for (j = 0; j < 3; j++)
-			state0[i][j] = state2[j];
-
-		s0 += memshift;
-		s2 -= memshift;
-	}
-
-	s2 += 24;
-	for (i = 0; i < Ncol; i++)
-	{
-#pragma unroll
-		for (j = 0; j < 3; j++)
-			state[j] ^= state1[i][j] + state0[Ncol - i - 1][j];
-
-		round_lyra(state);
-
-#pragma unroll
-		for (j = 0; j < 3; j++)
-			state0[Ncol - i - 1][j] ^= state[j];
-#pragma unroll
-		for (j = 0; j < 3; j++)
-			ST4S(s2 + j, state0[Ncol - i - 1][j]);
-
-		//���O�̃X���b�h����f�[�^��Ⴄ(�����Ɉ��̃X���b�h�Ƀf�[�^�𑗂�)
-		uint2 Data0 = state[0];
-		uint2 Data1 = state[1];
-		uint2 Data2 = state[2];
-		WarpShuffle3(Data0, Data1, Data2, threadIdx.x - 1, threadIdx.x - 1, threadIdx.x - 1, 4);
-
-		if (threadIdx.x == 0)
-		{
-			state1[i][0] ^= Data2;
-			state1[i][1] ^= Data0;
-			state1[i][2] ^= Data1;
-		}
-		else
-		{
-			state1[i][0] ^= Data0;
-			state1[i][1] ^= Data1;
-			state1[i][2] ^= Data2;
-		}
-
-#pragma unroll
-		for (j = 0; j < 3; j++)
-			ST4S(s0 + j, state1[i][j]);
-
-		s0 += memshift;
-		s2 -= memshift;
+	const bool b0 = row & 1, b1 = row & 2;
+	#pragma unroll
+	for (int j = 0; j < 3; j++) {
+		uint2 a, b;
+		a.x = b0 ? R[1][c][j].x : R[0][c][j].x;  a.y = b0 ? R[1][c][j].y : R[0][c][j].y;
+		b.x = b0 ? R[3][c][j].x : R[2][c][j].x;  b.y = b0 ? R[3][c][j].y : R[2][c][j].y;
+		d[j].x = b1 ? b.x : a.x;                 d[j].y = b1 ? b.y : a.y;
 	}
 }
 
-__device__ void reduceDuplexRowtV2(uint2 state[4])
+__device__ __forceinline__ void v2_rst(v2_regs_t &R, const int row, const int c, const uint2 d[3])
 {
-	uint32_t rowInOut = WarpShuffle(state[0].x, 0, 4) & 3;
-
-	uint2 state2[3], state1[3], last[3];
-	uint32_t s1 = 36;
-	uint32_t s2 = 12 * rowInOut;
-	uint32_t s3 = 0;
-
-	for (int i = 0; i < Ncol; i++)
-	{
-#pragma unroll
-		for (int j = 0; j < 3; j++)
-			state2[j] = LD4S(s2 + j);
-
-#pragma unroll
-		for (int j = 0; j < 3; j++)
-			state[j] ^= LD4S(s1 + j) + state2[j];
-
-		round_lyra(state);
-
-		//���O�̃X���b�h����f�[�^��Ⴄ(�����Ɉ��̃X���b�h�Ƀf�[�^�𑗂�)
-		uint2 Data0 = state[0];
-		uint2 Data1 = state[1];
-		uint2 Data2 = state[2];
-		WarpShuffle3(Data0, Data1, Data2, threadIdx.x - 1, threadIdx.x - 1, threadIdx.x - 1, 4);
-
-		if (threadIdx.x == 0)
-		{
-			state2[0] ^= Data2;
-			state2[1] ^= Data0;
-			state2[2] ^= Data1;
+	#pragma unroll
+	for (int r = 0; r < Nrow; r++)
+		#pragma unroll
+		for (int j = 0; j < 3; j++) {
+			R[r][c][j].x = (row == r) ? d[j].x : R[r][c][j].x;
+			R[r][c][j].y = (row == r) ? d[j].y : R[r][c][j].y;
 		}
-		else
-		{
-			state2[0] ^= Data0;
-			state2[1] ^= Data1;
-			state2[2] ^= Data2;
-		}
+}
 
-#pragma unroll
-		for (int j = 0; j < 3; j++)
-		{
-			ST4S(s2 + j, state2[j]);
-			ST4S(s3 + j, LD4S(s3 + j) ^ state[j]);
-		}
+// col must be a compile-time constant at every call
+__device__ __forceinline__ void v2_ld(uint2 d[3], v2_regs_t &R, const int row, const int col)
+{
+	if (col >= V2_SCOL) v2_rld(d, R, row, col - V2_SCOL); else v2_lds(d, row, col);
+}
 
-		s1 += memshift;
-		s2 += memshift;
-		s3 += memshift;
+__device__ __forceinline__ void v2_st(v2_regs_t &R, const int row, const int col, const uint2 d[3])
+{
+	if (col >= V2_SCOL) v2_rst(R, row, col - V2_SCOL, d); else v2_sts(row, col, d);
+}
+
+// rotW of the sponge output into the rowInOut cell (lane 0 shifts by one word)
+__device__ __forceinline__ void v2_rotw_xor(uint2 io[3], const uint2 state[4])
+{
+	uint2 D0 = state[0], D1 = state[1], D2 = state[2];
+	WarpShuffle3(D0, D1, D2, threadIdx.x - 1, threadIdx.x - 1, threadIdx.x - 1, 4);
+	if (threadIdx.x == 0) {
+		io[0] ^= D2; io[1] ^= D0; io[2] ^= D1;
+	} else {
+		io[0] ^= D0; io[1] ^= D1; io[2] ^= D2;
 	}
-	s1 = 0;
-	rowInOut = WarpShuffle(state[0].x, 0, 4) & 3;
-	s2 = 12 * rowInOut;
+}
 
-	for (int i = 0; i < Ncol; i++)
-	{
-#pragma unroll
-		for (int j = 0; j < 3; j++)
-			state2[j] = LD4S(s2 + j);
+// rows 0 and 1 built in registers; rows 2 and 3 written back to front while 0 and 1 are rotW-updated
+__device__ __forceinline__ void v2_setup(uint2 state[4], v2_regs_t &R)
+{
+	uint2 r0[Ncol][3], r1[Ncol][3], t[3];
 
-#pragma unroll
-		for (int j = 0; j < 3; j++)
-			state[j] ^= LD4S(s1 + j) + state2[j];
-
+	#pragma unroll
+	for (int i = 0; i < Ncol; i++) {
+		for (int j = 0; j < 3; j++) r0[Ncol - i - 1][j] = state[j];
 		round_lyra(state);
-
-		//���O�̃X���b�h����f�[�^��Ⴄ(�����Ɉ��̃X���b�h�Ƀf�[�^�𑗂�)
-		uint2 Data0 = state[0];
-		uint2 Data1 = state[1];
-		uint2 Data2 = state[2];
-		WarpShuffle3(Data0, Data1, Data2, threadIdx.x - 1, threadIdx.x - 1, threadIdx.x - 1, 4);
-
-		if (threadIdx.x == 0)
-		{
-			state2[0] ^= Data2;
-			state2[1] ^= Data0;
-			state2[2] ^= Data1;
-		}
-		else
-		{
-			state2[0] ^= Data0;
-			state2[1] ^= Data1;
-			state2[2] ^= Data2;
-		}
-
-#pragma unroll
-		for (int j = 0; j < 3; j++)
-		{
-			ST4S(s2 + j, state2[j]);
-			ST4S(s3 + j, LD4S(s3 + j) ^ state[j]);
-		}
-
-		s1 += memshift;
-		s2 += memshift;
-		s3 += memshift;
 	}
-
-	rowInOut = WarpShuffle(state[0].x, 0, 4) & 3;
-	s2 = 12 * rowInOut;
-
-	for (int i = 0; i < Ncol; i++)
-	{
-#pragma unroll
-		for (int j = 0; j < 3; j++)
-			state2[j] = LD4S(s2 + j);
-
-#pragma unroll
-		for (int j = 0; j < 3; j++)
-			state[j] ^= LD4S(s1 + j) + state2[j];
-
+	#pragma unroll
+	for (int i = 0; i < Ncol; i++) {
+		for (int j = 0; j < 3; j++) state[j] ^= r0[i][j];
 		round_lyra(state);
-
-		//���O�̃X���b�h����f�[�^��Ⴄ(�����Ɉ��̃X���b�h�Ƀf�[�^�𑗂�)
-		uint2 Data0 = state[0];
-		uint2 Data1 = state[1];
-		uint2 Data2 = state[2];
-		WarpShuffle3(Data0, Data1, Data2, threadIdx.x - 1, threadIdx.x - 1, threadIdx.x - 1, 4);
-
-		if (threadIdx.x == 0)
-		{
-			state2[0] ^= Data2;
-			state2[1] ^= Data0;
-			state2[2] ^= Data1;
-		}
-		else
-		{
-			state2[0] ^= Data0;
-			state2[1] ^= Data1;
-			state2[2] ^= Data2;
-		}
-
-#pragma unroll
-		for (int j = 0; j < 3; j++)
-		{
-			ST4S(s2 + j, state2[j]);
-			ST4S(s3 + j, LD4S(s3 + j) ^ state[j]);
-		}
-
-		s1 += memshift;
-		s2 += memshift;
-		s3 += memshift;
+		for (int j = 0; j < 3; j++) r1[Ncol - i - 1][j] = r0[i][j] ^ state[j];
 	}
+	#pragma unroll
+	for (int i = 0; i < Ncol; i++) {
+		for (int j = 0; j < 3; j++) state[j] ^= r1[i][j] + r0[i][j];
+		round_lyra(state);
+		for (int j = 0; j < 3; j++) t[j] = r1[i][j] ^ state[j];
+		v2_st(R, 2, Ncol - i - 1, t);
+		v2_rotw_xor(r0[i], state);
+		v2_st(R, 0, i, r0[i]);
+		for (int j = 0; j < 3; j++) r0[i][j] = t[j];   // now row 2, column Ncol-1-i
+	}
+	#pragma unroll
+	for (int i = 0; i < Ncol; i++) {
+		for (int j = 0; j < 3; j++) state[j] ^= r1[i][j] + r0[Ncol - i - 1][j];
+		round_lyra(state);
+		for (int j = 0; j < 3; j++) r0[Ncol - i - 1][j] ^= state[j];
+		v2_st(R, 3, Ncol - i - 1, r0[Ncol - i - 1]);
+		v2_rotw_xor(r1[i], state);
+		v2_st(R, 1, i, r1[i]);
+	}
+}
 
-	rowInOut = WarpShuffle(state[0].x, 0, 4) & 3;
-	s2 = 12 * rowInOut;
-
-#pragma unroll
-	for (int j = 0; j < 3; j++)
-		last[j] = LD4S(s2 + j);
-
-#pragma unroll
-	for (int j = 0; j < 3; j++)
-		state[j] ^= LD4S(s1 + j) + last[j];
-
+// one column of a wandering step; rowInOut may equal rowIn or rowOut
+__device__ __forceinline__ void v2_wander_col(const int rowIn, const int rowInOut, const int rowOut,
+	const int i, uint2 state[4], v2_regs_t &R, const bool in_shared)
+{
+	uint2 a[3], b[3], c[3];
+	if (in_shared) { v2_lds(b, rowInOut, i); v2_lds(a, rowIn, i); }
+	else           { v2_ld(b, R, rowInOut, i); v2_ld(a, R, rowIn, i); }
+	for (int j = 0; j < 3; j++) state[j] ^= a[j] + b[j];
 	round_lyra(state);
-
-	//���O�̃X���b�h����f�[�^��Ⴄ(�����Ɉ��̃X���b�h�Ƀf�[�^�𑗂�)
-	uint2 Data0 = state[0];
-	uint2 Data1 = state[1];
-	uint2 Data2 = state[2];
-	WarpShuffle3(Data0, Data1, Data2, threadIdx.x - 1, threadIdx.x - 1, threadIdx.x - 1, 4);
-
-	if (threadIdx.x == 0)
-	{
-		last[0] ^= Data2;
-		last[1] ^= Data0;
-		last[2] ^= Data1;
-	}
-	else
-	{
-		last[0] ^= Data0;
-		last[1] ^= Data1;
-		last[2] ^= Data2;
-	}
-
-	if (rowInOut == 3)
-	{
-#pragma unroll
-		for (int j = 0; j < 3; j++)
-			last[j] ^= state[j];
-	}
-	s1 += memshift;
-	s2 += memshift;
-
-	for (int i = 1; i < Ncol; i++)
-	{
-#pragma unroll
-		for (int j = 0; j < 3; j++)
-			state[j] ^= LD4S(s1 + j) + LD4S(s2 + j);
-
-		round_lyra(state);
-
-		s1 += memshift;
-		s2 += memshift;
-	}
-
-#pragma unroll
-	for (int j = 0; j < 3; j++)
-		state[j] ^= last[j];
+	v2_rotw_xor(b, state);
+	if (in_shared) v2_sts(rowInOut, i, b); else v2_st(R, rowInOut, i, b);
+	if (in_shared) v2_lds(c, rowOut, i);   else v2_ld(c, R, rowOut, i);   // after the rowInOut store
+	for (int j = 0; j < 3; j++) c[j] ^= state[j];
+	if (in_shared) v2_sts(rowOut, i, c);   else v2_st(R, rowOut, i, c);
 }
+
+__device__ __forceinline__ void v2_wander(const int rowIn, const int rowOut, uint2 state[4], v2_regs_t &R)
+{
+	const uint32_t rowInOut = WarpShuffle(state[0].x, 0, 4) & 3;
+	#pragma unroll 1
+	for (int i = 0; i < V2_SCOL; i++)
+		v2_wander_col(rowIn, rowInOut, rowOut, i, state, R, true);
+	#pragma unroll
+	for (int i = V2_SCOL; i < Ncol; i++)
+		v2_wander_col(rowIn, rowInOut, rowOut, i, state, R, false);
+}
+
+// last wandering step: reads row 2 and rowInOut, stores nothing
+__device__ __forceinline__ void v2_wander_last(uint2 state[4], v2_regs_t &R)
+{
+	const uint32_t rowInOut = WarpShuffle(state[0].x, 0, 4) & 3;
+	uint2 a[3], b[3], last[3];
+	v2_lds(last, rowInOut, 0);
+	v2_lds(a, 2, 0);
+	for (int j = 0; j < 3; j++) state[j] ^= a[j] + last[j];
+	round_lyra(state);
+	v2_rotw_xor(last, state);
+	if (rowInOut == 3)
+		for (int j = 0; j < 3; j++) last[j] ^= state[j];
+
+	#pragma unroll 1
+	for (int i = 1; i < V2_SCOL; i++) {
+		v2_lds(a, 2, i);
+		v2_lds(b, rowInOut, i);
+		for (int j = 0; j < 3; j++) state[j] ^= a[j] + b[j];
+		round_lyra(state);
+	}
+	#pragma unroll
+	for (int i = V2_SCOL; i < Ncol; i++) {
+		v2_ld(a, R, 2, i);
+		v2_ld(b, R, rowInOut, i);
+		for (int j = 0; j < 3; j++) state[j] ^= a[j] + b[j];
+		round_lyra(state);
+	}
+
+	for (int j = 0; j < 3; j++) state[j] ^= last[j];
+}
+
 
 __constant__ uint28 blake2b_IV[2] = {
 	0xf3bcc908lu, 0x6a09e667lu,
@@ -436,19 +258,24 @@ void lyra2v2_gpu_hash_32_2(uint32_t threads, uint32_t startNounce, uint64_t *out
 	if (thread < threads)
 	{
 		uint2 state[4];
-		state[0] = ((uint2*)DState)[(0 * gridDim.x * blockDim.y + thread) * blockDim.x + threadIdx.x];
-		state[1] = ((uint2*)DState)[(1 * gridDim.x * blockDim.y + thread) * blockDim.x + threadIdx.x];
-		state[2] = ((uint2*)DState)[(2 * gridDim.x * blockDim.y + thread) * blockDim.x + threadIdx.x];
-		state[3] = ((uint2*)DState)[(3 * gridDim.x * blockDim.y + thread) * blockDim.x + threadIdx.x];
+		v2_regs_t R;
+		// the init/final kernels' 64-thread grid sets the DState stride
+		const uint32_t stride = (threads + 63) & ~63u;
+		state[0] = ((uint2*)DState)[(0 * stride + thread) * blockDim.x + threadIdx.x];
+		state[1] = ((uint2*)DState)[(1 * stride + thread) * blockDim.x + threadIdx.x];
+		state[2] = ((uint2*)DState)[(2 * stride + thread) * blockDim.x + threadIdx.x];
+		state[3] = ((uint2*)DState)[(3 * stride + thread) * blockDim.x + threadIdx.x];
 
-		reduceDuplexRowSetupV2(state);
+		v2_setup(state, R);
+		v2_wander(3, 0, state, R);
+		v2_wander(0, 1, state, R);
+		v2_wander(1, 2, state, R);
+		v2_wander_last(state, R);
 
-		reduceDuplexRowtV2(state);
-
-		((uint2*)DState)[(0 * gridDim.x * blockDim.y + thread) * blockDim.x + threadIdx.x] = state[0];
-		((uint2*)DState)[(1 * gridDim.x * blockDim.y + thread) * blockDim.x + threadIdx.x] = state[1];
-		((uint2*)DState)[(2 * gridDim.x * blockDim.y + thread) * blockDim.x + threadIdx.x] = state[2];
-		((uint2*)DState)[(3 * gridDim.x * blockDim.y + thread) * blockDim.x + threadIdx.x] = state[3];
+		((uint2*)DState)[(0 * stride + thread) * blockDim.x + threadIdx.x] = state[0];
+		((uint2*)DState)[(1 * stride + thread) * blockDim.x + threadIdx.x] = state[1];
+		((uint2*)DState)[(2 * stride + thread) * blockDim.x + threadIdx.x] = state[2];
+		((uint2*)DState)[(3 * stride + thread) * blockDim.x + threadIdx.x] = state[3];
 	} //thread
 }
 
@@ -484,6 +311,9 @@ void lyra2v2_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix)
 {
 	// just assign the device pointer allocated in main loop
 	cudaMemcpyToSymbol(DState, &d_matrix, sizeof(uint64_t*), 0, cudaMemcpyHostToDevice);
+	// the extra blocks per SM need the largest shared carveout (Ampere)
+	cudaFuncSetAttribute(lyra2v2_gpu_hash_32_2, cudaFuncAttributePreferredSharedMemoryCarveout,
+		cudaSharedmemCarveoutMaxShared);
 }
 
 template <bool SOA>
@@ -491,9 +321,8 @@ __host__ static void lyra2v2_cpu_hash_32_impl(uint32_t threads, uint32_t startNo
 {
 	const uint32_t tpb = TPB52;
 
-	// the matrix lives in dynamic shared memory: memshift * Nrow * Ncol uint2
-	// per thread of the block
-	const size_t shared_mem = memshift * Nrow * Ncol * sizeof(uint2) * tpb;
+	// the shared-memory columns of the matrix, for every thread of the block
+	const size_t shared_mem = memshift * Nrow * V2_SCOL * sizeof(uint2) * tpb;
 
 	dim3 grid1((threads * 4 + tpb - 1) / tpb);
 	dim3 block1(4, tpb >> 2);

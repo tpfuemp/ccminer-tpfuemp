@@ -1,11 +1,8 @@
 /*
  * Init-time device self-test for the Lyra2 v1 matrix stage.
  *
- * Covers both shared device headers at once (blake2b_device.cuh round_lyra and the
- * warp shuffles, lyra2_device.cuh LD4S/ST4S), because the v1 wander kernel is the
- * only code that uses them together. Drives the shipping launcher rather than a
- * private kernel, so the launch shape and index math are under test too; the oracle
- * is LYRA2() from Lyra2.c, the same reference scanhash re-verifies with.
+ * Covers blake2b_device.cuh and the v1 wander's split shared/register matrix through
+ * the shipping launcher; the oracle is LYRA2() from Lyra2.c, which scanhash also uses.
  *
  * L2ST_THREADS must be a multiple of 8. The wander kernel launches block(4,8) = one
  * warp and its shuffles use a full-warp mask, so leaving quads inactive would name

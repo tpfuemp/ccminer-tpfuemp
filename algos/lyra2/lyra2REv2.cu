@@ -84,7 +84,7 @@ extern "C" int scanhash_lyra2v2(int thr_id, struct work* work, uint32_t max_nonc
 	const uint32_t first_nonce = pdata[19];
 	int dev_id = device_map[thr_id];
 	int intensity = is_windows() ? 19 : 20;
-	if (strstr(device_name[dev_id], "GTX 10")) intensity = 20;
+	if (device_sm[dev_id] == 610) intensity = 22;   // sm_61
 	uint32_t throughput = cuda_default_throughput(dev_id, 1UL << intensity);
 	if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
@@ -93,7 +93,10 @@ extern "C" int scanhash_lyra2v2(int thr_id, struct work* work, uint32_t max_nonc
 
 	if (!init[thr_id])
 	{
-		const size_t matrix_sz = 16 * sizeof(uint64_t) * 4 * 3;
+		// the wander matrix is on chip; d_matrix only carries the 4 x uint2x4 sponge state,
+		// at the init/final kernels' 64-thread padded stride
+		const size_t state_sz = 4 * 4 * sizeof(uint64_t);
+		const size_t padded = ((size_t)throughput + 63) & ~(size_t)63;
 		cudaSetDevice(dev_id);
 		if (opt_cudaschedule == -1 && gpu_threads == 1) {
 			cudaDeviceReset();
@@ -112,7 +115,7 @@ extern "C" int scanhash_lyra2v2(int thr_id, struct work* work, uint32_t max_nonc
 		// before lyra2v2_cpu_init: the self-test borrows the DMatrix symbol
 		lyra2v2_device_selftest(thr_id);
 
-		CUDA_SAFE_CALL(cudaMalloc(&d_matrix[thr_id], matrix_sz * throughput));
+		CUDA_SAFE_CALL(cudaMalloc(&d_matrix[thr_id], state_sz * padded));
 		lyra2v2_cpu_init(thr_id, throughput, d_matrix[thr_id]);
 
 		CUDA_SAFE_CALL(cudaMalloc(&d_hash[thr_id], (size_t)32 * throughput));
@@ -159,18 +162,28 @@ extern "C" int scanhash_lyra2v2(int thr_id, struct work* work, uint32_t max_nonc
 					if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
 						bn_set_target_ratio(work, vhash, 1);
 						work->valid_nonces++;
+					} else if (vhash[7] > Htarg) {
+						gpu_increment_reject(thr_id);
+						if (!opt_quiet)
+						gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[1]);
 					}
 					// Outside the guard: a second nonce that fails re-verify is still ground covered.
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				} else {
-					pdata[19] = work->nonces[0] + 1; // cursor
+					// sole candidate: skip the rest of the batch (the caller adds 1)
+					const uint64_t next = (uint64_t)pdata[19] + throughput;
+					pdata[19] = (next > max_nonce) ? max_nonce : (uint32_t)next - 1;
 				}
 				return work->valid_nonces;
 			}
-			else if (vhash[7] > Htarg) {
+			// a screen near-miss is no GPU error
+			if (vhash[7] > Htarg) {
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
 				gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
+			}
+			// rescan above it only if slot 1 holds another candidate; else the batch is done
+			if (work->nonces[1] != UINT32_MAX) {
 				pdata[19] = work->nonces[0] + 1;
 				continue;
 			}
@@ -194,7 +207,7 @@ extern "C" void free_lyra2v2(int thr_id)
 	if (!init[thr_id])
 		return;
 
-	cudaThreadSynchronize();
+	cudaDeviceSynchronize();
 
 	cudaFree(d_hash[thr_id]);
 	cudaFree(d_matrix[thr_id]);

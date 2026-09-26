@@ -154,17 +154,28 @@ extern "C" int scanhash_allium(int thr_id, struct work* work, uint32_t max_nonce
 					if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
 						bn_set_target_ratio(work, vhash, 1);
 						work->valid_nonces++;
+					} else if (vhash[7] > Htarg) {
+						gpu_increment_reject(thr_id);
+						if (!opt_quiet)
+						gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[1]);
 					}
+					// only the two lowest are reported: rescan above them
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				} else {
-					pdata[19] = work->nonces[0] + 1; // cursor
+					// sole candidate: skip the rest of the batch (the caller adds 1)
+					const uint64_t next = (uint64_t)pdata[19] + throughput;
+					pdata[19] = (next > max_nonce) ? max_nonce : (uint32_t)next - 1;
 				}
 				return work->valid_nonces;
 			}
-			else if (vhash[7] > Htarg) {
+			// a screen near-miss is no GPU error
+			if (vhash[7] > Htarg) {
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
 				gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
+			}
+			// rescan above it only if slot 1 holds another candidate; else the batch is done
+			if (groestl256_getSecNonce(thr_id, 1) != UINT32_MAX) {
 				pdata[19] = work->nonces[0] + 1;
 				continue;
 			}

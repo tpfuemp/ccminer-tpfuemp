@@ -295,10 +295,11 @@ extern "C" int scanhash_x21s(int thr_id, struct work* work, uint32_t max_nonce, 
 		}
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
-        size_t matrix_sz = 16 * sizeof(uint64_t) * 4 * 3;
-        // SM 3 implentation requires a bit more memory
-        if (device_sm[dev_id] < 500 || cuda_arch[dev_id] < 500) matrix_sz = 16 * sizeof(uint64_t) * 4 * 4;
-        CUDA_CALL_OR_RET_X(cudaMalloc(&d_matrix[thr_id], matrix_sz * throughput), -1);
+        // the lyra2v2 wander matrix is on chip; d_matrix only carries the 4 x uint2x4
+        // sponge state, at the init/final kernels' 64-thread padded stride
+        const size_t state_sz = 4 * 4 * sizeof(uint64_t);
+        const size_t padded = ((size_t)throughput + 63) & ~(size_t)63;
+        CUDA_CALL_OR_RET_X(cudaMalloc(&d_matrix[thr_id], state_sz * padded), -1);
 
 		cuda_get_arch(thr_id);
 		use_compat_kernels[thr_id] = (cuda_arch[dev_id] < 500);

@@ -28,7 +28,7 @@ its command line interface and options.
 
   -a, --algo=ALGO       specify the algorithm to use
                           0x10                ChainOX
-                          allium              Lyra2 + Blake2s (Garlicoin)
+                          allium              Blake/Keccak/Lyra2/CubeHash/Skein/Groestl (Garlicoin)
                           anime               Animecoin
                           argon2d500          Dynamic (DYN)
                           argon2d1000         Zero Dynamics Cash
@@ -52,7 +52,9 @@ its command line interface and options.
                           decred              Decred BLAKE3 (DCP-0011)
                           deep                Deepcoin
                           dmd-gr              Diamond-Groestl
-                          equihash            Zcash Equihash 200/9 (+ 144/5 Tromp)
+                          equihash / equi     Equihash 200/9 (Zcash)
+                          equihash144         Equihash 144/5 (alias equihash144_5)
+                          equihash192         Equihash 192/7 (alias equihash192_7)
                           evohash             EvoAI
                           evrprogpow          EvrProgPow (Evrmore)
                           firopow             FiroPoW (Firo, StakeCube)

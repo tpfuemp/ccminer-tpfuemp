@@ -177,6 +177,32 @@ void pool_set_attr(int pooln, const char* key, char* arg)
 }
 
 // pool switching code
+/* Speed samples, share counters and the dup log all belong to the algo that
+ * produced them. Callers that change opt_algo themselves must call this too:
+ * pool_switch() only sees a change it makes. */
+void pool_reset_algo_stats(void)
+{
+	pthread_mutex_lock(&stats_lock);
+	for (int n=0; n<opt_n_threads; n++)
+		thr_hashrates[n] = 0.;
+	/* Not derived from thr_hashrates, so it would keep serving the old algo's speed. */
+	global_hashrate = 0;
+	stats_purge_all();
+	if (check_dups)
+		hashlog_purge_all();
+	/* Per pool, but the API sums them across pools, and a share difficulty
+	 * is algo-specific -- both meaningless once the algo changes. */
+	for (int n = 0; n < num_pools; n++) {
+		pools[n].accepted_count = 0;
+		pools[n].rejected_count = 0;
+		pools[n].solved_count = 0;
+		pools[n].stales_count = 0;
+		pools[n].best_share = 0.;
+	}
+	api_reset_stats_window();
+	pthread_mutex_unlock(&stats_lock);
+}
+
 bool pool_switch(int thr_id, int pooln)
 {
 	int prevn = cur_pooln;
@@ -234,28 +260,8 @@ bool pool_switch(int thr_id, int pooln)
 
 	if (p->algo != (int) opt_algo) {
 
-		if (opt_algo != ALGO_AUTO) {
-
-			pthread_mutex_lock(&stats_lock);
-			for (int n=0; n<opt_n_threads; n++)
-				thr_hashrates[n] = 0.;
-			/* Not derived from thr_hashrates, so it would keep serving the old algo's speed. */
-			global_hashrate = 0;
-			stats_purge_all();
-			if (check_dups)
-				hashlog_purge_all();
-			/* Per pool, but the API sums them across pools, and a share difficulty
-			 * is algo-specific -- both meaningless once the algo changes. */
-			for (int n = 0; n < num_pools; n++) {
-				pools[n].accepted_count = 0;
-				pools[n].rejected_count = 0;
-				pools[n].solved_count = 0;
-				pools[n].stales_count = 0;
-				pools[n].best_share = 0.;
-			}
-			api_reset_stats_window();
-			pthread_mutex_unlock(&stats_lock);
-		}
+		if (opt_algo != ALGO_AUTO)
+			pool_reset_algo_stats();
 
 		opt_algo = (enum sha_algos) p->algo;
 
@@ -275,8 +281,10 @@ bool pool_switch(int thr_id, int pooln)
 		if (!yespower_set_variant(p->algo_name))
 			applog(LOG_ERR, "pool %d: keeping yespower variant '%s'", pooln,
 			       yespower_variant_name());
-		else if (strcmp(prev_variant, yespower_variant_name()) != 0)
+		else if (strcmp(prev_variant, yespower_variant_name()) != 0) {
+			pool_reset_algo_stats();
 			algo_switch_gen++;
+		}
 	}
 
 	if (prevn != cur_pooln) {

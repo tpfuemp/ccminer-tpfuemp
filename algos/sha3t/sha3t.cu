@@ -140,7 +140,7 @@ extern "C" int scanhash_sha3t(int thr_id, struct work *work,
 extern "C" void free_sha3t(int thr_id)
 {
 	if (!init[thr_id]) return;
-	cudaThreadSynchronize();
+	cudaDeviceSynchronize();
 	sha3t_cpu_free(thr_id);
 	cudaDeviceSynchronize();
 	init[thr_id] = false;
