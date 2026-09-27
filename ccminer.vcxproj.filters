@@ -971,9 +971,6 @@
     <CudaCompile Include="algos\stages\cuda_luffa512.cu">
       <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\stages\cuda_luffaCubehash512.cu">
-      <Filter>Source Files\CUDA\stages</Filter>
-    </CudaCompile>
     <CudaCompile Include="algos\stages\cuda_shavite512_legacy.cu">
       <Filter>Source Files\CUDA\stages</Filter>
     </CudaCompile>

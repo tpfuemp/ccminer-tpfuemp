@@ -664,11 +664,15 @@ void blake256_cpu_setBlock_80(uint32_t *pdata)
 	cudaMemcpyToSymbol(c_data, &data[16], sizeof(c_data), 0, cudaMemcpyHostToDevice);
 }
 
+bool blake256_80_device_selftest(int thr_id);
+
 __host__
 void blake256_cpu_init(int thr_id, uint32_t threads)
 {
 	cudaMemcpyToSymbol(u256, c_u256, sizeof(c_u256), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(sigma, c_sigma, sizeof(c_sigma), 0, cudaMemcpyHostToDevice);
+	// after the tables; consumers upload their header with blake256_cpu_setBlock_80() later
+	blake256_80_device_selftest(thr_id);
 }
 
 /** for lyra2v2 **/
@@ -693,4 +697,122 @@ void blakeKeccak256_cpu_hash_80(const int thr_id, const uint32_t threads, const 
 	dim3 block(threadsperblock);
 
 	blakeKeccak256_gpu_hash_80 <<<grid, block, 0, stream>>> (threads, startNonce, (uint32_t *)Hash);
+}
+
+/* ------------------------------------------------------------------ self-test
+ * Init-time KAT of both 80-byte heads (blakeKeccak256 and 14-round blake256)
+ * against sph over several headers and two nonce ranges, one ragged and wrapping.
+ * Output is SoA: word k of nonce i at [k * n + i]. Fail-closed. */
+extern "C" {
+#include "sph/sph_keccak.h"
+}
+#include "cuda/stage_selftest.cuh"
+
+/* published vectors: BLAKE-256 (14 rounds) of the byte 00, Keccak-256 of "" */
+static const uint8_t kat_blake256_00[32] = {
+	0x0c,0xe8,0xd4,0xef,0x4d,0xd7,0xcd,0x8d,0x62,0xdf,0xde,0xd9,0xd4,0xed,0xb0,0xa7,
+	0x74,0xae,0x6a,0x41,0x92,0x9a,0x74,0xda,0x23,0x10,0x9e,0x8f,0x11,0x13,0x9c,0x87
+};
+static const uint8_t kat_keccak256_empty[32] = {
+	0xc5,0xd2,0x46,0x01,0x86,0xf7,0x23,0x3c,0x92,0x7e,0x7d,0xb2,0xdc,0xc7,0x03,0xc0,
+	0xe5,0x00,0xb6,0x53,0xca,0x82,0x27,0x3b,0x7b,0xfa,0xd8,0x04,0x5d,0x85,0xa4,0x70
+};
+
+static void blake256_st_ref(const uint32_t *pdata, uint32_t nonce, uint8_t *blake, uint8_t *kk)
+{
+	uint32_t e[20];
+	for (int k = 0; k < 19; k++) be32enc(&e[k], pdata[k]);
+	be32enc(&e[19], nonce);
+	sph_blake256_context b;
+	sph_blake256_init(&b);
+	sph_blake256(&b, e, 80);
+	sph_blake256_close(&b, blake);
+	sph_keccak256_context k;
+	sph_keccak256_init(&k);
+	sph_keccak256(&k, blake, 32);
+	sph_keccak256_close(&k, kk);
+}
+
+__host__
+bool blake256_80_device_selftest(int thr_id)
+{
+	static bool tested = false, passed = false;
+	if (tested) return passed;
+	tested = true;
+
+	const int saved_rounds = blake256_rounds;
+	sph_blake256_set_rounds(14);
+
+	uint8_t dig[32];
+	const uint8_t zero = 0;
+	sph_blake256_context b; sph_blake256_init(&b); sph_blake256(&b, &zero, 1); sph_blake256_close(&b, dig);
+	bool anchor_ok = (memcmp(dig, kat_blake256_00, 32) == 0);
+	sph_keccak256_context k; sph_keccak256_init(&k); sph_keccak256(&k, "", 0); sph_keccak256_close(&k, dig);
+	anchor_ok = anchor_ok && (memcmp(dig, kat_keccak256_empty, 32) == 0);
+
+	enum { NMAX = 256, NHDR = 5 };
+	uint32_t hdr[NHDR][20];
+	uint8_t bytes[4 * 20];
+	stkat_fill(bytes, 1, 80, 0);                                    // pattern 00 01 .. 4f
+	memcpy(hdr[0], bytes, 80);
+	memset(hdr[1], 0x00, 80);
+	memset(hdr[2], 0xFF, 80);
+	stkat_fill(bytes, 1, 80, 0x424C4B32u);                          // slot 0 is the pattern again;
+	for (int i = 0; i < 80; i++) bytes[i] ^= (uint8_t)(i * 0x9Du + 0x3Bu); // scramble it into an LCG-like header
+	memcpy(hdr[3], bytes, 80);
+	memcpy(hdr[4], hdr[3], 80);
+	hdr[4][5] ^= 0x00000100u;                                       // negative leg: one flipped bit
+
+	uint64_t *d = NULL;
+	uint64_t *h = (uint64_t*)malloc((size_t)NMAX * 32);
+	uint8_t (*eb)[32] = (uint8_t(*)[32])malloc((size_t)NMAX * 32);
+	uint8_t (*ek)[32] = (uint8_t(*)[32])malloc((size_t)NMAX * 32);
+	uint8_t first_k[2][32];
+	if (!h || !eb || !ek || cudaMalloc(&d, (size_t)NMAX * 32) != cudaSuccess) {
+		free(h); free(eb); free(ek); sph_blake256_set_rounds(saved_rounds);
+		return selftest_gate(thr_id, "blake256-80", selftest_cuda_fault());
+	}
+
+	const uint32_t starts[2] = { 0x00000100u, 0xffffff80u };
+	const int counts[2] = { NMAX, 199 };
+	bool cuda_ok = true;
+	int bad_k = 0, bad_b = 0;
+	for (int hh = 0; hh < NHDR && cuda_ok; hh++) {
+		blake256_cpu_setBlock_80(hdr[hh]);
+		for (int r = 0; r < 2 && cuda_ok; r++) {
+			const int n = counts[r];
+			for (int i = 0; i < n; i++) blake256_st_ref(hdr[hh], starts[r] + (uint32_t)i, eb[i], ek[i]);
+			if (r == 0 && hh >= 3) memcpy(first_k[hh - 3], ek[0], 32);
+
+			blakeKeccak256_cpu_hash_80(thr_id, n, starts[r], d, 0);
+			cuda_ok = (cudaDeviceSynchronize() == cudaSuccess)
+			       && (cudaMemcpy(h, d, (size_t)n * 32, cudaMemcpyDeviceToHost) == cudaSuccess);
+			uint8_t got[32];
+			for (int i = 0; cuda_ok && i < n; i++) {
+				for (int w = 0; w < 4; w++) memcpy(got + 8 * w, &h[(size_t)w * n + i], 8);
+				if (memcmp(got, ek[i], 32)) bad_k++;
+			}
+
+			blake256_cpu_hash_80(thr_id, n, starts[r], d, 0);
+			cuda_ok = cuda_ok && (cudaDeviceSynchronize() == cudaSuccess)
+			       && (cudaMemcpy(h, d, (size_t)n * 32, cudaMemcpyDeviceToHost) == cudaSuccess);
+			for (int i = 0; cuda_ok && i < n; i++) {
+				for (int w = 0; w < 4; w++) memcpy(got + 8 * w, &h[(size_t)w * n + i], 8);
+				if (memcmp(got, eb[i], 32)) bad_b++;
+			}
+		}
+	}
+	cudaFree(d); free(h); free(eb); free(ek);
+	sph_blake256_set_rounds(saved_rounds);
+	if (!cuda_ok)
+		return selftest_gate(thr_id, "blake256-80", selftest_cuda_fault());
+
+	const bool neg_ok = memcmp(first_k[0], first_k[1], 32) != 0;
+	passed = anchor_ok && bad_k == 0 && bad_b == 0 && neg_ok;
+	if (!passed)
+		gpulog(LOG_ERR, thr_id, "blake256-80 device self-test FAILED (ref-anchor %d; blakeKeccak256 %d wrong; blake256 %d wrong; neg %d)",
+			(int)anchor_ok, bad_k, bad_b, (int)neg_ok);
+	else
+		gpulog(LOG_DEBUG, thr_id, "blake256-80 device self-test passed");
+	return selftest_gate(thr_id, "blake256-80", passed);
 }

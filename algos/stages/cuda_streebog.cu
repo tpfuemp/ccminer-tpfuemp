@@ -32,6 +32,20 @@ extern "C" {
 }
 
 #include "streebog_arrays.cuh"
+#include "cuda/candidate_report.cuh"
+
+// Sigma += pad for a 64-byte message: +1 at byte 63 of a big-endian 512-bit
+// integer, with the carry rippling toward byte 0 as in sph AddModulo512.
+__device__ __forceinline__
+static void streebog_sigma_add_pad(uint2 *h)
+{
+	#pragma unroll
+	for (int j = 7; j >= 0; j--) {
+		const uint64_t w = cuda_swab64(devectorize(h[j])) + 1;
+		h[j] = vectorize(cuda_swab64(w));
+		if (w != 0) break;
+	}
+}
 
 //#define FULL_UNROLL
 __device__ __forceinline__
@@ -222,7 +236,7 @@ __launch_bounds__(TPB, 2)
 #else
 __launch_bounds__(TPB, 3)
 #endif
-void streebog_gpu_hash_64(uint64_t *g_hash){
+void streebog_gpu_hash_64(const uint32_t threads, uint64_t *g_hash){
 
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	uint2 buf[8], t[8], temp[8], K0[8], hash[8];
@@ -231,6 +245,7 @@ void streebog_gpu_hash_64(uint64_t *g_hash){
 	// shared[0] (T02) is never read here: GOST_FS/GOST_FS_LDG reach the T0 slot
 	// via __ldg and only gather shared[1..6]; T72 stays in __ldg too. Staging
 	// row 0 was a dead cooperative load (only the _final kernel's tail reads it).
+	// the fill needs all TPB (== row length) threads, so tail threads leave after the barrier
 	//shared[0][threadIdx.x] = __ldg(&T02[threadIdx.x]);
 	shared[1][threadIdx.x] = __ldg(&T12[threadIdx.x]);
 	shared[2][threadIdx.x] = __ldg(&T22[threadIdx.x]);
@@ -240,14 +255,18 @@ void streebog_gpu_hash_64(uint64_t *g_hash){
 	shared[6][threadIdx.x] = __ldg(&T62[threadIdx.x]);
 	//shared[7][threadIdx.x] = __ldg(&T72[threadIdx.x]);
 
-//	if (thread < threads)
-//	{
+	// input load before the barrier so its latency overlaps the fill
+	const bool active = (thread < threads);
 	uint64_t* inout = &g_hash[thread<<3];
-
-	*(uint2x4*)&hash[0] = __ldg4((uint2x4*)&inout[0]);
-	*(uint2x4*)&hash[4] = __ldg4((uint2x4*)&inout[4]);
+	if (active) {
+		*(uint2x4*)&hash[0] = __ldg4((uint2x4*)&inout[0]);
+		*(uint2x4*)&hash[4] = __ldg4((uint2x4*)&inout[4]);
+	}
 
 	__syncthreads();
+
+	if (!active)
+		return;
 
 	#pragma unroll
 	for(int i = 0; i < 8; i++) buf[i] = vectorize(0x74a5d4ce2efc83b3) ^ hash[i];
@@ -296,7 +315,7 @@ void streebog_gpu_hash_64(uint64_t *g_hash){
 
 	GOST_FS(shared, buf,K0); // K = F(h)
 
-	hash[7]+= vectorize(0x0100000000000000);
+	streebog_sigma_add_pad(hash); // Sigma = M + pad, with the carry
 
 	#pragma unroll
 	for(int j = 0; j < 8; j++) t[j] = K0[j] ^ hash[j];
@@ -313,7 +332,7 @@ void streebog_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash)
 	dim3 grid((threads + TPB-1) / TPB);
 	dim3 block(TPB);
 
-	streebog_gpu_hash_64<<<grid, block>>>((uint64_t*)d_hash);
+	streebog_gpu_hash_64<<<grid, block>>>(threads, (uint64_t*)d_hash);
 }
 
 __constant__ uint64_t target64[4];
@@ -327,7 +346,7 @@ void streebog_set_target(uint32_t* ptarget)
 #define TPB 256
 __global__
 __launch_bounds__(TPB, 2)
-void streebog_gpu_hash_64_final(uint64_t *g_hash, uint32_t* resNonce)
+void streebog_gpu_hash_64_final(const uint32_t threads, uint64_t *g_hash, uint32_t* resNonce)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	uint2 buf[8], t[8], temp[8], K0[8], hash[8];
@@ -342,13 +361,18 @@ void streebog_gpu_hash_64_final(uint64_t *g_hash, uint32_t* resNonce)
 	shared[6][threadIdx.x] = __ldg(&T62[threadIdx.x]);
 	shared[7][threadIdx.x] = __ldg(&T72[threadIdx.x]);
 
-//	if (thread < threads)
-//	{
+	// a barrier, not a fence: the gathers below read rows other warps wrote
+	const bool active = (thread < threads);
 	uint64_t* inout = &g_hash[thread<<3];
-	*(uint2x4*)&hash[0] = __ldg4((uint2x4*)&inout[0]);
-	*(uint2x4*)&hash[4] = __ldg4((uint2x4*)&inout[4]);
+	if (active) {
+		*(uint2x4*)&hash[0] = __ldg4((uint2x4*)&inout[0]);
+		*(uint2x4*)&hash[4] = __ldg4((uint2x4*)&inout[4]);
+	}
 
-	__threadfence_block();
+	__syncthreads();
+
+	if (!active)
+		return; // tail of a ragged batch; no barrier follows
 
 	K0[0] = vectorize(0x74a5d4ce2efc83b3);
 
@@ -407,7 +431,7 @@ void streebog_gpu_hash_64_final(uint64_t *g_hash, uint32_t* resNonce)
 
 	GOST_FS(shared, buf,K0); // K = F(h)
 
-	hash[7]+= vectorize(0x0100000000000000);
+	streebog_sigma_add_pad(hash); // Sigma = M + pad, with the carry
 
 	#pragma unroll 8
 	for(uint32_t j=0;j<8;j++)
@@ -470,9 +494,7 @@ void streebog_gpu_hash_64_final(uint64_t *g_hash, uint32_t* resNonce)
 		 ^ T6(__byte_perm(temp[1].x,0,0x44443)) ^ T7(__byte_perm(temp[0].x,0,0x44443));
 
 	if(devectorize(buf[3] ^ hash[3] ^ last[ 0] ^ last[ 1]) <= target64[3]){
-		uint32_t tmp = atomicExch(&resNonce[0], thread);
-		if (tmp != UINT32_MAX)
-			resNonce[1] = tmp;
+		report_candidate_2(resNonce, thread);
 	}
 }
 
@@ -482,19 +504,18 @@ void streebog_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, 
 	dim3 grid((threads + TPB-1) / TPB);
 	dim3 block(TPB);
 
-	streebog_gpu_hash_64_final <<< grid, block >>> ((uint64_t*)d_hash, d_resNonce);
+	streebog_gpu_hash_64_final <<< grid, block >>> (threads, (uint64_t*)d_hash, d_resNonce);
 }
 
 /* ------------------------------------------------------------------ self-test
  * Init-time KAT for the streebog stage (docs/coding-guideline.md §7): drives the
- * real production launcher (streebog_cpu_hash_64) over a full 256-thread block —
- * the kernel has no if(thread<threads) tail guard, so the buffer must cover the
- * whole block — and compares GPU output against the vendored sph_gost512 CPU
+ * real production launcher (streebog_cpu_hash_64) over a full 256-thread block
+ * and compares GPU output against the vendored sph_gost512 CPU
  * reference, itself anchored to the GOST R 34.11-2012 / RFC 6986 H_512(M1)
  * vector. A flipped-input-bit negative test proves the test isn't vacuous.
  * FAIL-CLOSED via cuda/selftest_gate.cuh.
  */
-#define STREEBOG_ST_ALLOC 256   /* full block (no tail guard in the kernel) */
+#define STREEBOG_ST_ALLOC 256   /* one full block */
 #define STREEBOG_ST_VEC   4     /* leading vectors actually verified */
 
 /* GOST R 34.11-2012 / RFC 6986 §10.1.1 message M1 (63 bytes, in message order):
@@ -562,6 +583,10 @@ bool streebog_device_selftest(int thr_id)
 			seed = seed * 1664525u + 1013904223u;
 			io[v][i] = (uint8_t)(seed >> 24);
 		}
+	// vectors 1..3 force the Sigma pad carry: within a word, into the next, across two
+	io[1][63] = 0xFF;
+	memset(&io[2][56], 0xFF, 8);
+	memset(&io[3][48], 0xFF, 16);
 	for (int v = 0; v < STREEBOG_ST_VEC; v++) {
 		sph_gost512_init(&ctx);
 		sph_gost512(&ctx, io[v], 64);

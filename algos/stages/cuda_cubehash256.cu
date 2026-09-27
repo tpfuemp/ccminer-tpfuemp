@@ -3,19 +3,11 @@
 #define CUBEHASH_ROUNDS 16 /* this is r for CubeHashr/b */
 #define CUBEHASH_BLOCKBYTES 32 /* this is b for CubeHashr/b */
 
-#ifdef __INTELLISENSE__
-/* just for vstudio code colors */
-#define __CUDA_ARCH__ 520
-#endif
-
-#if __CUDA_ARCH__ < 350
-#define LROT(x,bits) ((x << bits) | (x >> (32 - bits)))
-#else
 #define LROT(x, bits) __funnelshift_l(x, x, bits)
-#endif
 
-#define TPB35 576
+/* Block size per arch: 1024 on Pascal, 128 on newer cards (the bound admits both). */
 #define TPB50 1024
+#define TPB_AMPERE 128
 
 #define ROTATEUPWARDS7(a)  LROT(a,7)
 #define ROTATEUPWARDS11(a) LROT(a,11)
@@ -266,31 +258,18 @@ void Final(uint32_t x[2][2][2][2][2], uint32_t *hashval)
 	hashval[7] = x[0][0][1][1][1];
 }
 
-#if __CUDA_ARCH__ >= 500
 __global__ __launch_bounds__(TPB50, 1)
-#else
-__global__ __launch_bounds__(TPB35, 1)
-#endif
 void cubehash256_gpu_hash_32(uint32_t threads, uint32_t startNounce, uint2 *g_hash)
 {
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
 	{
-#if __CUDA_ARCH__ >= 500
 		uint2 Hash[4];
 
 		Hash[0] = __ldg(&g_hash[thread]);
 		Hash[1] = __ldg(&g_hash[thread + 1 * threads]);
 		Hash[2] = __ldg(&g_hash[thread + 2 * threads]);
 		Hash[3] = __ldg(&g_hash[thread + 3 * threads]);
-#else
-		uint32_t Hash[8];
-
-		LOHI(Hash[0], Hash[1], __ldg(&((uint64_t*)g_hash)[thread]));
-		LOHI(Hash[2], Hash[3], __ldg(&((uint64_t*)g_hash)[thread + 1 * threads]));
-		LOHI(Hash[4], Hash[5], __ldg(&((uint64_t*)g_hash)[thread + 2 * threads]));
-		LOHI(Hash[6], Hash[7], __ldg(&((uint64_t*)g_hash)[thread + 3 * threads]));
-#endif
 
 		uint32_t x[2][2][2][2][2] =
 		{
@@ -304,7 +283,6 @@ void cubehash256_gpu_hash_32(uint32_t threads, uint32_t startNounce, uint2 *g_ha
 			0x15815AEB, 0x4AB6AAD6, 0x9CDAF8AF, 0xD6032C0A
 		};
 
-#if __CUDA_ARCH__ >= 500
 		x[0][0][0][0][0] ^= Hash[0].x;
 		x[0][0][0][0][1] ^= Hash[0].y;
 		x[0][0][0][1][0] ^= Hash[1].x;
@@ -313,48 +291,74 @@ void cubehash256_gpu_hash_32(uint32_t threads, uint32_t startNounce, uint2 *g_ha
 		x[0][0][1][0][1] ^= Hash[2].y;
 		x[0][0][1][1][0] ^= Hash[3].x;
 		x[0][0][1][1][1] ^= Hash[3].y;
-#else
-		x[0][0][0][0][0] ^= Hash[0];
-		x[0][0][0][0][1] ^= Hash[1];
-		x[0][0][0][1][0] ^= Hash[2];
-		x[0][0][0][1][1] ^= Hash[3];
-		x[0][0][1][0][0] ^= Hash[4];
-		x[0][0][1][0][1] ^= Hash[5];
-		x[0][0][1][1][0] ^= Hash[6];
-		x[0][0][1][1][1] ^= Hash[7];
-#endif
 		rrounds(x);
 		x[0][0][0][0][0] ^= 0x80U;
 		rrounds(x);
 
-#if __CUDA_ARCH__ >= 500
 		Final(x, (uint32_t*)Hash);
 
 		g_hash[thread] = Hash[0];
 		g_hash[1 * threads + thread] = Hash[1];
 		g_hash[2 * threads + thread] = Hash[2];
 		g_hash[3 * threads + thread] = Hash[3];
-#else
-		Final(x, Hash);
-
-		((uint64_t*)g_hash)[thread] = ((uint64_t*)Hash)[0];
-		((uint64_t*)g_hash)[1 * threads + thread] = ((uint64_t*)Hash)[1];
-		((uint64_t*)g_hash)[2 * threads + thread] = ((uint64_t*)Hash)[2];
-		((uint64_t*)g_hash)[3 * threads + thread] = ((uint64_t*)Hash)[3];
-#endif
 	}
 }
+
+bool cubehash256_device_selftest(int thr_id);
 
 __host__
 void cubehash256_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint64_t *d_hash, int order)
 {
-	// cuda_arch[] is indexed by device, not by thread
-	const int dev_id = device_map[thr_id];
-	uint32_t tpb = TPB35;
-	if (cuda_arch[dev_id] >= 500) tpb = TPB50;
+	cubehash256_device_selftest(thr_id); // stage has no init function; runs once
+	const uint32_t tpb = (device_sm[device_map[thr_id]] < 700) ? TPB50 : TPB_AMPERE;
 
 	dim3 grid((threads + tpb - 1) / tpb);
 	dim3 block(tpb);
 
 	cubehash256_gpu_hash_32 <<<grid, block >>> (threads, startNounce, (uint2*)d_hash);
+}
+
+/* ------------------------------------------------------------------ self-test
+ * Init-time KAT (cuda/stage_selftest.cuh) of the launcher vs sph_cubehash256 over
+ * 32-byte SoA slots. `tested` is set first, so the test's own launcher call
+ * does not recurse. Fail-closed. */
+extern "C" {
+#include "sph/sph_cubehash.h"
+}
+#include "cuda/stage_selftest.cuh"
+
+static int s_cubehash256_st_thr;
+
+static bool cubehash256_st_gpu(const uint8_t *in, uint8_t *out, int n)
+{
+	uint64_t *h = (uint64_t*)malloc((size_t)n * 32);
+	uint64_t *d = NULL;
+	if (!h || cudaMalloc(&d, (size_t)n * 32) != cudaSuccess) { free(h); return selftest_cuda_fault(); }
+	stkat_to_soa32(in, h, n);
+	bool ok = (cudaMemcpy(d, h, (size_t)n * 32, cudaMemcpyHostToDevice) == cudaSuccess);
+	cubehash256_cpu_hash_32(s_cubehash256_st_thr, n, 0, d, 0);
+	ok = ok && (cudaDeviceSynchronize() == cudaSuccess);
+	ok = ok && (cudaMemcpy(h, d, (size_t)n * 32, cudaMemcpyDeviceToHost) == cudaSuccess);
+	if (ok) stkat_from_soa32(h, out, n);
+	cudaFree(d); free(h);
+	return ok ? true : selftest_cuda_fault();
+}
+
+static void cubehash256_st_ref(const uint8_t *in, uint8_t *out)
+{
+	sph_cubehash256_context c;
+	sph_cubehash256_init(&c);
+	sph_cubehash256(&c, in, 32);
+	sph_cubehash256_close(&c, out);
+}
+
+__host__
+bool cubehash256_device_selftest(int thr_id)
+{
+	static bool tested = false, passed = false;
+	if (tested) return passed;
+	tested = true;
+	s_cubehash256_st_thr = thr_id;
+	passed = stkat_run(thr_id, "cubehash256", 32, 32, 256, 0x43554232u, cubehash256_st_gpu, cubehash256_st_ref, true);
+	return passed;
 }

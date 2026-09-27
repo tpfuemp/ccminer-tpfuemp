@@ -1,7 +1,6 @@
 /* SKEIN 64 and 80 based on Alexis Provos version */
 
 #define TPB52 512
-#define TPB50 256
 /* Ampere retune of the hash_64 / _final workhorse: the alexis donor
  * __launch_bounds__(512,3) budgets 65536/(512*3)=42 reg/thread, so ptxas caps
  * skein512_hash_64 at 40 reg and SPILLS 16 B (STACK:16, _final STACK:24) on
@@ -22,6 +21,7 @@
  */
 
 #include "cuda/skein512_device.cuh"
+#include "cuda/candidate_report.cuh"
 
 // The Skein-512 device library (Threefish macros, first-block subkey
 // schedule and the 64-byte compression) lives in cuda/skein512_device.cuh;
@@ -29,11 +29,7 @@
 // 80-byte kernels are unchanged.
 
 __global__
-#if __CUDA_ARCH__ > 500
 __launch_bounds__(TPB64, 6)
-#else
-__launch_bounds__(TPB50, 3)
-#endif
 void skein512_gpu_hash_64(const uint32_t threads, const uint32_t startNonce, uint64_t* __restrict__ g_hash, const uint32_t *const __restrict__ g_nonceVector)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
@@ -353,9 +349,7 @@ void skein512_gpu_hash_64_final(const uint32_t threads, uint64_t* g_hash, uint32
 
 		if (devectorize(hash64[3]) <= target)
 		{
-			const uint32_t tmp = atomicExch(&resNonce[0], hashPosition);
-			if (tmp != UINT32_MAX)
-				resNonce[1] = tmp;
+			report_candidate_2(resNonce, hashPosition);
 		}
 	}
 }
@@ -365,10 +359,7 @@ __host__
 //void skein512_cpu_hash_64(int thr_id,uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash)
 void skein512_cpu_hash_64(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
-	uint32_t tpb = TPB64;
-	int dev_id = device_map[thr_id];
-
-	if (device_sm[dev_id] <= 500) tpb = TPB50;
+	const uint32_t tpb = TPB64;
 	const dim3 grid((threads + tpb-1)/tpb);
 	const dim3 block(tpb);
 	skein512_gpu_hash_64 <<<grid, block >>>(threads, startNonce, (uint64_t*)d_hash, d_nonceVector);
@@ -378,10 +369,7 @@ void skein512_cpu_hash_64(int thr_id, const uint32_t threads, const uint32_t sta
 __host__
 void skein512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint64_t target, uint32_t *d_resNonce)
 {
-	uint32_t tpb = TPB64;
-	int dev_id = device_map[thr_id];
-
-	if (device_sm[dev_id] <= 500) tpb = TPB50;
+	const uint32_t tpb = TPB64;
 	const dim3 grid((threads + tpb - 1) / tpb);
 	const dim3 block(tpb);
 	skein512_gpu_hash_64_final << <grid, block >> >(threads, (uint64_t*)d_hash, d_resNonce, target);
@@ -393,11 +381,7 @@ void skein512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, 
 static __constant__ uint2 c_buffer[120]; // padded message (80 bytes + 72*8 bytes midstate + align)
 
 __global__
-#if __CUDA_ARCH__ > 500
 __launch_bounds__(TPB52, 3)
-#else
-__launch_bounds__(TPB50, 5)
-#endif
 void skein512_gpu_hash_80(uint32_t threads, uint32_t startNounce, uint64_t *output64)
 {
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
@@ -562,9 +546,7 @@ void skein512_gpu_hash_80(uint32_t threads, uint32_t startNounce, uint64_t *outp
 __host__
 void skein512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash, int swap)
 {
-	uint32_t tpb = TPB52;
-	int dev_id = device_map[thr_id];
-	if (device_sm[dev_id] <= 500) tpb = TPB50;
+	const uint32_t tpb = TPB52;
 
 	const dim3 grid((threads + tpb-1)/tpb);
 	const dim3 block(tpb);

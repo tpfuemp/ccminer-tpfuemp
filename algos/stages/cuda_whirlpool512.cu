@@ -45,6 +45,7 @@ extern "C" {
 
 #define xor3x(a,b,c) (a^b^c)
 #include "cuda/whirlpool512_device.cuh"
+#include "cuda/candidate_report.cuh"
 
 __constant__ static uint2 precomputed_round_key_80[80];
 
@@ -494,9 +495,7 @@ void oldwhirlpool_gpu_hash_80(uint32_t threads, uint32_t startNounce, uint32_t* 
 			^ d_ROUND_ELT(sharedMemory,tmp, 3, 2, 1, 0, 7, 6, 5, 4);
 
 		if(devectorize(n[3]) <= target) {
-			uint32_t tmp = atomicExch(&resNonce[0], thread);
-			if (tmp != UINT32_MAX)
-				resNonce[1] = tmp;
+			report_candidate_2(resNonce, thread);
 		}
 
 	} // thread < threads
@@ -561,11 +560,6 @@ void whirlpool512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce
 /* Legacy-name forwarders (x15 whirlpool) for the not-yet-migrated consumers
  * (x17/skydoge/hmq17, x21s, ghostrider, evohash, bastion); each drops out as
  * its family switches to the bare name. */
-__host__ void x15_whirlpool_cpu_init(int thr_id, uint32_t threads, int mode)
-{
-	whirlpool512_cpu_init(thr_id, threads, mode);
-}
-
 __host__ void x15_whirlpool_cpu_free(int thr_id)
 {
 	whirlpool512_cpu_free(thr_id);

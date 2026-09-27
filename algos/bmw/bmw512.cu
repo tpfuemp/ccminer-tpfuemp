@@ -69,9 +69,12 @@ extern "C" int scanhash_bmw512(int thr_id, struct work* work, uint32_t max_nonce
 	*hashes_done = 0;
 
 	do {
-		bmw512_cpu_hash_80_final(thr_id, throughput, pdata[19], d_resNonce[thr_id], *(uint64_t*)&ptarget[6]);
+		// clamp each launch to the range left, or the last one runs past max_nonce and wraps
+		const uint32_t n = (uint32_t)min((uint64_t)throughput, (uint64_t)max_nonce - pdata[19]);
+		if (n == 0) break;
+		bmw512_cpu_hash_80_final(thr_id, n, pdata[19], d_resNonce[thr_id], *(uint64_t*)&ptarget[6]);
 		cudaMemcpy(h_resNonce[thr_id], d_resNonce[thr_id], NBN*sizeof(uint32_t), cudaMemcpyDeviceToHost);
-		*hashes_done += throughput;
+		*hashes_done += n;
 
 		if (h_resNonce[thr_id][0] != UINT32_MAX) {
 			const uint32_t Htarg = ptarget[7];
@@ -106,11 +109,11 @@ extern "C" int scanhash_bmw512(int thr_id, struct work* work, uint32_t max_nonce
 			}
 		}
 
-		if ((uint64_t)throughput + pdata[19] >= max_nonce) {
+		if ((uint64_t)n + pdata[19] >= max_nonce) {
 			pdata[19] = max_nonce;
 			break;
 		}
-		pdata[19] += throughput;
+		pdata[19] += n;
 
 	} while (!work_restart[thr_id].restart);
 	return 0;

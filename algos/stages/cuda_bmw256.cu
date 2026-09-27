@@ -266,11 +266,14 @@ void bmw256_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint
 }
 
 
+bool bmw256_device_selftest(int thr_id);
+
 __host__
 void bmw256_cpu_init(int thr_id, uint32_t threads)
 {
 	cudaMalloc(&d_GNonce[thr_id], 2 * sizeof(uint32_t));
 	cudaMallocHost(&d_gnounce[thr_id], 2 * sizeof(uint32_t));
+	bmw256_device_selftest(thr_id);
 }
 
 __host__
@@ -284,4 +287,106 @@ __host__
 void bmw256_setTarget(const void *pTargetIn)
 {
 	cudaMemcpyToSymbol(pTarget, pTargetIn, 32, 0, cudaMemcpyHostToDevice);
+}
+
+/* ------------------------------------------------------------------ self-test
+ * Init-time KAT for this final stage, which returns nonces, not digests:
+ *   - each slot alone (threads = 1: SoA is then the raw 32 bytes) must report at
+ *     target v and not at v - 1, v = sph_bmw256 digest bytes 24..31;
+ *   - a ragged SoA batch must return the two lowest candidates per target.
+ * Clobbers pTarget, which scanhash sets before every launch. Fail-closed. */
+#undef SPH_ROTL32   /* sph_types.h defines its own */
+extern "C" {
+#include "sph/sph_bmw.h"
+}
+#include "cuda/stage_selftest.cuh"
+
+#define BMW256_ST_N     256
+#define BMW256_ST_EXACT 64
+
+static bool bmw256_st_launch(int thr_id, uint32_t threads, uint32_t start, uint64_t *d,
+	uint64_t target, uint32_t *res)
+{
+	const uint64_t t[4] = { 0, 0, 0, target };
+	bmw256_setTarget(t);
+	bmw256_cpu_hash_32(thr_id, threads, start, d, res);
+	return cudaGetLastError() == cudaSuccess;
+}
+
+static int bmw256_st_cmp(const void *a, const void *b)
+{
+	const uint64_t x = *(const uint64_t*)a, y = *(const uint64_t*)b;
+	return (x > y) - (x < y);
+}
+
+__host__
+bool bmw256_device_selftest(int thr_id)
+{
+	static bool tested = false, passed = false;
+	if (tested) return passed;
+	tested = true;
+
+	const int n = BMW256_ST_N, nr = BMW256_ST_N - 57;
+	const uint32_t start = 0x7fffff00u;
+	uint8_t *in = (uint8_t*)malloc((size_t)n * 32);
+	uint64_t *soa = (uint64_t*)malloc((size_t)n * 32), v[BMW256_ST_N];
+	uint64_t *d_aos = NULL, *d_soa = NULL;
+	if (!in || !soa || cudaMalloc(&d_aos, (size_t)n * 32) != cudaSuccess || cudaMalloc(&d_soa, (size_t)nr * 32) != cudaSuccess) {
+		free(in); free(soa); cudaFree(d_aos);
+		return selftest_gate(thr_id, "bmw256", selftest_cuda_fault());
+	}
+	stkat_fill(in, n, 32, 0x424D5732u);
+	for (int i = 0; i < n; i++) {
+		uint8_t dg[32];
+		sph_bmw256_context c;
+		sph_bmw256_init(&c);
+		sph_bmw256(&c, in + i * 32, 32);
+		sph_bmw256_close(&c, dg);
+		memcpy(&v[i], dg + 24, 8);
+	}
+	stkat_to_soa32(in, soa, nr);
+	bool cuda_ok = cudaMemcpy(d_aos, in, (size_t)n * 32, cudaMemcpyHostToDevice) == cudaSuccess
+		&& cudaMemcpy(d_soa, soa, (size_t)nr * 32, cudaMemcpyHostToDevice) == cudaSuccess;
+
+	int bad_exact = 0, first = -1;
+	uint32_t res[2];
+	for (int i = 0; cuda_ok && i < BMW256_ST_EXACT; i++) {
+		cuda_ok = bmw256_st_launch(thr_id, 1, start + i, d_aos + 4 * i, v[i], res);
+		bool ok = res[0] == start + (uint32_t)i && res[1] == UINT32_MAX;
+		if (cuda_ok && v[i] != 0) {
+			cuda_ok = bmw256_st_launch(thr_id, 1, start + i, d_aos + 4 * i, v[i] - 1, res);
+			ok = ok && res[0] == UINT32_MAX;
+		}
+		if (!ok) { if (first < 0) first = i; bad_exact++; }
+	}
+
+	/* targets: none, all, and the values of a few ranks */
+	uint64_t sorted[BMW256_ST_N];
+	memcpy(sorted, v, sizeof(uint64_t) * nr);
+	qsort(sorted, nr, sizeof(uint64_t), bmw256_st_cmp);
+	const uint64_t targets[] = { sorted[0] ? sorted[0] - 1 : 0, UINT64_MAX,
+		sorted[0], sorted[1], sorted[2], sorted[7], sorted[31], sorted[nr / 2] };
+	int bad_batch = 0;
+	for (int t = 0; cuda_ok && t < (int)(sizeof(targets) / sizeof(targets[0])); t++) {
+		uint32_t e[2] = { UINT32_MAX, UINT32_MAX };
+		for (int i = 0; i < nr; i++)
+			if (v[i] <= targets[t]) {
+				if (e[0] == UINT32_MAX) e[0] = start + i;
+				else if (e[1] == UINT32_MAX) e[1] = start + i;
+			}
+		cuda_ok = bmw256_st_launch(thr_id, nr, start, d_soa, targets[t], res);
+		if (res[0] != e[0] || res[1] != e[1]) bad_batch++;
+	}
+
+	cudaFree(d_aos); cudaFree(d_soa); free(in); free(soa);
+	if (!cuda_ok)
+		return selftest_gate(thr_id, "bmw256", selftest_cuda_fault());
+	passed = bad_exact == 0 && bad_batch == 0;
+	if (!passed)
+		gpulog(LOG_ERR, thr_id, "bmw256 device self-test FAILED (exact: %d of %d slots wrong, first %d; batch: %d targets wrong)",
+			bad_exact, BMW256_ST_EXACT, first, bad_batch);
+	else
+		gpulog(LOG_DEBUG, thr_id, "bmw256 device self-test passed");
+	passed = selftest_gate(thr_id, "bmw256", passed);
+	return passed;
 }

@@ -45,31 +45,6 @@ void keccak512_gpu_hash_64(uint32_t threads, const uint32_t startNounce, uint2 *
 	}
 }
 
-__global__
-__launch_bounds__(TPB52, 6)
-void keccak512_gpu_hash_64_final(uint32_t threads, uint2 *g_hash, uint32_t *g_nonceVector, uint32_t *resNonce, const uint64_t target)
-{
-	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
-
-	if (thread < threads)
-	{
-		const uint32_t hashPosition = g_nonceVector[thread];
-
-		uint2x4 *d_hash = (uint2x4*)&g_hash[hashPosition << 3];
-
-		uint2 hash[8];
-		*(uint2x4*)&hash[0] = __ldg4(&d_hash[0]);
-		*(uint2x4*)&hash[4] = __ldg4(&d_hash[1]);
-
-		if (devectorize(keccak512_hash_64_lane3(hash)) <= target)
-		{
-			const uint32_t tmp = atomicExch(&resNonce[0], hashPosition);
-			if (tmp != UINT32_MAX)
-				resNonce[1] = tmp;
-		}
-	}
-}
-
 __host__
 void keccak512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash, uint32_t startNounce)
 {
@@ -78,16 +53,6 @@ void keccak512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_nonceVector
 
 	keccak512_gpu_hash_64<<<grid, block>>>(threads, startNounce, (uint2*)d_hash, d_nonceVector);
 }
-
-__host__
-void keccak512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash, uint64_t target, uint32_t *d_resNonce)
-{
-	const dim3 grid((threads + TPB52-1)/TPB52);
-	const dim3 block(TPB52);
-
-	keccak512_gpu_hash_64_final<<<grid, block>>>(threads, (uint2*)d_hash, d_nonceVector, d_resNonce, target);
-}
-
 void jackpot_keccak512_cpu_init(int thr_id, uint32_t threads);
 void jackpot_keccak512_cpu_setBlock(void *pdata, size_t inlen);
 void jackpot_keccak512_cpu_hash(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_hash, int order);

@@ -36,8 +36,11 @@
 // the 64-byte kernel below is a thin wrapper, the 80-byte first-stage
 // kernel expands the shared macros directly.
 
+// (256,4) beats the file's register cap on Pascal and Ampere; Turing is untested.
 __global__
-/*__launch_bounds__(256, 4)*/
+#if __CUDA_ARCH__ >= 800 || __CUDA_ARCH__ == 610
+__launch_bounds__(256, 4)
+#endif
 void sha512_gpu_hash_64(const uint32_t threads, uint64_t *g_hash)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);

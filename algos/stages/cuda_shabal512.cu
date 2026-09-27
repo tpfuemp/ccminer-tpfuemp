@@ -40,6 +40,7 @@
  * the "BEGIN" and "END" markers).
  */
 #include "cuda/shabal512_device.cuh"
+#include "cuda/candidate_report.cuh"
 
 // The Shabal-512 device implementation (permutation macros, constants and
 // shabal512_hash_64) lives in cuda/shabal512_device.cuh; the kernel below
@@ -57,18 +58,20 @@ __global__ void shabal512_gpu_hash_64(uint32_t threads, uint32_t startNounce, ui
 		int hashPosition = nounce - startNounce;
 		uint32_t *Hash = (uint32_t*)&g_hash[hashPosition << 3]; // [8 * hashPosition];
 
-		shabal512_hash_64(Hash);
+		// hash a register copy: 128-bit record access instead of 16 x 32-bit each way
+		{ uint4 *p_ = (uint4*)(Hash); uint4 l_[4];
+		#pragma unroll
+		for (int i_ = 0; i_ < 4; i_++) l_[i_] = __ldg(&p_[i_]);
+		shabal512_hash_64((uint32_t*)l_);
+		#pragma unroll
+		for (int i_ = 0; i_ < 4; i_++) p_[i_] = l_[i_]; }
 	}
 }
 
 /***************************************************/
-// Terminal variant: compute shabal, compare the high 64 bits of the result
-// against the target on-device, and record up to two found nonces (thread
-// indices) via an atomicExch chain into resNonce -- eliding the d_hash store
-// plus the separate cuda_check_hash / cuda_check_hash_suppl passes. Used where
-// shabal is the last stage of a fixed chain (x14). Not truncated (computes the
-// full shabal like the plain kernel), so it stays bit-identical to the CPU
-// reference which re-verifies every hit.
+// Terminal variant: the full shabal (bit-identical to the CPU reference), the high 64
+// bits compared against the target on-device, and the two lowest candidates
+// reported (cuda/candidate_report.cuh) instead of storing d_hash.
 __global__ void shabal512_gpu_hash_64_final(uint32_t threads, uint64_t *g_hash, uint32_t *resNonce, const uint64_t target)
 {
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
@@ -85,9 +88,7 @@ __global__ void shabal512_gpu_hash_64_final(uint32_t threads, uint64_t *g_hash, 
 		shabal512_hash_64(Hash);
 
 		if (*(uint64_t*)&Hash[6] <= target) {
-			uint32_t tmp = atomicExch(&resNonce[0], thread);
-			if (tmp != UINT32_MAX)
-				resNonce[1] = tmp;
+			report_candidate_2(resNonce, thread);
 		}
 	}
 }
@@ -101,16 +102,19 @@ __host__ void shabal512_cpu_init(int thr_id, uint32_t threads)
 	shabal512_device_selftest(thr_id);
 }
 
+extern short device_map[];
+extern long  device_sm[];
+
+/* Block size per arch: 256 on Pascal, 128 on newer cards, where the smaller block
+ * packs more resident warps to hide the serial permutation's latency. */
+static inline uint32_t shabal512_tpb(int thr_id)
+{
+	return (device_sm[device_map[thr_id]] < 700) ? 256 : 128;
+}
+
 __host__ void shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
-	// tpb 128, not the sph-era 256: this kernel is ~66 reg / 0 spill and is
-	// latency-bound on the serial shabal permutation chain (SHABAL_APPLY_P), so
-	// resident-warp count matters. At tpb256 only 3 blocks/SM fit (768 thr = 50%
-	// occ, ~24% of the register file wasted to quantization); tpb128 packs 7
-	// blocks (896 thr = 58%) and feeds the extra warps to hide the chain latency
-	// -> +~17% isolated on sm_86. 58/62.5/67% all tie above this, so 128 is the
-	// sweet spot (tpb256 itself carries the penalty, not just the occupancy).
-	const uint32_t threadsperblock = 128;
+	const uint32_t threadsperblock = shabal512_tpb(thr_id);
 
 	// berechne wie viele Thread Blocks wir brauchen
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
@@ -123,7 +127,7 @@ __host__ void shabal512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t start
 
 __host__ void shabal512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t *d_resNonce, const uint64_t target)
 {
-	const uint32_t threadsperblock = 128; // see shabal512_cpu_hash_64: latency-bound, 128 packs more warps (58% vs 50%)
+	const uint32_t threadsperblock = shabal512_tpb(thr_id);
 
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
 	dim3 block(threadsperblock);

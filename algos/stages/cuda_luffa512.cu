@@ -23,7 +23,17 @@ __global__ void luffa512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uin
         int hashPosition = nounce - startNounce;
         uint32_t *Hash = (uint32_t*)&g_hash[8 * hashPosition];
 
+#if __CUDA_ARCH__ == 610
+        // Pascal: plain 32-bit loads bypass L1, so copy the record with 128-bit access
+        { uint4 *p_ = (uint4*)(Hash); uint4 l_[4];
+		#pragma unroll
+		for (int i_ = 0; i_ < 4; i_++) l_[i_] = __ldg(&p_[i_]);
+		luffa512_hash_64((uint32_t*)l_);
+		#pragma unroll
+		for (int i_ = 0; i_ < 4; i_++) p_[i_] = l_[i_]; }
+#else
         luffa512_hash_64(Hash);
+#endif
     }
 }
 

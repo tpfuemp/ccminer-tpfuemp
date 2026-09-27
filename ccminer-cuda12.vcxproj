@@ -718,9 +718,6 @@
     <CudaCompile Include="algos\stages\cuda_echo512_compat.cu">
     </CudaCompile>
     <CudaCompile Include="algos\stages\cuda_luffa512.cu" />
-    <CudaCompile Include="algos\stages\cuda_luffaCubehash512.cu">
-      <MaxRegCount>76</MaxRegCount>
-    </CudaCompile>
     <CudaCompile Include="algos\stages\cuda_shavite512_legacy.cu">
       <MaxRegCount>80</MaxRegCount>
     </CudaCompile>

@@ -9,6 +9,7 @@
 
 #define INTENSIVE_GMF
 #include "algos/stages/cuda_echo512_aes.cuh"
+#include "cuda/candidate_report.cuh"
 
 #ifdef __INTELLISENSE__
 #define __byte_perm(x, y, b) x
@@ -83,12 +84,13 @@ static void echo_round(const uint32_t sharedMemory[4][256], uint32_t *W, uint32_
 	}
 }
 
-__global__ __launch_bounds__(256, 3) /* will force 80 registers */
+__global__ __launch_bounds__(128, 5)
 static void echo512_gpu_hash_64_final(uint32_t threads, uint64_t *g_hash, uint32_t* resNonce, const uint64_t target)
 {
 	__shared__ uint32_t sharedMemory[4][256];
 
-	aes_gpu_init256(sharedMemory);
+	aes_gpu_init128(sharedMemory);
+	__syncthreads(); // the rounds read table entries other warps filled
 
 	const uint32_t P[48] = {
 		0xe7e9f5f5, 0xf5e7e9f5, 0xb3b36b23, 0xb3dbe7af,0xa4213d7e, 0xf5e7e9f5, 0xb3b36b23, 0xb3dbe7af,
@@ -266,9 +268,7 @@ static void echo512_gpu_hash_64_final(uint32_t threads, uint64_t *g_hash, uint32
 			^ *(uint64_t*)&W[34] ^ *(uint64_t*)&W[38] ^ *(uint64_t*)&W[42] ^ *(uint64_t*)&W[62];
 
 		if(check <= target){
-			uint32_t tmp = atomicExch(&resNonce[0], thread);
-			if (tmp != UINT32_MAX)
-				resNonce[1] = tmp;
+			report_candidate_2(resNonce, thread);
 		}
 	}
 }
@@ -276,7 +276,7 @@ static void echo512_gpu_hash_64_final(uint32_t threads, uint64_t *g_hash, uint32
 __host__
 void echo512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_hash, uint32_t *d_resNonce, const uint64_t target)
 {
-	const uint32_t threadsperblock = 256;
+	const uint32_t threadsperblock = 128; // must match the kernel's bound and table fill
 
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
 	dim3 block(threadsperblock);

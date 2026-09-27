@@ -23,14 +23,13 @@
 
 #include "cuda/cubehash512_device.cuh"
 
-/* Block size re-tuned for Ampere (sm_86) 2026-07-23: the donor's TPB=1024
- * thread-caps to 1 resident block = 67% occupancy; this kernel is 47 reg / 0
- * smem / 0 spill, so a smaller block runs more blocks/SM. Event-timed microbench
- * (RTX 3060, 4M hashes, interleaved A/B): 1024 -> 128 = +0.8-1.3% (thermal-
- * sensitive: ~245 MH/s cool / ~238 warm; monotonic 128>1024 in every pass; 64
- * ties 128 but 128 matches the sibling echo/hamsi/simd stages). Small but real
- * and correctness-neutral. */
+/* Block size per arch: 128 on newer cards (more resident blocks than the donor's
+ * 1024), 512 on Pascal, where 128 is clearly slower. */
 #define TPB 128
+#define TPB_PASCAL 512
+
+extern short device_map[];
+extern long  device_sm[];
 
 __global__
 void cubehash512_gpu_hash_64(uint32_t threads, uint64_t *g_hash){
@@ -53,9 +52,11 @@ void cubehash512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash){
 	 * no init fn exists for this stage, so it runs once from the launcher */
 	cubehash512_device_selftest(thr_id);
 
+	const uint32_t tpb = (device_sm[device_map[thr_id]] < 700) ? TPB_PASCAL : TPB;
+
 	// berechne wie viele Thread Blocks wir brauchen
-	dim3 grid((threads + TPB-1)/TPB);
-	dim3 block(TPB);
+	dim3 grid((threads + tpb-1)/tpb);
+	dim3 block(tpb);
 
 	cubehash512_gpu_hash_64<<<grid, block>>>(threads, (uint64_t*)d_hash);
 }

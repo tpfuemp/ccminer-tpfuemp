@@ -13,6 +13,7 @@
 #define TPB 256
 
 #include "cuda/fugue512_device.cuh"
+#include "cuda/candidate_report.cuh"
 
 /***************************************************/
 // GPU Hash Function
@@ -46,13 +47,9 @@ void fugue512_gpu_hash_64(uint32_t threads, uint64_t *g_hash)
 }
 
 /***************************************************/
-// Terminal variant: compute fugue, compare the high 64 bits of the result
-// against the target on-device, and record up to two found nonces (thread
-// indices) via an atomicExch chain into resNonce -- eliding the d_hash store
-// plus the separate cuda_check_hash / cuda_check_hash_suppl passes. Used where
-// fugue is the last stage of a fixed chain (x13). Not truncated (computes the
-// full fugue like the plain kernel), so it stays bit-identical to the CPU
-// reference which re-verifies every hit.
+// Terminal variant: the full fugue (bit-identical to the CPU reference), the high 64
+// bits compared against the target on-device, and the two lowest candidates
+// reported (cuda/candidate_report.cuh) instead of storing d_hash.
 __global__
 __launch_bounds__(TPB)
 void fugue512_gpu_hash_64_final(uint32_t threads, uint64_t *g_hash, uint32_t *resNonce, const uint64_t target)
@@ -75,9 +72,7 @@ void fugue512_gpu_hash_64_final(uint32_t threads, uint64_t *g_hash, uint32_t *re
 		fugue512_hash_64(mixtabs, Hash);
 
 		if (*(uint64_t*)&Hash[6] <= target) {
-			uint32_t tmp = atomicExch(&resNonce[0], thread);
-			if (tmp != UINT32_MAX)
-				resNonce[1] = tmp;
+			report_candidate_2(resNonce, thread);
 		}
 	}
 }

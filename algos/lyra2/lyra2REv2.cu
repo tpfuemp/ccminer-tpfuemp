@@ -110,8 +110,6 @@ extern "C" int scanhash_lyra2v2(int thr_id, struct work* work, uint32_t max_nonc
 		skein256_cpu_init(thr_id, throughput);
 		bmw256_cpu_init(thr_id, throughput);
 
-		cuda_get_arch(thr_id); // cuda_arch[] also used in cubehash256
-
 		// before lyra2v2_cpu_init: the self-test borrows the DMatrix symbol
 		lyra2v2_device_selftest(thr_id);
 

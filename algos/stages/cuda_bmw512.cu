@@ -12,6 +12,7 @@ Optimized for pascal sp - may 2018
 #include "cuda_helper_alexis.h"
 #include "cuda_vectors_alexis.h"
 #include "cuda/bmw512_device.cuh"
+#include "cuda/candidate_report.cuh"
 
 // The BMW-512 device library (first-round + final compression for 64-byte
 // inputs) lives in cuda/bmw512_device.cuh; the kernels below are thin
@@ -41,32 +42,6 @@ void bmw512_gpu_hash_64(uint32_t threads, const uint32_t startNounce, uint64_t *
 
 		*(uint2x4*)&inpHash[0] = *(uint2x4*)&msg[8];
 		*(uint2x4*)&inpHash[4] = *(uint2x4*)&msg[12];
-	}
-}
-
-__global__ __launch_bounds__(256, 2)
-void bmw512_gpu_hash_64_final(uint32_t threads, uint64_t *const __restrict__ g_hash, const uint32_t *const __restrict__ g_nonceVector, uint32_t* resNonce, const uint64_t target)
-{
-	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
-	if (thread < threads){
-
-		const uint32_t hashPosition = (g_nonceVector == NULL) ? thread : g_nonceVector[thread];
-
-		uint64_t *inpHash = &g_hash[8 * hashPosition];
-
-		uint64_t __align__(16) msg[16];
-
-		uint2x4* phash = (uint2x4*)inpHash;
-		uint2x4* outpt = (uint2x4*)msg;
-		outpt[0] = __ldg4(&phash[0]);
-		outpt[1] = __ldg4(&phash[1]);
-
-		if (bmw512_hash_64_word3(msg) <= target)
-		{
-			uint32_t tmp = atomicExch(&resNonce[0], thread);
-			if (tmp != UINT32_MAX)
-				resNonce[1] = tmp;
-		}
 	}
 }
 
@@ -361,17 +336,6 @@ void bmw512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint
 	bmw512_gpu_hash_80 << <grid, block >> >(threads, startNounce, (uint64_t*)d_hash);
 }
 
-__host__ void bmw512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash, uint32_t *resNonce, const uint64_t target)
-{
-	const uint32_t threadsperblock = 256;
-
-	// berechne wie viele Thread Blocks wir brauchen
-	dim3 grid((threads + threadsperblock - 1) / threadsperblock);
-	dim3 block(threadsperblock);
-
-	bmw512_gpu_hash_64_final << <grid, block >> >(threads, (uint64_t*)d_hash, d_nonceVector, resNonce, target);
-}
-
 __global__ __launch_bounds__(128, 4)
 void bmw512_gpu_hash_80_final(uint32_t threads, uint32_t startNounce, uint32_t *resNonce, const uint64_t target)
 {
@@ -413,9 +377,7 @@ void bmw512_gpu_hash_80_final(uint32_t threads, uint32_t startNounce, uint32_t *
 		Compression512(h, message);
 
 		if(devectorize(message[3+8]) <= target){
-			uint32_t tmp = atomicExch(&resNonce[0], thread);
-			if (tmp != UINT32_MAX)
-				resNonce[1] = tmp;
+			report_candidate_2(resNonce, thread);
 		}
 	}
 }

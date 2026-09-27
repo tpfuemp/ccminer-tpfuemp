@@ -74,7 +74,17 @@ void Round_8_512v35_final(const uint2 *const __restrict__ ks, const uint2 *const
 	p3 += ks[3];
 }
 
-__global__ __launch_bounds__(256,3)
+/* Launch shape per arch; Pascal's (512,2) spills a little but wins on resident warps.
+ * The host block size in skein256_cpu_hash_32 must match (a larger block fails). */
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 610
+#define SKEIN256_TPB 512
+#define SKEIN256_MINB 2
+#else
+#define SKEIN256_TPB 128
+#define SKEIN256_MINB 6
+#endif
+
+__global__ __launch_bounds__(SKEIN256_TPB, SKEIN256_MINB)
 void skein256_gpu_hash_32(uint32_t threads, uint32_t startNounce, uint64_t *outputHash)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
@@ -167,147 +177,68 @@ void skein256_gpu_hash_32(uint32_t threads, uint32_t startNounce, uint64_t *outp
 	}
 }
 
-static __forceinline__ __device__
-void Round512v30(uint64_t &p0, uint64_t &p1, uint64_t &p2, uint64_t &p3,
-	uint64_t &p4, uint64_t &p5, uint64_t &p6, uint64_t &p7,
-	const int ROT0, const int ROT1, const int ROT2, const int ROT3)
-{
-	p0 += p1; p1 = ROTL64(p1, ROT0) ^ p0;
-	p2 += p3; p3 = ROTL64(p3, ROT1) ^ p2;
-	p4 += p5; p5 = ROTL64(p5, ROT2) ^ p4;
-	p6 += p7; p7 = ROTL64(p7, ROT3) ^ p6;
-}
-
-static __forceinline__ __device__
-void Round_8_512v30(uint64_t *ks, uint64_t *ts,
-	uint64_t &p0, uint64_t &p1, uint64_t &p2, uint64_t &p3,
-	uint64_t &p4, uint64_t &p5, uint64_t &p6, uint64_t &p7, int R)
-{
-	Round512v30(p0, p1, p2, p3, p4, p5, p6, p7, 46, 36, 19, 37);
-	Round512v30(p2, p1, p4, p7, p6, p5, p0, p3, 33, 27, 14, 42);
-	Round512v30(p4, p1, p6, p3, p0, p5, p2, p7, 17, 49, 36, 39);
-	Round512v30(p6, p1, p0, p7, p2, p5, p4, p3, 44,  9, 54, 56);
-
-	p0 += ks[(R+0) % 9];
-	p1 += ks[(R+1) % 9];
-	p2 += ks[(R+2) % 9];
-	p3 += ks[(R+3) % 9];
-	p4 += ks[(R+4) % 9];
-	p5 += ks[(R+5) % 9] + ts[(R+0) % 3];
-	p6 += ks[(R+6) % 9] + ts[(R+1) % 3];
-	p7 += ks[(R+7) % 9] + R;
-
-	Round512v30(p0, p1, p2, p3, p4, p5, p6, p7, 39, 30, 34, 24);
-	Round512v30(p2, p1, p4, p7, p6, p5, p0, p3, 13, 50, 10, 17);
-	Round512v30(p4, p1, p6, p3, p0, p5, p2, p7, 25, 29, 39, 43);
-	Round512v30(p6, p1, p0, p7, p2, p5, p4, p3, 8,  35, 56, 22);
-
-	p0 += ks[(R+1) % 9];
-	p1 += ks[(R+2) % 9];
-	p2 += ks[(R+3) % 9];
-	p3 += ks[(R+4) % 9];
-	p4 += ks[(R+5) % 9];
-	p5 += ks[(R+6) % 9] + ts[(R+1) % 3];
-	p6 += ks[(R+7) % 9] + ts[(R+2) % 3];
-	p7 += ks[(R+8) % 9] + R+1;
-}
-
-#define skein_ks_parity64 0x1BD11BDAA9FC1A22ull
-#include <stdio.h>
-__global__  __launch_bounds__(256, 3)
-void skein256_gpu_hash_32_v30(uint32_t threads, uint32_t startNounce, uint64_t *outputHash)
-{
-	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
-	if (thread < threads)
-	{
-		uint64_t h[12] = { // SKEIN_IV512_256
-			0xCCD044A12FDB3E13, 0xE83590301A79A9EB,
-			0x55AEA0614F816E6F, 0x2A2767A4AE9B94DB,
-			0xEC06025E74DD7683, 0xE7A436CDC4746251,
-			0xC36FBAF9393AD185, 0x3EEDBA1833EDFC13,
-			0xb69d3cfcc73a4e2a, // skein_ks_parity64 ^ h[0..7]
-			0x20, 0xf000000000000000, 0xf000000000000020 // t0..2
-		};
-		uint64_t dt0 = outputHash[thread];
-		uint64_t dt1 = outputHash[threads   + thread];
-		uint64_t dt2 = outputHash[threads*2 + thread];
-		uint64_t dt3 = outputHash[threads*3 + thread];
-
-		uint64_t *t = &h[9];
-		uint64_t p0 = h[0] + dt0;
-		uint64_t p1 = h[1] + dt1;
-		uint64_t p2 = h[2] + dt2;
-		uint64_t p3 = h[3] + dt3;
-		uint64_t p4 = h[4];
-		uint64_t p5 = h[5] + t[0];
-		uint64_t p6 = h[6] + t[1];
-		uint64_t p7 = h[7];
-
-		#pragma unroll 9
-		for (int i = 1; i<19; i += 2) {
-			Round_8_512v30(h, t, p0, p1, p2, p3, p4, p5, p6, p7, i);
-		}
-
-		p0 ^= dt0;
-		p1 ^= dt1;
-		p2 ^= dt2;
-		p3 ^= dt3;
-
-		h[0] = p0;
-		h[1] = p1;
-		h[2] = p2;
-		h[3] = p3;
-		h[4] = p4;
-		h[5] = p5;
-		h[6] = p6;
-		h[7] = p7;
-		h[8] = skein_ks_parity64;
-
-		#pragma unroll 8
-		for (int i = 0; i<8; i++) {
-			h[8] ^= h[i];
-		}
-
-		t[0] = 0x08;
-		t[1] = 0xff00000000000000;
-		t[2] = 0xff00000000000008;
-
-		p5 += t[0];  //p5 already equal h[5]
-		p6 += t[1];
-
-		#pragma unroll 9
-		for (int i = 1; i<19; i += 2) {
-			Round_8_512v30(h, t, p0, p1, p2, p3, p4, p5, p6, p7, i);
-		}
-
-		outputHash[thread] = p0;
-		outputHash[threads   + thread] = p1;
-		outputHash[threads*2 + thread] = p2;
-		outputHash[threads*3 + thread] = p3;
-	} //thread
-}
+bool skein256_device_selftest(int thr_id);
 
 __host__
 void skein256_cpu_init(int thr_id, uint32_t threads)
 {
-	cuda_get_arch(thr_id);
+	skein256_device_selftest(thr_id);
 }
 
 __host__
 void skein256_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNounce, uint64_t *d_outputHash, int order)
 {
-	const uint32_t threadsperblock = 256;
-	int dev_id = device_map[thr_id];
+	// must agree with SKEIN256_TPB
+	const uint32_t threadsperblock = (device_sm[device_map[thr_id]] < 700) ? 512 : 128;
 
 	dim3 grid((threads + threadsperblock - 1) / threadsperblock);
 	dim3 block(threadsperblock);
 
-	// only 1kH/s perf change between kernels on a 960...
-	if (device_sm[dev_id] > 300 && cuda_arch[dev_id] > 300)
-		skein256_gpu_hash_32<<<grid, block>>>(threads, startNounce, d_outputHash);
-	else
-		skein256_gpu_hash_32_v30<<<grid, block>>>(threads, startNounce, d_outputHash);
+	skein256_gpu_hash_32<<<grid, block>>>(threads, startNounce, d_outputHash);
 
 	MyStreamSynchronize(NULL, order, thr_id);
 }
 
+/* ------------------------------------------------------------------ self-test
+ * Init-time KAT (cuda/stage_selftest.cuh) of the launcher vs sph_skein256
+ * (Skein-512-256) over 32-byte SoA slots. Fail-closed. */
+extern "C" {
+#include "sph/sph_skein.h"
+}
+#include "cuda/stage_selftest.cuh"
+
+static int s_skein256_st_thr;
+
+static bool skein256_st_gpu(const uint8_t *in, uint8_t *out, int n)
+{
+	uint64_t *h = (uint64_t*)malloc((size_t)n * 32);
+	uint64_t *d = NULL;
+	if (!h || cudaMalloc(&d, (size_t)n * 32) != cudaSuccess) { free(h); return selftest_cuda_fault(); }
+	stkat_to_soa32(in, h, n);
+	bool ok = (cudaMemcpy(d, h, (size_t)n * 32, cudaMemcpyHostToDevice) == cudaSuccess);
+	skein256_cpu_hash_32(s_skein256_st_thr, n, 0, d, 0);
+	ok = ok && (cudaDeviceSynchronize() == cudaSuccess);
+	ok = ok && (cudaMemcpy(h, d, (size_t)n * 32, cudaMemcpyDeviceToHost) == cudaSuccess);
+	if (ok) stkat_from_soa32(h, out, n);
+	cudaFree(d); free(h);
+	return ok ? true : selftest_cuda_fault();
+}
+
+static void skein256_st_ref(const uint8_t *in, uint8_t *out)
+{
+	sph_skein256_context c;
+	sph_skein256_init(&c);
+	sph_skein256(&c, in, 32);
+	sph_skein256_close(&c, out);
+}
+
+__host__
+bool skein256_device_selftest(int thr_id)
+{
+	static bool tested = false, passed = false;
+	if (tested) return passed;
+	tested = true;
+	s_skein256_st_thr = thr_id;
+	passed = stkat_run(thr_id, "skein256", 32, 32, 256, 0x534B4E32u, skein256_st_gpu, skein256_st_ref, true);
+	return passed;
+}

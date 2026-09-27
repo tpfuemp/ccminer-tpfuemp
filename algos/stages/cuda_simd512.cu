@@ -26,8 +26,6 @@
 #define __CUDA_ARCH__ 500
 #endif
 
-#define TPB50_1 128
-#define TPB50_2 128
 #define TPB52_1 128
 #define TPB52_2 128
 
@@ -90,11 +88,15 @@ static void simd512_gpu_compress_64(uint32_t threads, uint32_t *g_hash,const uin
 	}
 }
 
+bool simd512_device_selftest(int thr_id, uint32_t threads);
+
 __host__
 int simd512_cpu_init(int thr_id, uint32_t threads)
 {
 	cudaMalloc(&d_temp4[thr_id], 64*sizeof(uint4)*threads);
 
+	// after the scratch allocation: the launcher's expand pass writes d_temp4
+	simd512_device_selftest(thr_id, threads);
 	return 0;
 }
 
@@ -106,18 +108,57 @@ void simd512_cpu_free(int thr_id){
 __host__
 void simd512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
-	int dev_id = device_map[thr_id];
-
-	uint32_t tpb = TPB52_1;
-	if (device_sm[dev_id] <= 500) tpb = TPB50_1;
+	const uint32_t tpb = TPB52_1;
 	const dim3 grid1((8*threads + tpb - 1) / tpb);
 	const dim3 block1(tpb);
 
-//	tpb = TPB52_2;
-//	if (device_sm[dev_id] <= 500) tpb = TPB50_2;
-//	const dim3 grid2((threads + tpb - 1) / tpb);
-//	const dim3 block2(tpb);
 
 	simd512_gpu_expand_64 <<<grid1, block1>>> (threads, d_hash, d_temp4[thr_id]);
 	simd512_gpu_compress_64 <<< grid1, block1 >>> (threads, d_hash, d_temp4[thr_id]);
+}
+
+/* ------------------------------------------------------------------ self-test
+ * Init-time KAT (cuda/stage_selftest.cuh) of the launcher vs sph_simd512.
+ * Needs d_temp4 for >= n slots, hence the call from init. Fail-closed. */
+extern "C" {
+#include "sph/sph_simd.h"
+}
+#include "cuda/stage_selftest.cuh"
+
+static int s_simd_st_thr;
+
+static bool simd512_st_gpu(const uint8_t *in, uint8_t *out, int n)
+{
+	uint32_t *d = NULL;
+	if (cudaMalloc(&d, (size_t)n * 64) != cudaSuccess) return selftest_cuda_fault();
+	bool ok = (cudaMemcpy(d, in, (size_t)n * 64, cudaMemcpyHostToDevice) == cudaSuccess);
+	simd512_cpu_hash_64(s_simd_st_thr, n, 0, NULL, d, 0);
+	ok = ok && (cudaDeviceSynchronize() == cudaSuccess);
+	ok = ok && (cudaMemcpy(out, d, (size_t)n * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
+	cudaFree(d);
+	return ok ? true : selftest_cuda_fault();
+}
+
+static void simd512_st_ref(const uint8_t *in, uint8_t *out)
+{
+	sph_simd512_context c;
+	sph_simd512_init(&c);
+	sph_simd512(&c, in, 64);
+	sph_simd512_close(&c, out);
+}
+
+__host__
+bool simd512_device_selftest(int thr_id, uint32_t threads)
+{
+	static bool tested = false, passed = false;
+	if (tested) return passed;
+	tested = true;
+	s_simd_st_thr = thr_id;
+	const int n = threads < 256 ? (int)threads : 256;
+	if (n < 64) { // not at a mining throughput; report it rather than pass silently
+		gpulog(LOG_WARNING, thr_id, "simd512 device self-test NOT RUN (throughput %u < 64)", threads);
+		return passed = true;
+	}
+	passed = stkat_run(thr_id, "simd512", 64, 64, n, 0x53494D44u, simd512_st_gpu, simd512_st_ref, true);
+	return passed;
 }

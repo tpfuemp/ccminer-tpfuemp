@@ -345,9 +345,12 @@ void haval256_gpu_hash_64(const uint32_t threads, uint64_t *g_hash, const int ou
 	}
 }
 
+bool haval256_device_selftest(int thr_id);
+
 __host__
 void haval256_cpu_init(int thr_id, uint32_t threads)
 {
+	haval256_device_selftest(thr_id);
 }
 
 __host__
@@ -376,4 +379,53 @@ void haval256_cpu_hash_64z(int thr_id, uint32_t threads, uint32_t *d_hash)
 	dim3 block(threadsperblock);
 
 	haval256_gpu_hash_64 <<<grid, block>>> (threads, (uint64_t*)d_hash, 512, 1);
+}
+
+/* ------------------------------------------------------------------ self-test
+ * Init-time KAT (cuda/stage_selftest.cuh) of both output modes against
+ * sph_haval256_5: high 32 bytes passed through (_64) or zeroed (_64z). Fail-closed. */
+extern "C" {
+#include "sph/sph_haval.h"
+}
+#include "cuda/stage_selftest.cuh"
+
+static int s_haval_st_thr;
+static int s_haval_st_zero;
+
+static bool haval256_st_gpu(const uint8_t *in, uint8_t *out, int n)
+{
+	uint32_t *d = NULL;
+	if (cudaMalloc(&d, (size_t)n * 64) != cudaSuccess) return selftest_cuda_fault();
+	bool ok = (cudaMemcpy(d, in, (size_t)n * 64, cudaMemcpyHostToDevice) == cudaSuccess);
+	if (s_haval_st_zero) haval256_cpu_hash_64z(s_haval_st_thr, n, d);
+	else                 haval256_cpu_hash_64(s_haval_st_thr, n, 0, d, 512);
+	ok = ok && (cudaDeviceSynchronize() == cudaSuccess);
+	ok = ok && (cudaMemcpy(out, d, (size_t)n * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
+	cudaFree(d);
+	return ok ? true : selftest_cuda_fault();
+}
+
+static void haval256_st_ref(const uint8_t *in, uint8_t *out)
+{
+	sph_haval256_5_context c;
+	sph_haval256_5_init(&c);
+	sph_haval256_5(&c, in, 64);
+	sph_haval256_5_close(&c, out);
+	if (s_haval_st_zero) memset(out + 32, 0, 32);
+	else                 memcpy(out + 32, in + 32, 32);
+}
+
+__host__
+bool haval256_device_selftest(int thr_id)
+{
+	static bool tested = false, passed = false;
+	if (tested) return passed;
+	tested = true;
+	s_haval_st_thr = thr_id;
+	s_haval_st_zero = 0;
+	const bool pass_through = stkat_run(thr_id, "haval256", 64, 64, 256, 0x48415641u, haval256_st_gpu, haval256_st_ref, true);
+	s_haval_st_zero = 1;
+	const bool zero_high = stkat_run(thr_id, "haval256z", 64, 64, 256, 0x48415642u, haval256_st_gpu, haval256_st_ref, true);
+	passed = pass_through && zero_high;
+	return passed;
 }

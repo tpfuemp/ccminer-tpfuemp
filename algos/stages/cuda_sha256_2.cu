@@ -194,8 +194,11 @@ __global__ void __launch_bounds__(256,4) sha256_gpu_hash_64(int threads, uint32_
 }
 
 
+bool sha256x_device_selftest(int thr_id);
+
 __host__
 void sha256_cpu_hash_64(int thr_id, int threads, uint32_t *d_hash) {
+	sha256x_device_selftest(thr_id); // stage has no init function; runs once
 	// tpb 512->256: the kernel's (256,4) bound reaches 100% occupancy vs the old
 	// 512/(512,2) = 67% (see kernel comment; +~9-10% event-timed).
 	const int threadsperblock = 256;
@@ -242,10 +245,73 @@ __global__ void __launch_bounds__(256,4) sha256_gpu_hash_64z(int threads, uint32
 
 __host__
 void sha256_cpu_hash_64z(int thr_id, int threads, uint32_t *d_hash) {
+	sha256x_device_selftest(thr_id);
 	const int threadsperblock = 256; // (256,4) 100%-occ retune (see _64).
 	// Ceiling division (see sha256_cpu_hash_64) — truncating grid drops tail
 	// nonces; the `if (thread < threads)` guard makes the round-up safe.
 	dim3 grid((threads + threadsperblock - 1) / threadsperblock);
 	dim3 block(threadsperblock);
 	sha256_gpu_hash_64z<<<grid, block>>>(threads, d_hash);
+}
+
+/* ------------------------------------------------------------------ self-test
+ * Init-time KAT (cuda/stage_selftest.cuh) of sha256_cpu_hash_64 (high 32 bytes
+ * passed through) and _64z (high 32 zeroed) against sph_sha256. `tested` is set
+ * first, so the test's own launcher calls do not recurse. Fail-closed. */
+extern "C" {
+#include "sph/sph_sha2.h"
+}
+#include "cuda/stage_selftest.cuh"
+
+static int s_sha256x_st_thr;
+static int s_sha256x_st_zero;
+
+static bool sha256x_st_gpu(const uint8_t *in, uint8_t *out, int n)
+{
+	uint32_t *d = NULL;
+	if (cudaMalloc(&d, (size_t)n * 64) != cudaSuccess) return selftest_cuda_fault();
+	bool ok = (cudaMemcpy(d, in, (size_t)n * 64, cudaMemcpyHostToDevice) == cudaSuccess);
+	if (s_sha256x_st_zero) sha256_cpu_hash_64z(s_sha256x_st_thr, n, d);
+	else                   sha256_cpu_hash_64(s_sha256x_st_thr, n, d);
+	ok = ok && (cudaDeviceSynchronize() == cudaSuccess);
+	ok = ok && (cudaMemcpy(out, d, (size_t)n * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
+	cudaFree(d);
+	return ok ? true : selftest_cuda_fault();
+}
+
+static void sha256x_st_ref(const uint8_t *in, uint8_t *out)
+{
+	sph_sha256_context c;
+	sph_sha256_init(&c);
+	sph_sha256(&c, in, 64);
+	sph_sha256_close(&c, out);
+	if (s_sha256x_st_zero) memset(out + 32, 0, 32);
+	else                   memcpy(out + 32, in + 32, 32);
+}
+
+/* SHA-256 of the 64 bytes 00 01 .. 3f */
+static const uint8_t kat_sha256_pat64[32] = {
+	0xfd,0xea,0xb9,0xac,0xf3,0x71,0x03,0x62,0xbd,0x26,0x58,0xcd,0xc9,0xa2,0x9e,0x8f,
+	0x9c,0x75,0x7f,0xcf,0x98,0x11,0x60,0x3a,0x8c,0x44,0x7c,0xd1,0xd9,0x15,0x11,0x08
+};
+
+__host__
+bool sha256x_device_selftest(int thr_id)
+{
+	static bool tested = false, passed = false;
+	if (tested) return passed;
+	tested = true;
+	s_sha256x_st_thr = thr_id;
+
+	uint8_t pat[64], dig[64];
+	for (int i = 0; i < 64; i++) pat[i] = (uint8_t)i;
+	s_sha256x_st_zero = 0;
+	sha256x_st_ref(pat, dig);
+	const bool anchor_ok = (memcmp(dig, kat_sha256_pat64, 32) == 0);
+
+	const bool keep_high = stkat_run(thr_id, "sha256x", 64, 64, 256, 0x53484132u, sha256x_st_gpu, sha256x_st_ref, anchor_ok);
+	s_sha256x_st_zero = 1;
+	const bool zero_high = stkat_run(thr_id, "sha256x-z", 64, 64, 256, 0x53484133u, sha256x_st_gpu, sha256x_st_ref, anchor_ok);
+	passed = keep_high && zero_high;
+	return passed;
 }

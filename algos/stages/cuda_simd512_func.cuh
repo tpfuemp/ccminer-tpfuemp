@@ -440,11 +440,7 @@ static void FFT_16(int *const __restrict__ y){
 }
 
 /***************************************************/
-#if __CUDA_ARCH__ > 500
 __global__ __launch_bounds__(TPB52_1, 9)
-#else
-__global__ __launch_bounds__(TPB50_1, 9)
-#endif
 static void simd512_gpu_expand_64(uint32_t threads, const uint32_t* __restrict__ g_hash, uint4 * __restrict__ g_temp4)
 {
 	const uint32_t threadBloc = (blockDim.x * blockIdx.x + threadIdx.x) >> 3;

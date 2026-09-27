@@ -212,7 +212,7 @@ void whirlpool512_hash_64(const uint2 sharedMemory[7][256], uint2 *const hash)
 }
 
 /* Per-TU host-side table upload (mode 0 = plain Whirlpool for x15/x16,
- * mode 1 = legacy whirlpool1) — from x15_whirlpool_cpu_init. */
+ * mode 1 = legacy whirlpool1), from whirlpool512_cpu_init. */
 static void whirlpool512_init_tables(int mode)
 {
 	uint64_t* table0 = NULL;

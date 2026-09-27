@@ -127,7 +127,7 @@ algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh cuda/bl
 			  cuda/jh512_device.cuh cuda/bmw512_device.cuh cuda/skein512_device.cuh \
 			  cuda/luffa512_device.cuh cuda/shabal512_device.cuh cuda/cubehash512_device.cuh \
 			  cuda/hamsi512_device.cuh cuda/fugue512_device.cuh cuda/groestl512_device.cuh cuda/echo512_device.cuh cuda/shavite512_device.cuh cuda/whirlpool512_device.cuh cuda/tiger192_device.cuh \
-			  cuda/aes_device.cuh cuda/aes_sp_device.cuh \
+			  cuda/aes_device.cuh cuda/aes_sp_device.cuh cuda/candidate_report.cuh \
 			  algos/sha3d/sha3d.cu algos/sha3d/cuda_sha3d.cu \
 			  algos/sha3t/sha3t.cu algos/sha3t/cuda_sha3t.cu \
 			  algos/sia/sia.cu algos/sia/sia-rpc.cpp sph/blake2b.c \
@@ -142,7 +142,7 @@ algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh cuda/bl
 			  algos/tribus/tribus.cu algos/stages/cuda_echo512_final.cu \
 			  algos/x11/x11.cu algos/x11/fresh.cu algos/stages/cuda_luffa512.cu algos/stages/cuda_luffa512_80.cu algos/stages/cuda_cubehash512.cu algos/stages/cuda_cubehash512_80.cu \
 			  algos/stages/cuda_shavite512_legacy.cu algos/stages/cuda_shavite512.cu algos/stages/cuda_simd512.cu algos/stages/cuda_echo512_compat.cu \
-			  algos/stages/cuda_luffaCubehash512.cu algos/x11/x11evo.cu algos/x11/timetravel.cu algos/x11/bitcore.cu \
+			  algos/x11/x11evo.cu algos/x11/timetravel.cu algos/x11/bitcore.cu \
 			  algos/x13/x13.cu algos/stages/cuda_hamsi512.cu algos/stages/cuda_fugue512.cu \
 			  algos/hsr/hsr.cu algos/hsr/cuda_hsr_sm3.cu algos/hsr/sm3.c \
 			  algos/x15/x14.cu algos/x15/x15.cu algos/stages/cuda_shabal512.cu algos/stages/cuda_whirlpool512.cu \
@@ -259,15 +259,9 @@ algos/cryptonight/cryptonight-extra.o: algos/cryptonight/cryptonight-extra.cu
 algos/heavy/cuda_hefty1.o: algos/heavy/cuda_hefty1.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
-algos/stages/cuda_luffa512_80.o: algos/stages/cuda_luffa512_80.cu
-	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
-
 # Luffa and Echo are faster with 80 registers than 128
 algos/stages/cuda_luffa512.o: algos/stages/cuda_luffa512.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
-
-algos/stages/cuda_luffaCubehash512.o: algos/stages/cuda_luffaCubehash512.cu
-	$(NVCC) $(nvcc_FLAGS) --maxrregcount=76 -o $@ -c $<
 
 algos/stages/cuda_simd512.o: algos/stages/cuda_simd512.cu
 	$(NVCC) $(nvcc_FLAGS) -Xcompiler -Wno-unused-variable -o $@ -c $<
@@ -287,12 +281,22 @@ algos/stages/cuda_jh512.o: algos/stages/cuda_jh512.cu
 algos/stages/cuda_keccak512.o: algos/stages/cuda_keccak512.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=88 -o $@ -c $<
 
-algos/stages/cuda_quark_compactionTest.o: algos/stages/cuda_quark_compactionTest.cu
+
+# Per-file register caps, kept equal to ccminer.vcxproj.
+algos/neoscrypt/cuda_neoscrypt.o: algos/neoscrypt/cuda_neoscrypt.cu
+	$(NVCC) $(nvcc_FLAGS) --maxrregcount=160 -o $@ -c $<
+
+algos/pentablake/pentablake.o: algos/pentablake/pentablake.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
-algos/jha/cuda_jha_compactionTest.o: algos/jha/cuda_jha_compactionTest.cu
-	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
+algos/skein/cuda_skeincoin.o: algos/skein/cuda_skeincoin.cu
+	$(NVCC) $(nvcc_FLAGS) --maxrregcount=48 -o $@ -c $<
 
+algos/skunk/cuda_skunk.o: algos/skunk/cuda_skunk.cu
+	$(NVCC) $(nvcc_FLAGS) --maxrregcount=64 -o $@ -c $<
+
+algos/stages/cuda_shavite512_legacy.o: algos/stages/cuda_shavite512_legacy.cu
+	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
 algos/skein/skein.o: algos/skein/skein.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=64 -o $@ -c $<

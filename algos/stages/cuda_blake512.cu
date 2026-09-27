@@ -70,31 +70,6 @@ void blake512_gpu_hash_64(uint32_t threads, const uint32_t startNounce, const ui
 	}
 }
 
-__global__
-__launch_bounds__(192, 2)
-void blake512_gpu_hash_64_final(uint32_t threads, const uint32_t *const __restrict__ g_nonceVector, uint2* g_hash, uint32_t* resNonce, const uint64_t target)
-{
-	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
-
-	if (thread < threads){
-		const uint32_t hashPosition = (g_nonceVector == NULL) ? thread : g_nonceVector[thread];
-
-		uint2 hash[8];
-
-		uint2x4 *phash = (uint2x4*)&g_hash[hashPosition << 3];
-		uint2x4 *outpt = (uint2x4*)hash;
-		outpt[0] = __ldg4(&phash[0]);
-		outpt[1] = __ldg4(&phash[1]);
-
-		if (blake512_hash_64_word3(hash) <= target)
-		{
-			uint32_t tmp = atomicExch(&resNonce[0], thread);
-			if (tmp != UINT32_MAX)
-				resNonce[1] = tmp;
-		}
-	}
-}
-
 
 __global__ __launch_bounds__(512, 2)// __launch_bounds__(TPB80, 4)
 void blake512_gpu_hash_80(const uint32_t threads, const uint32_t startNounce, uint2x4 *const __restrict__ g_hash){
@@ -337,17 +312,6 @@ __host__ void blake512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startN
 	const dim3 grid((threads + tpb - 1) / tpb);
 	const dim3 block(tpb);
 	blake512_gpu_hash_64 << <grid, block >> >(threads, startNounce, d_nonceVector, (uint2*)d_hash);
-}
-
-extern void blake512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_outputHash, uint32_t *resNonce, const uint64_t target)
-{
-	uint32_t tpb = TPB52_64;
-	int dev_id = device_map[thr_id];
-
-	if (device_sm[dev_id] <= 500) tpb = TPB50_64;
-	const dim3 grid((threads + tpb - 1) / tpb);
-	const dim3 block(tpb);
-	blake512_gpu_hash_64_final << <grid, block >> >(threads, d_nonceVector, (uint2*)d_outputHash, resNonce, target);
 }
 
 

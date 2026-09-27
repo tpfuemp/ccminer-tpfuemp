@@ -34,7 +34,6 @@ extern void keccak512_cpu_init(int thr_id, uint32_t threads);
 /* startNounce is only needed when d_nonceVector != NULL (quark branch vectors
  * store absolute nonces); it defaults to 0 for the many NULL-vector callers. */
 extern void keccak512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash, uint32_t startNounce = 0);
-extern void keccak512_cpu_hash_64_final(int thr_id, uint32_t threads, uint32_t *d_nonceVector, uint32_t *d_hash, uint64_t target, uint32_t *d_resNonce);
 
 extern void jh512_cpu_init(int thr_id, uint32_t threads);
 extern void jh512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
@@ -56,8 +55,6 @@ extern uint32_t cuda_check_hash_branch(int thr_id, uint32_t threads, uint32_t st
  * luffa+cubehash kernel (its own symbol, no bare equivalent). The luffa /
  * cubehash / simd / hamsi / fugue / shabal forwarders were removed 2026-07-16
  * once every consumer moved to the bare name. */
-extern void x11_luffaCubehash512_cpu_init(int thr_id, uint32_t threads);
-extern void x11_luffaCubehash512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash, int order);
 
 extern void x11_shavite512_cpu_init(int thr_id, uint32_t threads);
 extern void x11_shavite512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
@@ -65,7 +62,6 @@ extern void x11_shavite512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t st
 extern void x11_echo512_cpu_init(int thr_id, uint32_t threads);
 extern void x11_echo512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 
-extern void x15_whirlpool_cpu_init(int thr_id, uint32_t threads, int flag);
 extern void x15_whirlpool_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
 extern void x15_whirlpool_cpu_free(int thr_id);
 
