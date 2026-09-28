@@ -7,6 +7,7 @@
 #include <stdint.h>
 #include <memory.h>
 
+#include "miner.h"
 #include "cuda_helper.h"
 
 typedef unsigned char BitSequence;
@@ -18,8 +19,38 @@ typedef unsigned char BitSequence;
 // kernel below is a thin wrapper, the 80-byte first-stage kernel expands
 // the shared macros/tables directly.
 
-__global__
-void hamsi512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t *g_hash, uint32_t *g_nonceVector)
+/* byte table for hamsi512_hash_64_tb, one per CUDA device (shared with the x-fused kernel) */
+static uint4 *d_hamsi_TB[MAX_GPUS];
+static pthread_mutex_t hamsi_tb_lock = PTHREAD_MUTEX_INITIALIZER;
+
+__global__ void hamsi512_fill_tb(uint32_t *t)
+{
+	const int e = blockIdx.x * blockDim.x + threadIdx.x;
+	if (e >= 8 * 256 * 16) return;
+	const int p = e >> 12, v = (e >> 4) & 255, w = e & 15;
+	uint32_t x = 0;
+	for (int b = 0; b < 8; b++) if (v & (1 << b)) x ^= d_T512[8 * p + b][w];
+	t[e] = x;
+}
+
+/* the current device's table, built on first use */
+__host__
+const uint4 *hamsi512_table(void)
+{
+	int dev = 0;
+	cudaGetDevice(&dev);
+	pthread_mutex_lock(&hamsi_tb_lock);
+	if (!d_hamsi_TB[dev]) {
+		CUDA_SAFE_CALL(cudaMalloc(&d_hamsi_TB[dev], 8 * 256 * 16 * sizeof(uint32_t)));
+		hamsi512_fill_tb<<<(8 * 256 * 16) / 256, 256>>>((uint32_t*)d_hamsi_TB[dev]);
+		CUDA_SAFE_CALL(cudaDeviceSynchronize());
+	}
+	pthread_mutex_unlock(&hamsi_tb_lock);
+	return d_hamsi_TB[dev];
+}
+
+__global__ __launch_bounds__(128, 5)
+void hamsi512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t *g_hash, uint32_t *g_nonceVector, const uint4 *__restrict__ TB)
 {
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
@@ -29,18 +60,21 @@ void hamsi512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t *g_ha
 		int hashPosition = nounce - startNounce;
 		uint32_t *Hash = (uint32_t*)&g_hash[hashPosition<<3];
 
-		hamsi512_hash_64(Hash);
+		hamsi512_hash_64_tb(Hash, TB);
 	}
 }
 
 /* Unit self-test for cuda/hamsi512_device.cuh (docs/coding-guideline.md §7
  * layer 1), defined in cuda/xfamily_selftest.cu. */
 extern bool hamsi512_device_selftest(int thr_id);
+static bool hamsi512_stage_selftest(int thr_id, uint32_t threads);
 
 __host__
 void hamsi512_cpu_init(int thr_id, uint32_t threads)
 {
 	hamsi512_device_selftest(thr_id);
+	hamsi512_table();
+	hamsi512_stage_selftest(thr_id, threads);
 }
 
 __host__
@@ -51,7 +85,7 @@ void hamsi512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, ui
 	dim3 grid((threads + threadsperblock-1)/threadsperblock);
 	dim3 block(threadsperblock);
 
-	hamsi512_gpu_hash_64<<<grid, block>>>(threads, startNounce, (uint64_t*)d_hash, d_nonceVector);
+	hamsi512_gpu_hash_64<<<grid, block>>>(threads, startNounce, (uint64_t*)d_hash, d_nonceVector, hamsi512_table());
 	//MyStreamSynchronize(NULL, order, thr_id);
 }
 
@@ -177,4 +211,48 @@ void x16_hamsi512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_
 	dim3 block(threadsperblock);
 
 	x16_hamsi512_gpu_hash_80 <<<grid, block>>> (threads, startNounce, (uint64_t*)d_hash);
+}
+
+/* ------------------------------------------------------------------ self-test
+ * Init-time KAT (cuda/stage_selftest.cuh) of the table launcher vs sph_hamsi512. Fail-closed. */
+extern "C" {
+#include "sph/sph_hamsi.h"
+}
+#include "cuda/stage_selftest.cuh"
+
+static int s_hamsi_st_thr;
+
+static bool hamsi512_st_gpu(const uint8_t *in, uint8_t *out, int n)
+{
+	uint32_t *d = NULL;
+	if (cudaMalloc(&d, (size_t)n * 64) != cudaSuccess) return selftest_cuda_fault();
+	bool ok = (cudaMemcpy(d, in, (size_t)n * 64, cudaMemcpyHostToDevice) == cudaSuccess);
+	hamsi512_cpu_hash_64(s_hamsi_st_thr, n, 0, NULL, d, 0);
+	ok = ok && (cudaDeviceSynchronize() == cudaSuccess);
+	ok = ok && (cudaMemcpy(out, d, (size_t)n * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
+	cudaFree(d);
+	return ok ? true : selftest_cuda_fault();
+}
+
+static void hamsi512_st_ref(const uint8_t *in, uint8_t *out)
+{
+	sph_hamsi512_context c;
+	sph_hamsi512_init(&c);
+	sph_hamsi512(&c, in, 64);
+	sph_hamsi512_close(&c, out);
+}
+
+static bool hamsi512_stage_selftest(int thr_id, uint32_t threads)
+{
+	static bool tested[MAX_GPUS], passed[MAX_GPUS];
+	if (tested[thr_id]) return passed[thr_id];
+	tested[thr_id] = true;
+	s_hamsi_st_thr = thr_id;
+	const int n = threads < 256 ? (int)threads : 256;
+	if (n < 64) { // not at a mining throughput; report it rather than pass silently
+		gpulog(LOG_WARNING, thr_id, "hamsi512 stage self-test NOT RUN (throughput %u < 64)", threads);
+		return passed[thr_id] = true;
+	}
+	passed[thr_id] = stkat_run(thr_id, "hamsi512 stage", 64, 64, n, 0x48414D53u, hamsi512_st_gpu, hamsi512_st_ref, true);
+	return passed[thr_id];
 }

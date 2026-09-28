@@ -32,11 +32,13 @@
 static uint4 *d_temp4[MAX_GPUS];
 #include "cuda_simd512_func.cuh"
 
-__global__ __launch_bounds__(128,5)
+/* d_temp4 is interleaved (element k of hash h at k * threads + h, written by expand), so one
+ * thread per hash reads it coalesced. */
+#define TPB_C 256
+__global__ __launch_bounds__(TPB_C, 2)
 static void simd512_gpu_compress_64(uint32_t threads, uint32_t *g_hash,const uint4 *const __restrict__ g_fft4)
 {
-	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x)>>3;
-	const uint32_t thr_offset = thread << 6; // thr_id * 128 (je zwei elemente)
+	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	uint32_t IV[32];
 	if (thread < threads){
 
@@ -60,7 +62,7 @@ static void simd512_gpu_compress_64(uint32_t threads, uint32_t *g_hash,const uin
 		for(uint32_t i=16;i<32;i++)
 			A[ i] = IV[ i];
 
-		Round8(A, thr_offset, g_fft4);
+		Round8(A, thread, threads, g_fft4);
 
 		STEP8_IF(&IV[ 0],32, 4,13,&A[ 0],&A[ 8],&A[16],&A[24]);
 		STEP8_IF(&IV[ 8],33,13,10,&A[24],&A[ 0],&A[ 8],&A[16]);
@@ -114,7 +116,7 @@ void simd512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uin
 
 
 	simd512_gpu_expand_64 <<<grid1, block1>>> (threads, d_hash, d_temp4[thr_id]);
-	simd512_gpu_compress_64 <<< grid1, block1 >>> (threads, d_hash, d_temp4[thr_id]);
+	simd512_gpu_compress_64 <<< dim3((threads + TPB_C - 1) / TPB_C), dim3(TPB_C) >>> (threads, d_hash, d_temp4[thr_id]);
 }
 
 /* ------------------------------------------------------------------ self-test

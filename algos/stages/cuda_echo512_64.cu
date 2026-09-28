@@ -13,9 +13,8 @@
 __global__ __launch_bounds__(128, 5)
 static void x16_echo512_gpu_hash_64(uint32_t threads, uint32_t* g_hash)
 {
-	__shared__ uint32_t sharedMemory[4][256];
-
-	echo_aes_gpu_init128(sharedMemory);
+	__shared__ uint32_t sharedMemory[1][ECHO_TAB];
+	echo_fill_rep(sharedMemory);
 	__syncthreads(); // barrier: shared AES table filled cooperatively
 
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);

@@ -408,6 +408,79 @@ void hamsi512_hash_64(uint32_t *Hash)
 			Hash[i] = cuda_swab32(h[i]);
 }
 
+/* Same hash, message expansion by byte table: hamsi_TB[p][v] (8 x 256 x 16 words) is the XOR of
+ * d_T512[8p + b] over the set bits b of v. Built per device by hamsi512_table(). */
+__device__ __forceinline__
+void hamsi512_hash_64_tb(uint32_t *Hash, const uint4 *__restrict__ hamsi_TB)
+{
+	unsigned char *h1 = (unsigned char *)Hash;
+
+		uint32_t c0 = 0x73746565, c1 = 0x6c706172, c2 = 0x6b204172, c3 = 0x656e6265;
+		uint32_t c4 = 0x72672031, c5 = 0x302c2062, c6 = 0x75732032, c7 = 0x3434362c;
+		uint32_t c8 = 0x20422d33, c9 = 0x30303120, cA = 0x4c657576, cB = 0x656e2d48;
+		uint32_t cC = 0x65766572, cD = 0x6c65652c, cE = 0x2042656c, cF = 0x6769756d;
+		uint32_t h[16] = { c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, cA, cB, cC, cD, cE, cF };
+		uint32_t m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, mA, mB, mC, mD, mE, mF;
+		uint32_t *tp, db, dm;
+
+		for(int i = 0; i < 64; i += 8) {
+			m0 = 0; m1 = 0; m2 = 0; m3 = 0; m4 = 0; m5 = 0; m6 = 0; m7 = 0;
+			m8 = 0; m9 = 0; mA = 0; mB = 0; mC = 0; mD = 0; mE = 0; mF = 0;
+			{
+				const uint32_t w0 = Hash[i >> 2], w1 = Hash[(i >> 2) + 1];
+				#pragma unroll
+				for (int p = 0; p < 8; p++) {
+					const uint32_t by = ((p < 4 ? w0 : w1) >> (8 * (p & 3))) & 255;
+					const uint4 *e = &hamsi_TB[(p * 256 + by) * 4];
+					uint4 t0 = __ldg(&e[0]), t1 = __ldg(&e[1]), t2 = __ldg(&e[2]), t3 = __ldg(&e[3]);
+					m0 ^= t0.x; m1 ^= t0.y; m2 ^= t0.z; m3 ^= t0.w; m4 ^= t1.x; m5 ^= t1.y; m6 ^= t1.z; m7 ^= t1.w;
+					m8 ^= t2.x; m9 ^= t2.y; mA ^= t2.z; mB ^= t2.w; mC ^= t3.x; mD ^= t3.y; mE ^= t3.z; mF ^= t3.w;
+				}
+			}
+			for( int r = 0; r < 6; r += 2 ) {
+				ROUND_BIG(r, d_alpha_n);
+				ROUND_BIG(r+1, d_alpha_n);
+			}
+			T_BIG;
+		}
+
+		tp = &d_T512[0][0] + 112;
+		m0 = tp[ 0]; m1 = tp[ 1];
+		m2 = tp[ 2]; m3 = tp[ 3];
+		m4 = tp[ 4]; m5 = tp[ 5];
+		m6 = tp[ 6]; m7 = tp[ 7];
+		m8 = tp[ 8]; m9 = tp[ 9];
+		mA = tp[10]; mB = tp[11];
+		mC = tp[12]; mD = tp[13];
+		mE = tp[14]; mF = tp[15];
+
+		for( int r = 0; r < 6; r += 2 ) {
+			ROUND_BIG(r, d_alpha_n);
+			ROUND_BIG(r+1, d_alpha_n);
+		}
+		T_BIG;
+
+		tp = &d_T512[0][0] + 784;
+		m0 = tp[ 0]; m1 = tp[ 1];
+		m2 = tp[ 2]; m3 = tp[ 3];
+		m4 = tp[ 4]; m5 = tp[ 5];
+		m6 = tp[ 6]; m7 = tp[ 7];
+		m8 = tp[ 8]; m9 = tp[ 9];
+		mA = tp[10]; mB = tp[11];
+		mC = tp[12]; mD = tp[13];
+		mE = tp[14]; mF = tp[15];
+
+		for( int r = 0; r < 12; r += 2 ) {
+			ROUND_BIG(r, d_alpha_f);
+			ROUND_BIG(r+1, d_alpha_f);
+		}
+		T_BIG;
+
+		#pragma unroll 16
+		for (int i = 0; i < 16; i++)
+			Hash[i] = cuda_swab32(h[i]);
+}
+
 #endif /* __CUDACC__ */
 
 #endif /* CUDA_HAMSI512_DEVICE_CUH */

@@ -1459,9 +1459,8 @@ bool echo512_device_selftest(int thr_id)
 __global__ __launch_bounds__(128, 1)
 void echo512_alexis_selftest_gpu(uint32_t *io, int count)
 {
-	__shared__ uint32_t sharedMemory[4][256];
-
-	echo_aes_gpu_init128(sharedMemory);
+	__shared__ uint32_t sharedMemory[1][ECHO_TAB];
+	echo_fill_rep(sharedMemory);
 	__syncthreads(); // barrier: shared AES table filled cooperatively
 
 	if (threadIdx.x < count) {

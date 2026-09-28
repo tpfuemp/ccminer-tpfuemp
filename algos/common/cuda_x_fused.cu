@@ -43,7 +43,7 @@
 __constant__ uint8_t c_fused_order[24];
 
 __device__ __forceinline__
-void x_fused_stage(const int id, uint64_t *const s, const uint64_t *sharedMem)
+void x_fused_stage(const int id, uint64_t *const s, const uint64_t *sharedMem, const uint4 *__restrict__ TB)
 {
 	switch (id) {
 	case 0: /* BLAKE */
@@ -74,7 +74,7 @@ void x_fused_stage(const int id, uint64_t *const s, const uint64_t *sharedMem)
 		cubehash512_hash_64((uint32_t*)s);
 		break;
 	case 11: /* HAMSI */
-		hamsi512_hash_64((uint32_t*)s);
+		hamsi512_hash_64_tb((uint32_t*)s, TB);
 		break;
 	case 13: /* SHABAL */
 		shabal512_hash_64((uint32_t*)s);
@@ -93,7 +93,7 @@ void x_fused_stage(const int id, uint64_t *const s, const uint64_t *sharedMem)
 }
 
 __global__ __launch_bounds__(TPB_FUSED, 2)
-void x_fused_gpu_hash_64(const uint32_t threads, uint64_t *g_hash, const int start, const int len)
+void x_fused_gpu_hash_64(const uint32_t threads, uint64_t *g_hash, const int start, const int len, const uint4 *__restrict__ TB)
 {
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
@@ -105,7 +105,7 @@ void x_fused_gpu_hash_64(const uint32_t threads, uint64_t *g_hash, const int sta
 		*(uint2x4*)&s[4] = __ldg4((uint2x4*)&pHash[4]);
 
 		for (int i = 0; i < len; i++)
-			x_fused_stage(c_fused_order[start + i], s, NULL);
+			x_fused_stage(c_fused_order[start + i], s, NULL, TB);
 
 		*(uint2x4*)&pHash[0] = *(uint2x4*)&s[0];
 		*(uint2x4*)&pHash[4] = *(uint2x4*)&s[4];
@@ -113,7 +113,7 @@ void x_fused_gpu_hash_64(const uint32_t threads, uint64_t *g_hash, const int sta
 }
 
 __global__ __launch_bounds__(TPB_FUSED, 2)
-void x_fused_gpu_hash_64_tiger(const uint32_t threads, uint64_t *g_hash, const int start, const int len)
+void x_fused_gpu_hash_64_tiger(const uint32_t threads, uint64_t *g_hash, const int start, const int len, const uint4 *__restrict__ TB)
 {
 	__shared__ uint64_t sharedMem[768];
 
@@ -130,12 +130,15 @@ void x_fused_gpu_hash_64_tiger(const uint32_t threads, uint64_t *g_hash, const i
 		*(uint2x4*)&s[4] = __ldg4((uint2x4*)&pHash[4]);
 
 		for (int i = 0; i < len; i++)
-			x_fused_stage(c_fused_order[start + i], s, sharedMem);
+			x_fused_stage(c_fused_order[start + i], s, sharedMem, TB);
 
 		*(uint2x4*)&pHash[0] = *(uint2x4*)&s[0];
 		*(uint2x4*)&pHash[4] = *(uint2x4*)&s[4];
 	}
 }
+
+/* hamsi byte table of the current device (algos/stages/cuda_hamsi512.cu) */
+extern const uint4 *hamsi512_table(void);
 
 __host__
 void x_fused_setOrder(const uint8_t *ids, int count)
@@ -150,7 +153,7 @@ void x_fused_cpu_hash_64(int thr_id, uint32_t threads, int start, int len, int h
 	dim3 block(TPB_FUSED);
 
 	if (has_tiger)
-		x_fused_gpu_hash_64_tiger <<<grid, block>>> (threads, (uint64_t*)d_hash, start, len);
+		x_fused_gpu_hash_64_tiger <<<grid, block>>> (threads, (uint64_t*)d_hash, start, len, hamsi512_table());
 	else
-		x_fused_gpu_hash_64 <<<grid, block>>> (threads, (uint64_t*)d_hash, start, len);
+		x_fused_gpu_hash_64 <<<grid, block>>> (threads, (uint64_t*)d_hash, start, len, hamsi512_table());
 }
