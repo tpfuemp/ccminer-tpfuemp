@@ -17,7 +17,7 @@ untouched.
 
 It is self-contained and **not** coupled to `cuda_groestlcoin.cu` — its symbols
 are its own (`myriadgroestl_*`). The GPU Groestl core comes from the shared
-`cuda/groestl512_device.cuh` (quad-warp bitsliced Groestl), included via the
+`cuda/groestl512_x2_device.cuh` (two hashes per thread, bitsliced), included via the
 project include path. Includes are project-include-dir (`miner.h`,
 `cuda_helper.h`, `sph/sph_groestl.h`, `openssl/sha.h`) with no parent-relative
 (`../`) includes, so the move is source-transparent.

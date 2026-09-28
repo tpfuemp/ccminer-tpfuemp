@@ -1,4 +1,5 @@
-// Auf QuarkCoin spezialisierte Version von Groestl inkl. Bitslice
+// Groestl-512 x-family stage: 64-byte hash and 80-byte header, two hashes per thread,
+// bitsliced in registers (cuda/groestl512_x2_device.cuh)
 
 #include <stdio.h>
 #include <memory.h>
@@ -10,68 +11,54 @@
 #define __CUDA_ARCH__ 500
 #endif
 
-#define TPB 256
-#define THF 4U
+#include "cuda/groestl512_x2_device.cuh"
 
-#include "cuda/groestl512_device.cuh"
+/* ~250 registers per thread and 64 words of shared stash per thread */
+#define TPB 128
+#define MINB 2
 
 #define WANT_GROESTL80
 #ifdef WANT_GROESTL80
 __constant__ static uint32_t c_Message80[20];
 #endif
 
-__global__ __launch_bounds__(TPB, THF)
-void groestl512_gpu_hash_64_quad(const uint32_t threads, const uint32_t startNounce, uint32_t * g_hash, uint32_t * __restrict g_nonceVector)
+__global__ __launch_bounds__(TPB, MINB)
+void groestl512_gpu_hash_64_x2(const uint32_t threads, const uint32_t startNounce, uint32_t * g_hash, uint32_t * __restrict g_nonceVector)
 {
-#if __CUDA_ARCH__ >= 300
+	extern __shared__ uint32_t stash[];                     /* [64][TPB] */
+	const uint32_t i0 = (blockDim.x * blockIdx.x + threadIdx.x) * 2;
+	if (i0 >= threads) return;
+	const bool two = i0 + 1 < threads;
 
-	// BEWARE : 4-WAY CODE (one hash need 4 threads)
-	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x) >> 2;
-
-	if (thread < threads)
-	{
-		uint32_t message[8];
-
-		uint32_t nounce = g_nonceVector ? g_nonceVector[thread] : (startNounce + thread);
-		off_t hashPosition = nounce - startNounce;
-		uint32_t *pHash = &g_hash[hashPosition << 4];
-
-		const uint32_t thr = threadIdx.x & 0x3; // % THF
-
-		/*| M0 M1 M2 M3 | M4 M5 M6 M7 | (input)
-		--|-------------|-------------|
-		T0|  0  4  8 12 | 80          |
-		T1|  1  5    13 |             |
-		T2|  2  6    14 |             |
-		T3|  3  7    15 |          01 |
-		--|-------------|-------------| */
-
+	uint4 *pHash[2];
+	uint32_t in[2][16];
+	#pragma unroll
+	for (int h = 0; h < 2; h++) {
+		const uint32_t i = two ? i0 + h : i0;
+		const uint32_t nounce = g_nonceVector ? g_nonceVector[i] : (startNounce + i);
+		const off_t hashPosition = nounce - startNounce;
+		pHash[h] = (uint4*) &g_hash[hashPosition << 4];
 		#pragma unroll
-		for(int k=0;k<4;k++) message[k] = pHash[thr + (k * THF)];
-
-		#pragma unroll
-		for(int k=4;k<8;k++) message[k] = 0;
-
-		if (thr == 0) message[4] = 0x80U; // end of data tag
-		if (thr == 3) message[7] = 0x01000000U;
-
-		uint32_t hash[16];
-		groestl512_hash_quad(message, hash);
-
-		// uint4 = 4x4 uint32_t = 16 bytes
-		if (thr == 0) {
-			uint4 *phash = (uint4*) hash;
-			uint4 *outpt = (uint4*) pHash;
-			outpt[0] = phash[0];
-			outpt[1] = phash[1];
-			outpt[2] = phash[2];
-			outpt[3] = phash[3];
+		for (int k = 0; k < 4; k++) {
+			const uint4 v = pHash[h][k];
+			in[h][4*k] = v.x; in[h][4*k+1] = v.y; in[h][4*k+2] = v.z; in[h][4*k+3] = v.w;
 		}
 	}
-#endif
+
+	groestl512_x2_hash_64(in, &stash[threadIdx.x], blockDim.x);
+
+	/* a lone last hash was loaded twice; only its first copy is written */
+	#pragma unroll
+	for (int h = 0; h < 2; h++) {
+		if (h == 0 || two) {
+			#pragma unroll
+			for (int k = 0; k < 4; k++)
+				pHash[h][k] = make_uint4(in[h][4*k], in[h][4*k+1], in[h][4*k+2], in[h][4*k+3]);
+		}
+	}
 }
 
-/* Unit self-test for cuda/groestl512_device.cuh (docs/coding-guideline.md §7
+/* Unit self-test for cuda/groestl512_x2_device.cuh (docs/coding-guideline.md section 7
  * layer 1), defined in cuda/xfamily_selftest.cu. */
 extern bool groestl512_device_selftest(int thr_id);
 
@@ -89,16 +76,12 @@ void groestl512_cpu_free(int thr_id)
 __host__
 void groestl512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
-	uint32_t threadsperblock = TPB;
+	const uint32_t nthr = (threads + 1) / 2;   /* two hashes per thread */
 
-	// registeroptimierte Quad-Variante mit Warp Shuffle:
-	// 4 threads pro Hash, daher Faktor 4 bei der Blockzahl
-	const uint32_t factor = THF;
+	dim3 grid((nthr + TPB - 1) / TPB);
+	dim3 block(TPB);
 
-	dim3 grid(factor*((threads + threadsperblock-1)/threadsperblock));
-	dim3 block(threadsperblock);
-
-	groestl512_gpu_hash_64_quad<<<grid, block>>>(threads, startNounce, d_hash, d_nonceVector);
+	groestl512_gpu_hash_64_x2<<<grid, block, 64 * TPB * sizeof(uint32_t)>>>(threads, startNounce, d_hash, d_nonceVector);
 }
 
 // --------------------------------------------------------------------------------------------------------------------------------------------
@@ -111,66 +94,45 @@ void groestl512_setBlock_80(int thr_id, uint32_t *endiandata)
 	cudaMemcpyToSymbol(c_Message80, endiandata, sizeof(c_Message80), 0, cudaMemcpyHostToDevice);
 }
 
-__global__ __launch_bounds__(TPB, THF)
-void groestl512_gpu_hash_80_quad(const uint32_t threads, const uint32_t startNounce, uint32_t * g_outhash)
+__global__ __launch_bounds__(TPB, MINB)
+void groestl512_gpu_hash_80_x2(const uint32_t threads, const uint32_t startNounce, uint32_t * g_outhash)
 {
-#if __CUDA_ARCH__ >= 300
-	// BEWARE : 4-WAY CODE (one hash need 4 threads)
-	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x) >> 2;
-	if (thread < threads)
-	{
-		const uint32_t thr = threadIdx.x & 0x3; // % THF
+	extern __shared__ uint32_t stash[];                     /* [64][TPB] */
+	const uint32_t i0 = (blockDim.x * blockIdx.x + threadIdx.x) * 2;
+	if (i0 >= threads) return;
+	const bool two = i0 + 1 < threads;
 
-		/*| M0 M1 M2 M3 M4 | M5 M6 M7 | (input)
-		--|----------------|----------|
-		T0|  0  4  8 12 16 | 80       |
-		T1|  1  5       17 |          |
-		T2|  2  6       18 |          |
-		T3|  3  7       Nc |       01 |
-		--|----------------|----------| TPR */
+	uint32_t m[2][20];
+	#pragma unroll
+	for (int w = 0; w < 19; w++) m[0][w] = m[1][w] = c_Message80[w];
+	m[0][19] = cuda_swab32(startNounce + i0);
+	m[1][19] = cuda_swab32(startNounce + i0 + 1);
 
-		uint32_t message[8];
+	uint32_t s[8][8], out[2][16];
+	groestl512_x2_load80(m, s);
+	groestl512_x2_compress(s, &stash[threadIdx.x], blockDim.x);
+	groestl512_x2_store(s, out);
 
-		#pragma unroll 5
-		for(int k=0; k<5; k++) message[k] = c_Message80[thr + (k * THF)];
-
-		#pragma unroll 3
-		for(int k=5; k<8; k++) message[k] = 0;
-
-		if (thr == 0) message[5] = 0x80U;
-		if (thr == 3) {
-			message[4] = cuda_swab32(startNounce + thread);
-			message[7] = 0x01000000U;
-		}
-
-		uint32_t hash[16];
-		groestl512_hash_quad(message, hash);
-
-		if (thr == 0) { /* 4 threads were done */
-			const off_t hashPosition = thread;
-			//if (!thread) hash[15] = 0xFFFFFFFF;
-			uint4 *outpt = (uint4*) &g_outhash[hashPosition << 4];
-			uint4 *phash = (uint4*) hash;
-			outpt[0] = phash[0];
-			outpt[1] = phash[1];
-			outpt[2] = phash[2];
-			outpt[3] = phash[3];
+	#pragma unroll
+	for (int h = 0; h < 2; h++) {
+		if (h == 0 || two) {
+			uint4 *outpt = (uint4*) &g_outhash[(size_t)(i0 + h) << 4];
+			#pragma unroll
+			for (int k = 0; k < 4; k++)
+				outpt[k] = make_uint4(out[h][4*k], out[h][4*k+1], out[h][4*k+2], out[h][4*k+3]);
 		}
 	}
-#endif
 }
 
 __host__
 void groestl512_cuda_hash_80(const int thr_id, const uint32_t threads, const uint32_t startNounce, uint32_t *d_hash)
 {
-	const uint32_t threadsperblock = TPB;
-	const uint32_t factor = THF;
+	const uint32_t nthr = (threads + 1) / 2;   /* two hashes per thread */
 
-	dim3 grid(factor*((threads + threadsperblock-1)/threadsperblock));
-	dim3 block(threadsperblock);
+	dim3 grid((nthr + TPB - 1) / TPB);
+	dim3 block(TPB);
 
-	groestl512_gpu_hash_80_quad <<<grid, block>>> (threads, startNounce, d_hash);
+	groestl512_gpu_hash_80_x2<<<grid, block, 64 * TPB * sizeof(uint32_t)>>>(threads, startNounce, d_hash);
 }
 
 #endif
-

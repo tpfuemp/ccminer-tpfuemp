@@ -17,7 +17,7 @@ untouched.
   folder; included own-folder by `groestlcoin.cpp`).
 
 It is self-contained and independent of `algos/myriadgroestl/`; the GPU Groestl
-core is the shared `cuda/groestl512_device.cuh` (quad-warp bitsliced Groestl),
+core is the shared `cuda/groestl512_x2_device.cuh` (two hashes per thread, bitsliced),
 included via the project include path. Includes are project-include-dir
 (`miner.h`, `cuda_helper.h`, `sph/sph_groestl.h`, `openssl/sha.h`) or own-folder
 (`cuda_groestlcoin.h`), with no parent-relative (`../`) includes, so the move is

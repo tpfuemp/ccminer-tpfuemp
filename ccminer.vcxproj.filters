@@ -726,7 +726,7 @@
     <ClInclude Include="cuda\lyra2_device.cuh">
       <Filter>Source Files\CUDA\lyra2</Filter>
     </ClInclude>
-    <ClInclude Include="cuda\groestl512_device.cuh">
+    <ClInclude Include="cuda\groestl512_x2_device.cuh">
       <Filter>Source Files\CUDA\quark</Filter>
     </ClInclude>
     <ClInclude Include="cuda\echo512_device.cuh">

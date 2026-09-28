@@ -1,4 +1,4 @@
-// Auf Myriadcoin spezialisierte Version von Groestl inkl. Bitslice
+// Auf Myriadcoin spezialisierte Version von Groestl inkl. Bitslice (two hashes per thread)
 
 #include <stdio.h>
 #include <memory.h>
@@ -11,8 +11,15 @@
 #define atomicExch(p,x) x
 #endif
 
-#include "cuda/groestl512_device.cuh"
+#include "cuda/groestl512_x2_device.cuh"
+
+/* groestl kernel: two hashes per thread (~250 registers, 64 words of shared stash per thread) */
+#define G_TPB 128
+#define G_MINB 2
 #include "cuda/sha256_device.cuh"   /* c_sha256_K / h_sha256_K */
+#include "miner.h"
+#include "cuda/selftest_gate.cuh"
+#include "sph/sph_groestl.h"
 
 // globaler Speicher für alle HeftyHashes aller Threads
 static uint32_t *d_outputHashes[MAX_GPUS];
@@ -225,40 +232,94 @@ void myriadgroestl_gpu_hash_sha(uint32_t threads, uint32_t startNounce, uint32_t
 	}
 }
 
-__global__
-__launch_bounds__(256, 4)
-void myriadgroestl_gpu_hash_quad(uint32_t threads, uint32_t startNounce, uint32_t *hashBuffer)
+__global__ __launch_bounds__(G_TPB, G_MINB)
+void myriadgroestl_gpu_hash_x2(uint32_t threads, uint32_t startNounce, uint32_t *hashBuffer)
 {
-	// durch 4 dividieren, weil jeweils 4 Threads zusammen ein Hash berechnen
-	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x) / 4;
-	if (thread < threads)
-	{
-		// GROESTL
-		uint32_t paddedInput[8];
-		#pragma unroll 8
-		for(int k=0; k<8; k++)
-			paddedInput[k] = myriadgroestl_gpu_msg[4*k+threadIdx.x%4];
+	extern __shared__ uint32_t stash[];                     /* [64][G_TPB] */
+	const uint32_t i0 = (blockDim.x * blockIdx.x + threadIdx.x) * 2;
+	if (i0 >= threads) return;
+	const bool two = i0 + 1 < threads;
 
-		uint32_t nounce = startNounce + thread;
-		if ((threadIdx.x % 4) == 3)
-			paddedInput[4] = SWAB32(nounce);  // 4*4+3 = 19
+	// GROESTL
+	uint32_t m[2][20];
+	#pragma unroll
+	for (int w = 0; w < 19; w++) m[0][w] = m[1][w] = myriadgroestl_gpu_msg[w];
+	m[0][19] = SWAB32(startNounce + i0);
+	m[1][19] = SWAB32(startNounce + i0 + 1);
 
-		uint32_t msgBitsliced[8];
-		to_bitslice_quad(paddedInput, msgBitsliced);
+	uint32_t s[8][8], out_state[2][16];
+	groestl512_x2_load80(m, s);
+	groestl512_x2_compress(s, &stash[threadIdx.x], blockDim.x);
+	groestl512_x2_store(s, out_state);
 
-		uint32_t state[8];
-		groestl512_progressMessage_quad(state, msgBitsliced);
-
-		uint32_t out_state[16];
-		from_bitslice_quad(state, out_state);
-
-		if ((threadIdx.x & 0x03) == 0)
-		{
-			uint32_t *outpHash = &hashBuffer[16 * thread];
-			#pragma unroll 16
-			for(int k=0; k<16; k++) outpHash[k] = out_state[k];
+	#pragma unroll
+	for (int h = 0; h < 2; h++) {
+		if (h == 0 || two) {
+			uint4 *outpHash = (uint4*) &hashBuffer[16 * (i0 + h)];
+			#pragma unroll
+			for (int k = 0; k < 4; k++)
+				outpHash[k] = make_uint4(out_state[h][4*k], out_state[h][4*k+1], out_state[h][4*k+2], out_state[h][4*k+3]);
 		}
 	}
+}
+
+/* Init self-test of the Groestl kernel: 3 nonces (a thread's two + a lone one) vs sph, the next
+ * slot untouched, and a flipped header bit must change the digest */
+static bool myriadgroestl_selftest_run(const uint32_t *hdr20, uint32_t start, uint32_t *out64)
+{
+	uint32_t msgBlock[32] = { 0 };
+	memcpy(msgBlock, hdr20, 80);
+	uint32_t *d_out = NULL;
+	if (cudaMemcpyToSymbol(myriadgroestl_gpu_msg, msgBlock, 128) != cudaSuccess
+	 || cudaMalloc(&d_out, 4 * 64) != cudaSuccess)
+		return selftest_cuda_fault();
+	bool ok = cudaMemset(d_out, 0x5a, 4 * 64) == cudaSuccess;
+	myriadgroestl_gpu_hash_x2 <<< 1, G_TPB, 64 * G_TPB * sizeof(uint32_t) >>> (3, start, d_out);
+	ok = ok && cudaDeviceSynchronize() == cudaSuccess
+	        && cudaMemcpy(out64, d_out, 4 * 64, cudaMemcpyDeviceToHost) == cudaSuccess;
+	cudaFree(d_out);
+	return ok ? true : selftest_cuda_fault();
+}
+
+__host__
+bool myriadgroestl_device_selftest(int thr_id)
+{
+	uint32_t hdr[20], gpu[4][16], gpu_flipped[4][16];
+	const uint32_t start = 0xdeadbeefu;
+	bool kat = false, tail = false, neg = false;
+
+	for (int i = 0; i < 20; i++)
+		hdr[i] = 0x04030201u * (uint32_t)(i + 1);
+
+	if (myriadgroestl_selftest_run(hdr, start, &gpu[0][0])) {
+		kat = true;
+		for (int v = 0; v < 3; v++) {
+			uint32_t m80[20], ref[16];
+			memcpy(m80, hdr, 76);
+			m80[19] = swab32(start + v);
+			sph_groestl512_context ctx;
+			sph_groestl512_init(&ctx);
+			sph_groestl512(&ctx, m80, 80);
+			sph_groestl512_close(&ctx, ref);
+			kat = kat && memcmp(gpu[v], ref, 64) == 0;
+		}
+		tail = true;
+		for (int w = 0; w < 16; w++) tail = tail && gpu[3][w] == 0x5a5a5a5au;
+	}
+
+	hdr[0] ^= 1u;
+	if (myriadgroestl_selftest_run(hdr, start, &gpu_flipped[0][0]))
+		neg = memcmp(gpu_flipped[0], gpu[0], 64) != 0;
+	hdr[0] ^= 1u;
+
+	const bool passed = kat && tail && neg;
+	if (!passed)
+		gpulog(LOG_ERR, thr_id, "myr-gr self-test FAILED (kat %d tail %d neg %d)",
+			(int)kat, (int)tail, (int)neg);
+	else
+		gpulog(LOG_DEBUG, thr_id, "myr-gr self-test passed");
+
+	return selftest_gate(thr_id, "myr-gr", passed);
 }
 
 // Setup Function
@@ -275,6 +336,8 @@ void myriadgroestl_cpu_init(int thr_id, uint32_t threads)
 
 	cudaMalloc(&d_outputHashes[thr_id], (size_t) 64 * threads);
 	cudaMalloc(&d_resultNonces[thr_id], 2 * sizeof(uint32_t));
+
+	myriadgroestl_device_selftest(thr_id);
 }
 
 __host__
@@ -303,15 +366,11 @@ void myriadgroestl_cpu_hash(int thr_id, uint32_t threads, uint32_t startNounce, 
 
 	cudaMemset(d_resultNonces[thr_id], 0xFF, 2 * sizeof(uint32_t));
 
-	// Compute 3.0 benutzt die registeroptimierte Quad Variante mit Warp Shuffle
-	// mit den Quad Funktionen brauchen wir jetzt 4 threads pro Hash, daher Faktor 4 bei der Blockzahl
-	const int factor = 4;
+	const uint32_t nthr = (threads + 1) / 2;   /* two hashes per groestl thread */
+	dim3 grid((nthr + G_TPB - 1) / G_TPB);
+	myriadgroestl_gpu_hash_x2 <<< grid, G_TPB, 64 * G_TPB * sizeof(uint32_t) >>> (threads, startNounce, d_outputHashes[thr_id]);
 
-	dim3 grid(factor*((threads + threadsperblock-1)/threadsperblock));
 	dim3 block(threadsperblock);
-
-	myriadgroestl_gpu_hash_quad <<< grid, block >>> (threads, startNounce, d_outputHashes[thr_id]);
-
 	dim3 grid2((threads + threadsperblock-1)/threadsperblock);
 	myriadgroestl_gpu_hash_sha <<< grid2, block >>> (threads, startNounce, d_outputHashes[thr_id], d_resultNonces[thr_id]);
 

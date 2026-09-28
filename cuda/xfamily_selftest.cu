@@ -48,7 +48,7 @@ extern "C" {
 #include "cuda/shabal512_device.cuh"
 #include "cuda/cubehash512_device.cuh"
 #include "cuda/fugue512_device.cuh"
-#include "cuda/groestl512_device.cuh"
+#include "cuda/groestl512_x2_device.cuh"
 #include "cuda/echo512_device.cuh"
 #include "cuda/shavite512_device.cuh"
 #include "cuda/whirlpool512_device.cuh"
@@ -1252,44 +1252,77 @@ static const uint8_t kat_groestl512_pat64[64] = {
 	0xDC, 0xE7, 0xAB, 0x0E, 0x0E, 0xE4, 0x2A, 0x79, 0x5C, 0xA9, 0x65, 0xA4, 0x39, 0x53, 0x2A, 0x39
 };
 
-/* QUAD-thread kernel: lanes 4v..4v+3 of one warp cooperate on vector v
- * (width-4 warp shuffles); the padded-message build mirrors
- * groestl512_gpu_hash_64_quad. Out-of-range lane groups hash vector 0
- * so every lane of the warp reaches the __shfl_sync calls. */
+/* two hashes per thread, as groestl512_gpu_hash_64_x2: an odd count leaves a lone last hash */
 __global__ __launch_bounds__(32, 1)
-void groestl512_selftest_gpu(uint32_t *io, int count)
+void groestl512_x2_selftest_gpu(uint32_t *io, int count)
 {
-	const int v = threadIdx.x >> 2;
-	const uint32_t thr = threadIdx.x & 3;
-	uint32_t *pHash = &io[(v < count ? v : 0) << 4];
-
-	uint32_t message[8];
+	extern __shared__ uint32_t stash[];
+	const int v0 = threadIdx.x * 2;
+	if (v0 >= count) return;
+	const bool two = v0 + 1 < count;
+	uint32_t in[2][16];
 	#pragma unroll
-	for (int k = 0; k < 4; k++) message[k] = pHash[thr + (k * 4)];
-	#pragma unroll
-	for (int k = 4; k < 8; k++) message[k] = 0;
-	if (thr == 0) message[4] = 0x80U;
-	if (thr == 3) message[7] = 0x01000000U;
-
-	uint32_t hash[16];
-	groestl512_hash_quad(message, hash);
-
-	if (thr == 0 && v < count) {
+	for (int h = 0; h < 2; h++)
 		#pragma unroll
-		for (int i = 0; i < 16; i++) pHash[i] = hash[i];
-	}
+		for (int w = 0; w < 16; w++) in[h][w] = io[((two ? v0 + h : v0) << 4) + w];
+	groestl512_x2_hash_64(in, &stash[threadIdx.x], blockDim.x);
+	#pragma unroll
+	for (int h = 0; h < 2; h++)
+		if (h == 0 || two)
+			#pragma unroll
+			for (int w = 0; w < 16; w++) io[((v0 + h) << 4) + w] = in[h][w];
 }
 
-static bool groestl512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64], int count)
+static bool groestl512_x2_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64], int count)
 {
 	uint32_t *d_io = NULL;
-	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
+	if (cudaMalloc(&d_io, (size_t) GROESTL512_ST_VEC * 64) != cudaSuccess)
 		return selftest_cuda_fault();
 
-	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
-	groestl512_selftest_gpu <<<1, 32>>> (d_io, count);
-	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
+	bool ok = (cudaMemcpy(d_io, msg, (size_t) GROESTL512_ST_VEC * 64, cudaMemcpyHostToDevice) == cudaSuccess);
+	groestl512_x2_selftest_gpu <<<1, 32, 32 * 64 * sizeof(uint32_t)>>> (d_io, count);
+	ok = ok && (cudaMemcpy(dig, d_io, (size_t) GROESTL512_ST_VEC * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
+	return ok ? true : selftest_cuda_fault();
+}
+
+/* 80-byte headers as groestl512_gpu_hash_80_x2 builds them: word 19 = nonce[2t], nonce[2t+1] */
+__global__ __launch_bounds__(32, 1)
+void groestl512_x2_80_selftest_gpu(const uint32_t *hdr, const uint32_t *nonce, uint32_t *out, int count)
+{
+	extern __shared__ uint32_t stash[];
+	const int v0 = threadIdx.x * 2;
+	if (v0 >= count) return;
+	const bool two = v0 + 1 < count;
+	uint32_t m[2][20];
+	#pragma unroll
+	for (int w = 0; w < 19; w++) m[0][w] = m[1][w] = hdr[w];
+	m[0][19] = nonce[v0];
+	m[1][19] = nonce[two ? v0 + 1 : v0];
+	uint32_t s[8][8], d[2][16];
+	groestl512_x2_load80(m, s);
+	groestl512_x2_compress(s, &stash[threadIdx.x], blockDim.x);
+	groestl512_x2_store(s, d);
+	#pragma unroll
+	for (int h = 0; h < 2; h++)
+		if (h == 0 || two)
+			#pragma unroll
+			for (int w = 0; w < 16; w++) out[((v0 + h) << 4) + w] = d[h][w];
+}
+
+static bool groestl512_x2_80_selftest_run(const uint32_t *hdr20, const uint32_t *nonce, uint8_t (*dig)[64], int count)
+{
+	uint32_t *d_hdr = NULL, *d_nonce = NULL, *d_out = NULL;
+	if (cudaMalloc(&d_hdr, 20 * 4) != cudaSuccess || cudaMalloc(&d_nonce, (size_t) count * 4) != cudaSuccess
+	 || cudaMalloc(&d_out, (size_t) count * 64) != cudaSuccess) {
+		cudaFree(d_hdr); cudaFree(d_nonce); cudaFree(d_out);
+		return selftest_cuda_fault();
+	}
+	bool ok = cudaMemcpy(d_hdr, hdr20, 20 * 4, cudaMemcpyHostToDevice) == cudaSuccess
+	       && cudaMemcpy(d_nonce, nonce, (size_t) count * 4, cudaMemcpyHostToDevice) == cudaSuccess;
+	groestl512_x2_80_selftest_gpu <<<1, 32, 32 * 64 * sizeof(uint32_t)>>> (d_hdr, d_nonce, d_out, count);
+	ok = ok && (cudaMemcpy(dig, d_out, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
+	cudaFree(d_hdr); cudaFree(d_nonce); cudaFree(d_out);
 	return ok ? true : selftest_cuda_fault();
 }
 
@@ -1329,20 +1362,40 @@ bool groestl512_device_selftest(int thr_id)
 
 	// --- GPU hash vs the sph digests ---
 	uint8_t gpu[GROESTL512_ST_VEC][64];
-	bool gpu_ok = groestl512_selftest_run(msg, gpu, GROESTL512_ST_VEC)
+	bool gpu_ok = groestl512_x2_selftest_run(msg, gpu, GROESTL512_ST_VEC)
 	           && (memcmp(gpu, ref, sizeof(ref)) == 0);
 
+	// --- an odd count: the last thread hashes one message, the slot after it stays untouched ---
+	uint8_t odd[GROESTL512_ST_VEC][64];
+	const bool odd_ok = groestl512_x2_selftest_run(msg, odd, GROESTL512_ST_VEC - 1)
+	      && (memcmp(odd, ref, (GROESTL512_ST_VEC - 1) * 64) == 0)
+	      && (memcmp(odd[GROESTL512_ST_VEC - 1], msg[GROESTL512_ST_VEC - 1], 64) == 0);
+
 	// --- negative test: one flipped input bit must change the digest ---
-	uint8_t negmsg[1][64], negdig[1][64];
-	memcpy(negmsg[0], msg[0], 64);
+	uint8_t negmsg[GROESTL512_ST_VEC][64], negdig[GROESTL512_ST_VEC][64];
+	memcpy(negmsg, msg, sizeof(negmsg));
 	negmsg[0][0] ^= 0x01;
-	const bool neg_ok = groestl512_selftest_run(negmsg, negdig, 1)
+	const bool neg_ok = groestl512_x2_selftest_run(negmsg, negdig, 1)
 	                 && (memcmp(negdig[0], ref[0], 64) != 0);
 
-	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
+	// --- 80-byte loader: one header, 3 nonces (2 + a lone one) vs sph ---
+	uint32_t hdr[20], nonce[3] = { 0x00000000u, 0x01000000u, 0xefbeaddeu };
+	for (int i = 0; i < 20; i++) hdr[i] = 0x04030201u * (uint32_t)(i + 1);
+	uint8_t d80[3][64];
+	bool h80_ok = groestl512_x2_80_selftest_run(hdr, nonce, d80, 3);
+	for (int v = 0; v < 3 && h80_ok; v++) {
+		uint32_t m80[20]; uint8_t r80[64];
+		memcpy(m80, hdr, 76); m80[19] = nonce[v];
+		sph_groestl512_init(&ctx);
+		sph_groestl512(&ctx, m80, 80);
+		sph_groestl512_close(&ctx, r80);
+		h80_ok = memcmp(d80[v], r80, 64) == 0;
+	}
+
+	passed = sph_ok && kat_ok && gpu_ok && odd_ok && neg_ok && h80_ok;
 	if (!passed)
-		gpulog(LOG_ERR, thr_id, "groestl512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
-			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
+		gpulog(LOG_ERR, thr_id, "groestl512 device-library self-test FAILED (sph %d kat %d gpu %d odd %d neg %d 80 %d)",
+			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) odd_ok, (int) neg_ok, (int) h80_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "groestl512 device-library self-test passed");
 	return selftest_gate(thr_id, "groestl512", passed);

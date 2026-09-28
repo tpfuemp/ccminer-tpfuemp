@@ -1,187 +1,161 @@
 #include <memory.h>
 
-#define SPH_C32(x)    ((uint32_t)(x ## U))
-#define SPH_T32(x)    ((x) & SPH_C32(0xFFFFFFFF))
-
 #include "cuda_helper.h"
+#include "cuda/groestl512_x2_device.cuh"   /* bitsliced S-box, GF(2^8) doubling, plane transpose */
+
+/* Groestl-256 of a 32-byte hash, four hashes per thread, bitsliced in registers: the
+ * groestl512_x2 layout at 8 columns x 4 hashes (bit p = 4*col + h). Terminal stage: only digest
+ * word 7 is un-transposed, for the target screen. ~250 registers + 64-word shared stash. */
+#define TPB 128
+#define MINB 2
 
 static uint32_t *h_GNonces[MAX_GPUS];
 static uint32_t *d_GNonces[MAX_GPUS];
 
 __constant__ uint32_t pTarget[8];
 
-#define C32e(x) \
-	  ((SPH_C32(x) >> 24) \
-	| ((SPH_C32(x) >>  8) & SPH_C32(0x0000FF00)) \
-	| ((SPH_C32(x) <<  8) & SPH_C32(0x00FF0000)) \
-	| ((SPH_C32(x) << 24) & SPH_C32(0xFF000000)))
-
-#define PC32up(j, r)   ((uint32_t)((j) + (r)))
-#define PC32dn(j, r)   0
-#define QC32up(j, r)   0xFFFFFFFF
-#define QC32dn(j, r)   (((uint32_t)(r) << 24) ^ SPH_T32(~((uint32_t)(j) << 24)))
-
-#define B32_0(x)    __byte_perm(x, 0, 0x4440)
-//((x) & 0xFF)
-#define B32_1(x)    __byte_perm(x, 0, 0x4441)
-//(((x) >> 8) & 0xFF)
-#define B32_2(x)    __byte_perm(x, 0, 0x4442)
-//(((x) >> 16) & 0xFF)
-#define B32_3(x)    __byte_perm(x, 0, 0x4443)
-//((x) >> 24)
-
-/* The tables, resident in device memory, in T0up..T3dn order. */
-static __device__ uint32_t d_T[8][256];
-
-/* Shared layout: four uint2 tables carry all eight (bytes 4..7 use the half swap), each in R
- * copies; lane l reads copy l % R. groestl256_shared_bytes() must match G256_R per arch. */
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-#define G256_R 8
-#else
-#define G256_R 4
-#endif
-#define G256_T(k, ix) (((uint2*)mixtabs)[(((k) * 256 + (ix)) * G256_R) + (threadIdx.x % G256_R)])
-#define RSTT(d0, d1, a, b0, b1, b2, b3, b4, b5, b6, b7) do { \
-	const uint2 u0 = G256_T(0, B32_0(a[b0])), u1 = G256_T(1, B32_1(a[b1])); \
-	const uint2 u2 = G256_T(2, B32_2(a[b2])), u3 = G256_T(3, B32_3(a[b3])); \
-	const uint2 w0 = G256_T(0, B32_0(a[b4])), w1 = G256_T(1, B32_1(a[b5])); \
-	const uint2 w2 = G256_T(2, B32_2(a[b6])), w3 = G256_T(3, B32_3(a[b7])); \
-	t[d0] = u0.x ^ u1.x ^ u2.x ^ u3.x ^ w0.y ^ w1.y ^ w2.y ^ w3.y; \
-	t[d1] = u0.y ^ u1.y ^ u2.y ^ u3.y ^ w0.x ^ w1.x ^ w2.x ^ w3.x; \
-	} while (0)
-
-extern uint32_t T0up_cpu[];
-extern uint32_t T0dn_cpu[];
-extern uint32_t T1up_cpu[];
-extern uint32_t T1dn_cpu[];
-extern uint32_t T2up_cpu[];
-extern uint32_t T2dn_cpu[];
-extern uint32_t T3up_cpu[];
-extern uint32_t T3dn_cpu[];
-
 __device__ __forceinline__
-void groestl256_perm_P(uint32_t thread,uint32_t *a, char *mixtabs)
+void groestl256_x4_round(uint32_t (&s)[8][8], const uint32_t r, const bool q, const uint32_t (&rot)[8])
 {
-	#pragma unroll 10
-	for (int r = 0; r<10; r++)
-	{
-		uint32_t t[16];
-
-		a[0x0] ^= PC32up(0x00, r);
-		a[0x2] ^= PC32up(0x10, r);
-		a[0x4] ^= PC32up(0x20, r);
-		a[0x6] ^= PC32up(0x30, r);
-		a[0x8] ^= PC32up(0x40, r);
-		a[0xA] ^= PC32up(0x50, r);
-		a[0xC] ^= PC32up(0x60, r);
-		a[0xE] ^= PC32up(0x70, r);
-		RSTT(0x0, 0x1, a, 0x0, 0x2, 0x4, 0x6, 0x9, 0xB, 0xD, 0xF);
-		RSTT(0x2, 0x3, a, 0x2, 0x4, 0x6, 0x8, 0xB, 0xD, 0xF, 0x1);
-		RSTT(0x4, 0x5, a, 0x4, 0x6, 0x8, 0xA, 0xD, 0xF, 0x1, 0x3);
-		RSTT(0x6, 0x7, a, 0x6, 0x8, 0xA, 0xC, 0xF, 0x1, 0x3, 0x5);
-		RSTT(0x8, 0x9, a, 0x8, 0xA, 0xC, 0xE, 0x1, 0x3, 0x5, 0x7);
-		RSTT(0xA, 0xB, a, 0xA, 0xC, 0xE, 0x0, 0x3, 0x5, 0x7, 0x9);
-		RSTT(0xC, 0xD, a, 0xC, 0xE, 0x0, 0x2, 0x5, 0x7, 0x9, 0xB);
-		RSTT(0xE, 0xF, a, 0xE, 0x0, 0x2, 0x4, 0x7, 0x9, 0xB, 0xD);
-
-		#pragma unroll 16
-		for (int k = 0; k<16; k++)
-			a[k] = t[k];
+	if (q) {
+		#pragma unroll
+		for (int i = 0; i < 8; i++)
+			#pragma unroll
+			for (int b = 0; b < 8; b++) s[i][b] = ~s[i][b];
+		#pragma unroll
+		for (int b = 0; b < 4; b++) s[7][b] ^= 0u - ((r >> b) & 1u);
+		s[7][4] ^= 0xF0F0F0F0u; s[7][5] ^= 0xFF00FF00u; s[7][6] ^= 0xFFFF0000u;
+	} else {
+		#pragma unroll
+		for (int b = 0; b < 4; b++) s[0][b] ^= 0u - ((r >> b) & 1u);
+		s[0][4] ^= 0xF0F0F0F0u; s[0][5] ^= 0xFF00FF00u; s[0][6] ^= 0xFFFF0000u;
 	}
-}
-
-__device__ __forceinline__
-void groestl256_perm_Q(uint32_t thread, uint32_t *a, char *mixtabs)
-{
+	/* ShiftBytes before SubBytes (they commute) */
 	#pragma unroll
-	for (int r = 0; r<10; r++)
-	{
-		uint32_t t[16];
-
-		a[0x0] ^= QC32up(0x00, r);
-		a[0x1] ^= QC32dn(0x00, r);
-		a[0x2] ^= QC32up(0x10, r);
-		a[0x3] ^= QC32dn(0x10, r);
-		a[0x4] ^= QC32up(0x20, r);
-		a[0x5] ^= QC32dn(0x20, r);
-		a[0x6] ^= QC32up(0x30, r);
-		a[0x7] ^= QC32dn(0x30, r);
-		a[0x8] ^= QC32up(0x40, r);
-		a[0x9] ^= QC32dn(0x40, r);
-		a[0xA] ^= QC32up(0x50, r);
-		a[0xB] ^= QC32dn(0x50, r);
-		a[0xC] ^= QC32up(0x60, r);
-		a[0xD] ^= QC32dn(0x60, r);
-		a[0xE] ^= QC32up(0x70, r);
-		a[0xF] ^= QC32dn(0x70, r);
-		RSTT(0x0, 0x1, a, 0x2, 0x6, 0xA, 0xE, 0x1, 0x5, 0x9, 0xD);
-		RSTT(0x2, 0x3, a, 0x4, 0x8, 0xC, 0x0, 0x3, 0x7, 0xB, 0xF);
-		RSTT(0x4, 0x5, a, 0x6, 0xA, 0xE, 0x2, 0x5, 0x9, 0xD, 0x1);
-		RSTT(0x6, 0x7, a, 0x8, 0xC, 0x0, 0x4, 0x7, 0xB, 0xF, 0x3);
-		RSTT(0x8, 0x9, a, 0xA, 0xE, 0x2, 0x6, 0x9, 0xD, 0x1, 0x5);
-		RSTT(0xA, 0xB, a, 0xC, 0x0, 0x4, 0x8, 0xB, 0xF, 0x3, 0x7);
-		RSTT(0xC, 0xD, a, 0xE, 0x2, 0x6, 0xA, 0xD, 0x1, 0x5, 0x9);
-		RSTT(0xE, 0xF, a, 0x0, 0x4, 0x8, 0xC, 0xF, 0x3, 0x7, 0xB);
-
+	for (int i = 0; i < 8; i++)
 		#pragma unroll
-		for (int k = 0; k<16; k++)
-			a[k] = t[k];
+		for (int b = 0; b < 8; b++) s[i][b] = __funnelshift_r(s[i][b], s[i][b], rot[i]);
+	#pragma unroll
+	for (int i = 0; i < 8; i++) groestl512_x2_sbox(s[i]);
+	/* MixBytes, the groestl512_x2 t/x/y/w/v chain (same matrix for both widths) */
+	uint32_t x[8][8], y[8][8];
+	#pragma unroll
+	for (int b = 0; b < 8; b++) {
+		uint32_t t[8];
+		#pragma unroll
+		for (int i = 0; i < 8; i++) t[i] = s[i][b] ^ s[(i + 1) & 7][b];
+		#pragma unroll
+		for (int i = 0; i < 8; i++) {
+			x[i][b] = t[i] ^ t[(i + 3) & 7];
+			y[i][b] = t[i] ^ t[(i + 2) & 7] ^ s[(i + 6) & 7][b];
+		}
+	}
+	#pragma unroll
+	for (int j = 0; j < 8; j++) {
+		uint32_t m[8]; groestl512_x2_mul2(x[j], m);
+		#pragma unroll
+		for (int b = 0; b < 8; b++) x[j][b] = m[b] ^ y[(j + 4) & 7][b];
+	}
+	#pragma unroll
+	for (int i = 0; i < 8; i++) {
+		uint32_t m[8]; groestl512_x2_mul2(x[(i + 3) & 7], m);
+		#pragma unroll
+		for (int b = 0; b < 8; b++) s[i][b] = m[b] ^ y[(i + 4) & 7][b];
 	}
 }
 
-// Do NOT raise minBlocks: this kernel is latency-bound over the shared T-table and needs
-// its registers to keep loads in flight. Trading them for occupancy measures slower.
-__global__ __launch_bounds__(256,1)
-void groestl256_gpu_hash_32(uint32_t threads, uint32_t startNounce, uint64_t *outputHash, uint32_t *resNonces)
+__device__ __forceinline__
+void groestl256_x4_perm(uint32_t (&s)[8][8], const bool q)
 {
-	extern __shared__ char mixtabs[];
+	/* ShiftBytes sigma, P: 0..7, Q: 1 3 5 7 0 2 4 6 (columns) -> rotate 4*sigma bits */
+	uint32_t rot[8];
+	rot[0] = q ? 4 : 0;   rot[1] = q ? 12 : 4;  rot[2] = q ? 20 : 8;  rot[3] = q ? 28 : 12;
+	rot[4] = q ? 0 : 16;  rot[5] = q ? 8 : 20;  rot[6] = q ? 16 : 24; rot[7] = q ? 24 : 28;
+	#pragma unroll 1
+	for (uint32_t r = 0; r < 10; r++) groestl256_x4_round(s, r, q, rot);
+}
 
-	for (int e = threadIdx.x; e < 4 * 256 * G256_R; e += blockDim.x) {
-		const int k = e / (256 * G256_R), x = (e / G256_R) % 256;
-		((uint2*)mixtabs)[e] = make_uint2(__ldg(&d_T[2 * k][x]), __ldg(&d_T[2 * k + 1][x]));
+/* digest word 7 (bytes 28..31) of the four hashes of this thread; in[h] = 8 LE words */
+__device__ __forceinline__
+void groestl256_x4_hash_32_w7(const uint32_t (&in)[4][8], uint32_t *st, const uint32_t stride, uint32_t (&w7)[4])
+{
+	/* row r: W[k] byte n = byte(row r, col 2n + (k>>2)) of hash k&3; cols 4..7 = padding */
+	uint32_t s[8][8];
+	#pragma unroll
+	for (int r = 0; r < 8; r++) {
+		#pragma unroll
+		for (int k = 0; k < 8; k++) {
+			const int h = k & 3, cb = k >> 2, rw = r >> 2, rb = r & 3;
+			s[r][k] = __byte_perm(in[h][2 * cb + rw], in[h][4 + 2 * cb + rw], 0x4400 + rb + ((4 + rb) << 4)) & 0xFFFFu;
+		}
+		if (r == 0) { s[0][0] |= 0x00800000u; s[0][1] |= 0x00800000u; s[0][2] |= 0x00800000u; s[0][3] |= 0x00800000u; } /* col 4 row 0 = 0x80 */
+		if (r == 7) { s[7][4] |= 0x01000000u; s[7][5] |= 0x01000000u; s[7][6] |= 0x01000000u; s[7][7] |= 0x01000000u; } /* col 7 row 7 = 0x01 */
+		groestl512_x2_transpose(s[r]);
+	}
+	/* P(m ^ IV), Q(m), P(H) with H = P ^ Q ^ IV; IV = 0x01 at col 7 row 6 */
+	#define ST(i, b) st[((i) * 8 + (b)) * stride]
+	#pragma unroll 1
+	for (int p = 0; p < 3; p++) {
+		if (p == 0) {
+			#pragma unroll
+			for (int i = 0; i < 8; i++)
+				#pragma unroll
+				for (int b = 0; b < 8; b++) ST(i, b) = s[i][b];
+			s[6][0] ^= 0xF0000000u;
+		} else if (p == 1) {
+			#pragma unroll
+			for (int i = 0; i < 8; i++)
+				#pragma unroll
+				for (int b = 0; b < 8; b++) { const uint32_t v = ST(i, b); ST(i, b) = s[i][b]; s[i][b] = v; }
+		} else {
+			#pragma unroll
+			for (int i = 0; i < 8; i++)
+				#pragma unroll
+				for (int b = 0; b < 8; b++) { s[i][b] ^= ST(i, b); ST(i, b) = s[i][b] ^ ((i == 6 && b == 0) ? 0xF0000000u : 0u); }
+			s[6][0] ^= 0xF0000000u;
+		}
+		groestl256_x4_perm(s, p == 1);
+	}
+	/* feed-forward and un-transpose rows 4..7 only: word 7 = col 7 = W_row[4 + h] byte 3 */
+	#pragma unroll
+	for (int i = 4; i < 8; i++) {
+		#pragma unroll
+		for (int b = 0; b < 8; b++) s[i][b] ^= ST(i, b);
+		groestl512_x2_transpose(s[i]);
+	}
+	#undef ST
+	#pragma unroll
+	for (int h = 0; h < 4; h++) {
+		const uint32_t lo = __byte_perm(s[4][4 + h], s[5][4 + h], 0x0073);
+		const uint32_t hi = __byte_perm(s[6][4 + h], s[7][4 + h], 0x0073);
+		w7[h] = __byte_perm(lo, hi, 0x5410);
+	}
+}
+
+__global__ __launch_bounds__(TPB, MINB)
+void groestl256_gpu_hash_32_x4(uint32_t threads, uint32_t startNounce, uint64_t *outputHash, uint32_t *resNonces)
+{
+	extern __shared__ uint32_t stash[];                     /* [64][TPB] */
+	const uint32_t i0 = (blockDim.x * blockIdx.x + threadIdx.x) * 4;
+	if (i0 >= threads) return;
+
+	/* SoA input, as the lyra2 stages write it; slots past the batch reload the first hash */
+	uint32_t in[4][8];
+	#pragma unroll
+	for (int h = 0; h < 4; h++) {
+		const uint32_t i = (i0 + h < threads) ? i0 + h : i0;
+		#pragma unroll
+		for (int k = 0; k < 4; k++)
+			LOHI(in[h][2 * k], in[h][2 * k + 1], outputHash[k * threads + i]);
 	}
 
-	__syncthreads();
+	uint32_t w7[4];
+	groestl256_x4_hash_32_w7(in, &stash[threadIdx.x], blockDim.x, w7);
 
-	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
-	if (thread < threads)
-	{
-		// GROESTL
-		uint32_t message[16];
-		uint32_t state[16];
-
-		#pragma unroll
-		for (int k = 0; k<4; k++)
-			LOHI(message[2*k], message[2*k+1], outputHash[k*threads+thread]);
-
-		#pragma unroll
-		for (int k = 9; k<15; k++)
-			message[k] = 0;
-
-		message[8] = 0x80;
-		message[15] = 0x01000000;
-
-		#pragma unroll 16
-		for (int u = 0; u<16; u++)
-			state[u] = message[u];
-
-		state[15] ^= 0x10000;
-
-		// Perm
-
-		groestl256_perm_P(thread, state, mixtabs);
-		state[15] ^= 0x10000;
-		groestl256_perm_Q(thread, message, mixtabs);
-		#pragma unroll 16
-		for (int u = 0; u<16; u++) state[u] ^= message[u];
-		#pragma unroll 16
-		for (int u = 0; u<16; u++) message[u] = state[u];
-		groestl256_perm_P(thread, message, mixtabs);
-		state[14] ^= message[14];
-		state[15] ^= message[15];
-
-		uint32_t nonce = startNounce + thread;
-		if (state[15] <= pTarget[7]) {
+	#pragma unroll
+	for (int h = 0; h < 4; h++) {
+		if (i0 + h < threads && w7[h] <= pTarget[7]) {
+			const uint32_t nonce = startNounce + i0 + h;
 			// Keep the two lowest candidates in one pass. atomicMin returns the previous minimum, so
 			// the displaced value moves to slot 1; reading resNonces[0] outside the atomic loses one.
 			const uint32_t prev = atomicMin(&resNonces[0], nonce);
@@ -191,33 +165,13 @@ void groestl256_gpu_hash_32(uint32_t threads, uint32_t startNounce, uint64_t *ou
 	}
 }
 
-
 bool groestl256_device_selftest(int thr_id);
-
-/* bytes of the replicated table for this device; must match G256_R of the arch it runs */
-static size_t groestl256_shared_bytes(int thr_id)
-{
-	return (size_t)4 * 256 * ((device_sm[device_map[thr_id]] >= 800) ? 8 : 4) * sizeof(uint2);
-}
 
 __host__
 void groestl256_cpu_init(int thr_id, uint32_t threads)
 {
-	/* Upload the tables once per device, in T0up..T3dn order. */
-	const size_t tab = sizeof(uint32_t) * 256;
-	cudaMemcpyToSymbol(d_T, T0up_cpu, tab, 0 * tab, cudaMemcpyHostToDevice);
-	cudaMemcpyToSymbol(d_T, T0dn_cpu, tab, 1 * tab, cudaMemcpyHostToDevice);
-	cudaMemcpyToSymbol(d_T, T1up_cpu, tab, 2 * tab, cudaMemcpyHostToDevice);
-	cudaMemcpyToSymbol(d_T, T1dn_cpu, tab, 3 * tab, cudaMemcpyHostToDevice);
-	cudaMemcpyToSymbol(d_T, T2up_cpu, tab, 4 * tab, cudaMemcpyHostToDevice);
-	cudaMemcpyToSymbol(d_T, T2dn_cpu, tab, 5 * tab, cudaMemcpyHostToDevice);
-	cudaMemcpyToSymbol(d_T, T3up_cpu, tab, 6 * tab, cudaMemcpyHostToDevice);
-	cudaMemcpyToSymbol(d_T, T3dn_cpu, tab, 7 * tab, cudaMemcpyHostToDevice);
-
 	cudaMalloc(&d_GNonces[thr_id], 2*sizeof(uint32_t));
 	cudaMallocHost(&h_GNonces[thr_id], 2*sizeof(uint32_t));
-	// the sm_80+ layout needs more than the default 48 KB of dynamic shared memory
-	cudaFuncSetAttribute(groestl256_gpu_hash_32, cudaFuncAttributeMaxDynamicSharedMemorySize, (int)groestl256_shared_bytes(thr_id));
 	groestl256_device_selftest(thr_id);
 }
 
@@ -233,14 +187,12 @@ uint32_t groestl256_cpu_hash_32(int thr_id, uint32_t threads, uint32_t startNoun
 {
 	uint32_t result = UINT32_MAX;
 	cudaMemset(d_GNonces[thr_id], 0xff, 2*sizeof(uint32_t));
-	const uint32_t threadsperblock = 256;
 
-	// berechne wie viele Thread Blocks wir brauchen
-	dim3 grid((threads + threadsperblock-1)/threadsperblock);
-	dim3 block(threadsperblock);
+	const uint32_t nthr = (threads + 3) / 4;   /* four hashes per thread */
+	dim3 grid((nthr + TPB - 1) / TPB);
+	dim3 block(TPB);
 
-	const size_t shared_size = groestl256_shared_bytes(thr_id);
-	groestl256_gpu_hash_32<<<grid, block, shared_size>>>(threads, startNounce, d_outputHash, d_GNonces[thr_id]);
+	groestl256_gpu_hash_32_x4<<<grid, block, 64 * TPB * sizeof(uint32_t)>>>(threads, startNounce, d_outputHash, d_GNonces[thr_id]);
 
 	MyStreamSynchronize(NULL, order, thr_id);
 

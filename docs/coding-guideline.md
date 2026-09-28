@@ -28,7 +28,7 @@ algos/                     # ALL algo-related files live here
 sph/                       # vendored SPH reference hashes (sph_*) — LEAVE AS-IS
 cuda/                      # shared DEVICE headers (the device library)
   <primitive>_device.cuh   # one per primitive: sha256_device.cuh, sha512_device.cuh,
-                           # blake512_device.cuh, keccak_device.cuh, groestl512_device.cuh,
+                           # blake512_device.cuh, keccak_device.cuh, groestl512_x2_device.cuh,
                            # aes_device.cuh, lyra2_device.cuh, … (23 headers, 2026-08-13)
   selftest_gate.cuh        # shared fail-closed gate for init-time device self-tests
 compat/, util/, api/, ...  # unchanged infrastructure
