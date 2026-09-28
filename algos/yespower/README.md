@@ -23,6 +23,7 @@ passes through a text filter -- one such quote silently dropped the words "The",
 | `yespowerLTNCG` | 2048 | 32 | `LTNCGYES` | 8 |
 | `yespowerMGPC` | 2048 | 32 | `Magpies are birds of the Corvidae family.` | 41 |
 | `yespowerTIDE` | 2048 | 8 | (none) | 0 |
+| `yespowerSMT` | **256** | 8 | (none) | 0 |
 | `yespowerARWN` | 2048 | 32 | `ARWN` | 4 |
 | `yespowerADVC` | 2048 | 32 | `Let the quest begin` | 19 |
 | `yespowerIC` | 2048 | 32 | `IsotopeC` | 8 |

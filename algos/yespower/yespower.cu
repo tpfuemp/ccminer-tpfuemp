@@ -94,6 +94,7 @@ static const struct yespower_variant yespower_variants[] = {
 	{ "yespowerltncg",  2048, 32, PERS_LTNCG,     8  },  /* LightningCash-Gold */
 	{ "yespowermgpc",   2048, 32, PERS_MGPC,      41 },  /* MagpieCoin (MGPC)  */
 	{ "yespowertide",   2048,  8, NULL,           0  },  /* Tidecoin (TDC)     */
+	{ "yespowersmt",     256,  8, NULL,           0  },  /* Smartiecoin (SMT)  */
 	{ "yespowerarwn",   2048, 32, PERS_ARWN,      4  },  /* Arowana (ARWN)     */
 	{ "yespoweradvc",   2048, 32, PERS_ADVC,      19 },  /* AdventureCoin ADVC */
 	{ "yespoweric",     2048, 32, PERS_IC,        8  },  /* IsotopeC           */
@@ -716,6 +717,53 @@ static bool yespower_eqpay_genesis_kat(int thr_id, const yespower_params_t *p)
 	return selftest_gate(thr_id, "eqpay", passed);
 }
 
+/* Smartiecoin KAT: header and digest of a pool-accepted share (block 233709).
+ * Bytes 1 and 70 lie in different SHA-256 blocks; flipping either must change it. */
+static bool yespower_smt_share_kat(int thr_id, const yespower_params_t *p)
+{
+	static const uint8_t kat_hdr[80] = {
+		0x00, 0x00, 0x00, 0x20, 0x90, 0xd9, 0xbd, 0xf0, 0x6c, 0xbb, 0x6c, 0x96,
+		0xb8, 0x71, 0x7f, 0x2c, 0x62, 0xeb, 0x0b, 0xa7, 0x50, 0x6b, 0x03, 0x47,
+		0x2e, 0x24, 0x08, 0x20, 0xb8, 0xd1, 0xf5, 0x93, 0x3d, 0x00, 0x00, 0x00,
+		0x65, 0xe6, 0x75, 0xf4, 0xe7, 0xfa, 0x46, 0xa9, 0x54, 0x53, 0x75, 0xfd,
+		0x98, 0x5a, 0xb4, 0x99, 0xfd, 0x7d, 0x64, 0x54, 0x18, 0xee, 0x94, 0x1c,
+		0x28, 0x93, 0x36, 0x08, 0x25, 0x51, 0x9c, 0x58, 0x64, 0x94, 0xba, 0x6a,
+		0x77, 0xfb, 0x4c, 0x1d, 0xfe, 0xff, 0xff, 0xaf,
+	};
+
+	static const uint8_t kat_digest[32] = {
+		0x9e, 0x48, 0x11, 0xc5, 0x41, 0xdd, 0xe6, 0xfb, 0x3b, 0x50, 0x7d, 0xce,
+		0x11, 0x0f, 0x2b, 0xcc, 0x97, 0x0d, 0xbb, 0x76, 0xe6, 0x4e, 0x21, 0x25,
+		0xcd, 0xcf, 0x32, 0x90, 0x95, 0xa7, 0x73, 0x00,
+	};
+
+	uint8_t out[32], alt[80], tmp[32];
+	bool digest_ok, lo_ok, hi_ok, passed;
+
+	if (!yespower_hash_hdr(out, kat_hdr, 80, p)) {
+		gpulog(LOG_ERR, thr_id, "smt self-test: the CPU reference refused the "
+		                        "parameters (N=%u r=%u)", p->N, (uint32_t) p->r);
+		return selftest_gate(thr_id, "smt", false);
+	}
+	digest_ok = (memcmp(out, kat_digest, 32) == 0);
+
+	memcpy(alt, kat_hdr, 80);
+	alt[1] ^= 0x01;
+	lo_ok = yespower_hash_hdr(tmp, alt, 80, p) && memcmp(tmp, out, 32) != 0;
+
+	memcpy(alt, kat_hdr, 80);
+	alt[70] ^= 0x01;
+	hi_ok = yespower_hash_hdr(tmp, alt, 80, p) && memcmp(tmp, out, 32) != 0;
+
+	passed = digest_ok && lo_ok && hi_ok;
+	if (!passed)
+		gpulog(LOG_ERR, thr_id, "smt self-test FAILED: digest=%d byte1=%d byte70=%d "
+		                        "(N=%u r=%u)", (int) digest_ok, (int) lo_ok, (int) hi_ok,
+		       p->N, (uint32_t) p->r);
+
+	return selftest_gate(thr_id, "smt", passed);
+}
+
 /* Fail-closed init gate.  Four legs; the last two need no GPU and are the ones
  * that keep the instrument honest, because they PROVE the two documented
  * blindnesses instead of citing them. */
@@ -725,6 +773,10 @@ static bool yespower_device_selftest(int thr_id, int dev, const yespower_params_
 	 * parameters or the header length are wrong there is no point reporting a
 	 * GPU-vs-CPU agreement built on them. */
 	if (opt_algo == ALGO_YESPOWEREQPAY && !yespower_eqpay_genesis_kat(thr_id, p))
+		return false;
+	if (opt_algo == ALGO_YESPOWER && yespower_selected &&
+	    !strcasecmp(yespower_selected->name, "yespowersmt") &&
+	    !yespower_smt_share_kat(thr_id, p))
 		return false;
 
 	/* A fixed header, so the gate is reproducible run to run.  c_yp_hdr is
@@ -854,14 +906,14 @@ extern "C" int scanhash_yespower(int thr_id, struct work *work, uint32_t max_non
 	}
 
 	/* Reject up front exactly what the reference rejects (yespower_ref.c:495):
-	 * N a power of two in [1024, 512K], r in [8, 32].  Without this the reference
+	 * N a power of two in [256, 512K], r in [8, 32].  Without this the reference
 	 * returns -1 for every nonce, the fail-closed digest below is all-ones, no
 	 * share is ever found -- and the scan loop spins at memset speed and reports
 	 * a completely fictitious hashrate.  `--yespower-param 128,2` read as
 	 * fast on a CPU. A validity check that only runs per-hash is not enough
 	 * when the failure path is cheaper than the success path. */
-	if (params.N < 1024 || params.N > 512 * 1024 || (params.N & (params.N - 1))) {
-		applog(LOG_ERR, "yespower: N=%u invalid (need a power of two in [1024, 524288])",
+	if (params.N < 256 || params.N > 512 * 1024 || (params.N & (params.N - 1))) {
+		applog(LOG_ERR, "yespower: N=%u invalid (need a power of two in [256, 524288])",
 		       params.N);
 		proper_exit(EXIT_CODE_USAGE);   /* permanent: the next call would fail identically */
 	}

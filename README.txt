@@ -153,6 +153,7 @@ its command line interface and options.
                           yespowerlitb        LightBit (LITB)
                           yespowerltncg       LightningCash-Gold
                           yespowermgpc        MagpieCoin (MGPC)
+                          yespowersmt         Smartiecoin (SMT)
                           yespowersugar       Sugarchain (SUGAR)
                           yespowertide        Tidecoin (TDC)
                           yespowerurx         UraniumX (URX)

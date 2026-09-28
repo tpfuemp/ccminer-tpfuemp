@@ -297,6 +297,7 @@ static inline int algo_to_int(char* arg)
 		         !strcasecmp("yespowerltncg", arg) ||
 		         !strcasecmp("yespowermgpc", arg) ||
 		         !strcasecmp("yespowertide", arg) ||
+		         !strcasecmp("yespowersmt", arg) ||
 		         !strcasecmp("yespowerarwn", arg) ||
 		         !strcasecmp("yespoweradvc", arg) ||
 		         !strcasecmp("yespoweric", arg) ||

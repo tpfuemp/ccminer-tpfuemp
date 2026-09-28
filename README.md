@@ -157,13 +157,14 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `yespowerr16` | Yenten (YTN), yespower r=16 |
 | `yespowereqpay` | EqPay: yespower 1.0 over a 181-byte Qtum-style header |
 | `yespoweradvc` | AdventureCoin (ADVC) |
+| `yespowersmt` | Smartiecoin (SMT), yespower N=256 r=8 |
 | `power2b` (`yespower-b2b`) | yespower-b2b: BLAKE2b head/tail (MicroBitcoin) |
 | `zr5` (`ziftr`) | ZR5 (ZiftrCoin) |
 
 The yespower coins share one `-a` name and differ only in `(N, r, pers)`, which
 the algo name alone cannot carry. Select one either with its own alias
 (`yespowersugar`, `sugarchain`, `yespowerurx`, `yespowerltncg`, `yespowermgpc`,
-`yespowertide`, `yespowerarwn`, `yespoweric`, `yespoweriots`, `yespowerlitb`,
+`yespowertide`, `yespowersmt`, `yespowerarwn`, `yespoweric`, `yespoweriots`, `yespowerlitb`,
 `cpupower`) or with the pool's `"algo"` field, which is honoured on a pool switch.
 
 Run `ccminer --help` for the authoritative list and per-algo notes.

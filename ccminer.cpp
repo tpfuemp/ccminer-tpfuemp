@@ -405,6 +405,7 @@ Options:\n\
 			 coin aliases	yespowerSUGAR yespowerURX yespowerLTNCG yespowerMGPC\n\
 					yespowerIC yespowerIOTS yespowerLITB yespowerLTNCG\n\
 					yespowerMGPC yespowerSUGAR yespowerTIDE yespowerURX\n\
+					yespowerSMT\n\
 			zr5		ZR5 (ZiftrCoin)\n\
   -d, --devices         Comma separated list of CUDA devices to use.\n\
                         Device IDs start counting from 0! Alternatively takes\n\
