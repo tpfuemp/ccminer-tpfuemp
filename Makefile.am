@@ -128,7 +128,7 @@ algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh cuda/bl
 			  cuda/xfamily_selftest.cu cuda/selftest_gate.cuh cuda/blake512_device.cuh \
 			  cuda/jh512_device.cuh cuda/bmw512_device.cuh cuda/skein512_device.cuh \
 			  cuda/luffa512_device.cuh cuda/shabal512_device.cuh cuda/cubehash512_device.cuh \
-			  cuda/hamsi512_device.cuh cuda/fugue512_device.cuh cuda/groestl512_x2_device.cuh cuda/echo512_device.cuh cuda/shavite512_device.cuh cuda/whirlpool512_device.cuh cuda/tiger192_device.cuh \
+			  cuda/hamsi512_device.cuh cuda/fugue512_device.cuh cuda/groestl512_x2_device.cuh cuda/echo512_device.cuh cuda/shavite512_device.cuh cuda/whirlpool512_x4_device.cuh cuda/tiger192_device.cuh \
 			  cuda/aes_device.cuh cuda/aes_sp_device.cuh cuda/candidate_report.cuh \
 			  algos/sha3d/sha3d.cu algos/sha3d/cuda_sha3d.cu \
 			  algos/sha3t/sha3t.cu algos/sha3t/cuda_sha3t.cu \

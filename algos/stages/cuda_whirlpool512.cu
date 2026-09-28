@@ -31,11 +31,6 @@
  * @author Provos Alexis (Applied partial shared memory utilization, precomputations, merging & tuning for 970/750ti under CUDA7.5 -> +93% increased throughput of whirlpool)
  */
 
-
-// Change with caution, used by shared mem fetch
-#define TPB80 384
-#define TPB64 384
-
 extern "C" {
 #include <sph/sph_whirlpool.h>
 #include <miner.h>
@@ -43,68 +38,39 @@ extern "C" {
 
 #include <cuda_helper.h>
 
-#define xor3x(a,b,c) (a^b^c)
-#include "cuda/whirlpool512_device.cuh"
+#include "cuda_whirlpool_tables.cuh"
+#include "cuda/whirlpool512_x4_device.cuh"
 #include "cuda/candidate_report.cuh"
+#include "cuda/selftest_gate.cuh"
 
-__constant__ static uint2 precomputed_round_key_80[80];
-
-__device__ static uint2 c_PaddedMessage80[16];
+/* four hashes per thread, ~255 registers + 64 words of shared stash per thread */
+#define TPB80 128
+#define TPB64_X4 128
 
 static uint32_t *d_resNonce[MAX_GPUS] = { 0 };
 
+/* whirlpool1 80-byte header (-a whirlpool): planes of H1 ^ block 2 and the 10 block-2 round keys */
+static __constant__ uint32_t c_wc80_st0[64];
+static __constant__ uint32_t c_wc80_key[10][64];
 
-//--------START OF WHIRLPOOL HOST MACROS-----------------------------------------------------------------------------
-
-#define table_skew(val,num) SPH_ROTL64(val,8*num)
-#define BYTE(x, n)     ((unsigned)((x) >> (8 * (n))) & 0xFF)
-
-#define ROUND_ELT(table, in, i0, i1, i2, i3, i4, i5, i6, i7) \
-	(table[BYTE(in[i0], 0)] \
-	^ table_skew(table[BYTE(in[i1], 1)], 1) \
-	^ table_skew(table[BYTE(in[i2], 2)], 2) \
-	^ table_skew(table[BYTE(in[i3], 3)], 3) \
-	^ table_skew(table[BYTE(in[i4], 4)], 4) \
-	^ table_skew(table[BYTE(in[i5], 5)], 5) \
-	^ table_skew(table[BYTE(in[i6], 6)], 6) \
-	^ table_skew(table[BYTE(in[i7], 7)], 7))
-
-#define ROUND(table, in, out, c0, c1, c2, c3, c4, c5, c6, c7)   do { \
-		out[0] = ROUND_ELT(table, in, 0, 7, 6, 5, 4, 3, 2, 1) ^ c0; \
-		out[1] = ROUND_ELT(table, in, 1, 0, 7, 6, 5, 4, 3, 2) ^ c1; \
-		out[2] = ROUND_ELT(table, in, 2, 1, 0, 7, 6, 5, 4, 3) ^ c2; \
-		out[3] = ROUND_ELT(table, in, 3, 2, 1, 0, 7, 6, 5, 4) ^ c3; \
-		out[4] = ROUND_ELT(table, in, 4, 3, 2, 1, 0, 7, 6, 5) ^ c4; \
-		out[5] = ROUND_ELT(table, in, 5, 4, 3, 2, 1, 0, 7, 6) ^ c5; \
-		out[6] = ROUND_ELT(table, in, 6, 5, 4, 3, 2, 1, 0, 7) ^ c6; \
-		out[7] = ROUND_ELT(table, in, 7, 6, 5, 4, 3, 2, 1, 0) ^ c7; \
-	} while (0)
-
-__host__
-static void ROUND_KSCHED(const uint64_t *in,uint64_t *out,const uint64_t c){
-	const uint64_t *a = in;
-	uint64_t *b = out;
-	ROUND(old1_T0, a, b, c, 0, 0, 0, 0, 0, 0, 0);
-}
-
-
-//--------END OF WHIRLPOOL HOST MACROS-------------------------------------------------------------------------------
-/* Unit self-test for cuda/whirlpool512_device.cuh (docs/coding-guideline.md
- * §7 layer 1), defined in cuda/xfamily_selftest.cu. */
+/* Unit self-test for cuda/whirlpool512_x4_device.cuh (docs/coding-guideline.md
+ * section 7 layer 1), defined in cuda/xfamily_selftest.cu. */
 extern bool whirlpool512_device_selftest(int thr_id);
+static bool whirlcoin_selftest(int thr_id);
 
 __host__
 void whirlpool512_cpu_init(int thr_id, uint32_t threads, int mode)
 {
-	whirlpool512_init_tables(mode);
-
 	CUDA_SAFE_CALL(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)));
 
 	cuda_get_arch(thr_id);
 
 	whirlpool512_device_selftest(thr_id);
+	if (mode == 1)
+		whirlcoin_selftest(thr_id);
 }
 
+/* whirlpool1 (legacy Whirlcoin) chaining value after the first 64 bytes */
 __host__
 static void whirl_midstate(void *state, const void *input)
 {
@@ -119,104 +85,12 @@ static void whirl_midstate(void *state, const void *input)
 __host__
 void whirlpool512_setBlock_80(void *pdata, const void *ptarget)
 {
-	uint64_t PaddedMessage[16];
-
-	memcpy(PaddedMessage, pdata, 80);
-	memset(((uint8_t*)&PaddedMessage)+80, 0, 48);
-	((uint8_t*)&PaddedMessage)[80] = 0x80; /* ending */
-
-	// compute constant first block
-	uint64_t midstate[16] = { 0 };
-	whirl_midstate(midstate, pdata);
-	memcpy(PaddedMessage, midstate, 64);
-
-	uint64_t round_constants[80];
-	uint64_t n[8];
-
-	n[0] = PaddedMessage[0] ^ PaddedMessage[8];    //read data
-	n[1] = PaddedMessage[1] ^ PaddedMessage[9];
-	n[2] = PaddedMessage[2] ^ 0x0000000000000080; //whirlpool
-	n[3] = PaddedMessage[3];
-	n[4] = PaddedMessage[4];
-	n[5] = PaddedMessage[5];
-	n[6] = PaddedMessage[6];
-	n[7] = PaddedMessage[7] ^ 0x8002000000000000;
-
-	ROUND_KSCHED(PaddedMessage,round_constants,old1_RC[0]);
-
-	for(int i=1;i<10;i++){
-		ROUND_KSCHED(&round_constants[8*(i-1)],&round_constants[8*i],old1_RC[i]);
-	}
-
-	//USE the same memory place to store keys and state
-	round_constants[ 0]^= old1_T0[BYTE(n[0], 0)]
-	 ^ table_skew(old1_T0[BYTE(n[7], 1)], 1) ^ table_skew(old1_T0[BYTE(n[6], 2)], 2) ^ table_skew(old1_T0[BYTE(n[5], 3)], 3)
-	 ^ table_skew(old1_T0[BYTE(n[4], 4)], 4) ^ table_skew(old1_T0[BYTE(n[3], 5)], 5) ^ table_skew(old1_T0[BYTE(n[2], 6)], 6);
-
-	round_constants[ 1]^= old1_T0[BYTE(n[1], 0)]
-	 ^ table_skew(old1_T0[BYTE(n[0], 1)], 1) ^ table_skew(old1_T0[BYTE(n[7], 2)], 2) ^ table_skew(old1_T0[BYTE(n[6], 3)], 3)
-	 ^ table_skew(old1_T0[BYTE(n[5], 4)], 4) ^ table_skew(old1_T0[BYTE(n[4], 5)], 5) ^ table_skew(old1_T0[BYTE(n[3], 6)], 6)
-	 ^ table_skew(old1_T0[BYTE(n[2], 7)], 7);
-
-	round_constants[ 2]^= old1_T0[BYTE(n[2], 0)]
-	 ^ table_skew(old1_T0[BYTE(n[1], 1)], 1) ^ table_skew(old1_T0[BYTE(n[0], 2)], 2) ^ table_skew(old1_T0[BYTE(n[7], 3)], 3)
-	 ^ table_skew(old1_T0[BYTE(n[6], 4)], 4) ^ table_skew(old1_T0[BYTE(n[5], 5)], 5) ^ table_skew(old1_T0[BYTE(n[4], 6)], 6)
-	 ^ table_skew(old1_T0[BYTE(n[3], 7)], 7);
-
-	round_constants[ 3]^= old1_T0[BYTE(n[3], 0)]
-	 ^ table_skew(old1_T0[BYTE(n[2], 1)], 1) ^ table_skew(old1_T0[BYTE(n[1], 2)], 2) ^ table_skew(old1_T0[BYTE(n[0], 3)], 3)
-	 ^ table_skew(old1_T0[BYTE(n[7], 4)], 4) ^ table_skew(old1_T0[BYTE(n[6], 5)], 5) ^ table_skew(old1_T0[BYTE(n[5], 6)], 6)
-	 ^ table_skew(old1_T0[BYTE(n[4], 7)], 7);
-
-	round_constants[ 4]^= old1_T0[BYTE(n[4], 0)]
-	 ^ table_skew(old1_T0[BYTE(n[3], 1)], 1) ^ table_skew(old1_T0[BYTE(n[2], 2)], 2) ^ table_skew(old1_T0[BYTE(n[1], 3)], 3)
-	 ^ table_skew(old1_T0[BYTE(n[0], 4)], 4) ^ table_skew(old1_T0[BYTE(n[7], 5)], 5) ^ table_skew(old1_T0[BYTE(n[6], 6)], 6)
-	 ^ table_skew(old1_T0[BYTE(n[5], 7)], 7);
-
-	round_constants[ 5]^= old1_T0[BYTE(n[5], 0)]
-	 ^ table_skew(old1_T0[BYTE(n[4], 1)], 1) ^ table_skew(old1_T0[BYTE(n[3], 2)], 2) ^ table_skew(old1_T0[BYTE(n[2], 3)], 3)
-	 ^ table_skew(old1_T0[BYTE(n[0], 5)], 5) ^ table_skew(old1_T0[BYTE(n[7], 6)], 6) ^ table_skew(old1_T0[BYTE(n[6], 7)], 7);
-
-	round_constants[ 6]^= old1_T0[BYTE(n[6], 0)]
-	 ^ table_skew(old1_T0[BYTE(n[5], 1)], 1) ^ table_skew(old1_T0[BYTE(n[4], 2)], 2) ^ table_skew(old1_T0[BYTE(n[3], 3)], 3)
-	 ^ table_skew(old1_T0[BYTE(n[2], 4)], 4) ^ table_skew(old1_T0[BYTE(n[0], 6)], 6) ^ table_skew(old1_T0[BYTE(n[7], 7)], 7);
-
-	round_constants[ 7]^= old1_T0[BYTE(n[7], 0)]
-	 ^ table_skew(old1_T0[BYTE(n[6], 1)], 1) ^ table_skew(old1_T0[BYTE(n[5], 2)], 2) ^ table_skew(old1_T0[BYTE(n[4], 3)], 3)
-	 ^ table_skew(old1_T0[BYTE(n[3], 4)], 4) ^ table_skew(old1_T0[BYTE(n[2], 5)], 5) ^ table_skew(old1_T0[BYTE(n[0], 7)], 7);
-
-	for(int i=1;i<5;i++)
-		n[i] = round_constants[i];
-
-	round_constants[ 8]^= table_skew(old1_T0[BYTE(n[4], 4)], 4)
-	 ^ table_skew(old1_T0[BYTE(n[3], 5)], 5) ^ table_skew(old1_T0[BYTE(n[2], 6)], 6) ^ table_skew(old1_T0[BYTE(n[1], 7)], 7);
-
-	round_constants[ 9]^= old1_T0[BYTE(n[1], 0)]
-	 ^ table_skew(old1_T0[BYTE(n[4], 5)], 5) ^ table_skew(old1_T0[BYTE(n[3], 6)], 6) ^ table_skew(old1_T0[BYTE(n[2], 7)], 7);
-
-	round_constants[10]^= old1_T0[BYTE(n[2], 0)]
-	 ^ table_skew(old1_T0[BYTE(n[1], 1)], 1) ^ table_skew(old1_T0[BYTE(n[4], 6)], 6) ^ table_skew(old1_T0[BYTE(n[3], 7)], 7);
-
-	round_constants[11]^= old1_T0[BYTE(n[3], 0)]
-	 ^ table_skew(old1_T0[BYTE(n[2], 1)], 1) ^ table_skew(old1_T0[BYTE(n[1], 2)], 2) ^ table_skew(old1_T0[BYTE(n[4], 7)], 7);
-
-	round_constants[12]^= old1_T0[BYTE(n[4], 0)]
-	 ^ table_skew(old1_T0[BYTE(n[3], 1)], 1) ^ table_skew(old1_T0[BYTE(n[2], 2)], 2) ^ table_skew(old1_T0[BYTE(n[1], 3)], 3);
-
-	round_constants[13]^= table_skew(old1_T0[BYTE(n[4], 1)], 1) ^ table_skew(old1_T0[BYTE(n[3], 2)], 2)
-	 ^ table_skew(old1_T0[BYTE(n[2], 3)], 3) ^ table_skew(old1_T0[BYTE(n[1], 4)], 4);
-
-	round_constants[14]^= table_skew(old1_T0[BYTE(n[4], 2)], 2) ^ table_skew(old1_T0[BYTE(n[3], 3)], 3)
-	 ^ table_skew(old1_T0[BYTE(n[2], 4)], 4) ^ table_skew(old1_T0[BYTE(n[1], 5)], 5);
-
-	round_constants[15]^= table_skew(old1_T0[BYTE(n[4], 3)], 3) ^  table_skew(old1_T0[BYTE(n[3], 4)], 4)
-	 ^ table_skew(old1_T0[BYTE(n[2], 5)], 5) ^ table_skew(old1_T0[BYTE(n[1], 6)], 6);
-
-	PaddedMessage[0] ^= PaddedMessage[8];
-
-	cudaMemcpyToSymbol(c_PaddedMessage80, PaddedMessage, 128, 0, cudaMemcpyHostToDevice);
-
-	cudaMemcpyToSymbol(precomputed_round_key_80, round_constants, 80*sizeof(uint64_t), 0, cudaMemcpyHostToDevice);
+	uint64_t h1[8];
+	uint32_t planes[11][64];
+	whirl_midstate(h1, pdata);
+	whirlpool512_x4_prepare80(old1_T0, old1_RC, h1, pdata, planes);
+	cudaMemcpyToSymbol(c_wc80_st0, planes[0], sizeof(c_wc80_st0), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(c_wc80_key, planes[1], sizeof(c_wc80_key), 0, cudaMemcpyHostToDevice);
 }
 
 __host__
@@ -226,329 +100,127 @@ extern void whirlpool512_cpu_free(int thr_id)
 		cudaFree(d_resNonce[thr_id]);
 }
 
+/* 4 x whirlpool1 (80, 64, 64, 64 bytes) chained in planes, then words 6..7 vs the target */
 __global__
-__launch_bounds__(TPB80,2)
-void oldwhirlpool_gpu_hash_80(uint32_t threads, uint32_t startNounce, uint32_t* resNonce, const uint64_t target)
+__launch_bounds__(TPB80, 2)
+void whirlcoin_gpu_hash_80_x4(uint32_t threads, uint32_t startNounce, uint32_t *resNonce, const uint64_t target)
 {
-	__shared__ uint2 sharedMemory[7][256];
+	extern __shared__ uint32_t stash[];                     /* [64][TPB80] */
+	const uint32_t i0 = (blockDim.x * blockIdx.x + threadIdx.x) * 4;
+	if (i0 >= threads) return;
 
-	if (threadIdx.x < 256) {
-		const uint2 tmp = __ldg((uint2*)&whirl_b0[threadIdx.x]);
-		sharedMemory[0][threadIdx.x] = tmp;
-		sharedMemory[1][threadIdx.x] = ROL8(tmp);
-		sharedMemory[2][threadIdx.x] = ROL16(tmp);
-		sharedMemory[3][threadIdx.x] = ROL24(tmp);
-		sharedMemory[4][threadIdx.x] = SWAPUINT2(tmp);
-		sharedMemory[5][threadIdx.x] = ROR24(tmp);
-		sharedMemory[6][threadIdx.x] = ROR16(tmp);
+	uint32_t s[8][8];
+	whirlpool512_x4_hash80<true>(c_wc80_st0, c_wc80_key, startNounce + i0, s);
+	#pragma unroll 1
+	for (int k = 0; k < 3; k++)
+		whirlpool512_x4_compress64<true>(s, c_wpx4t_k1, &stash[threadIdx.x], blockDim.x);
+	#pragma unroll
+	for (int c = 0; c < 8; c++) whirlpool512_x4_transpose(s[c]);
+
+	/* digest words 6, 7 = row 3, cols 0..3 / 4..7 -> W_c[4 + h] byte 1 */
+	#pragma unroll
+	for (int h = 0; h < 4; h++) {
+		if (i0 + h >= threads) break;
+		const uint32_t w6 = __byte_perm(__byte_perm(s[0][4 + h], s[1][4 + h], 0x0051), __byte_perm(s[2][4 + h], s[3][4 + h], 0x0051), 0x5410);
+		const uint32_t w7 = __byte_perm(__byte_perm(s[4][4 + h], s[5][4 + h], 0x0051), __byte_perm(s[6][4 + h], s[7][4 + h], 0x0051), 0x5410);
+		if ((((uint64_t) w7 << 32) | w6) <= target)
+			report_candidate_2(resNonce, i0 + h);
 	}
-
-	__syncthreads();
-
-	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
-
-	if (thread < threads){
-
-		uint2 hash[8], state[8],n[8], tmp[8];
-		uint32_t nonce = cuda_swab32(startNounce + thread);
-		uint2 temp = c_PaddedMessage80[9];
-		temp.y = nonce;
-
-		/// round 2 ///////
-		//////////////////////////////////
-		temp = temp ^ c_PaddedMessage80[1];
-
-		*(uint2x4*)&n[ 0]   = *(uint2x4*)&precomputed_round_key_80[ 0];
-		*(uint2x4*)&n[ 4]   = *(uint2x4*)&precomputed_round_key_80[ 4];
-		*(uint2x4*)&tmp[ 0] = *(uint2x4*)&precomputed_round_key_80[ 8];
-		*(uint2x4*)&tmp[ 4] = *(uint2x4*)&precomputed_round_key_80[12];
-
-		n[ 0]^= __ldg((uint2*)&whirl_b7[__byte_perm(temp.y, 0, 0x4443)]);
-		n[ 5]^= sharedMemory[4][__byte_perm(temp.y, 0, 0x4440)];
-		n[ 6]^= sharedMemory[5][__byte_perm(temp.y, 0, 0x4441)];
-		n[ 7]^= sharedMemory[6][__byte_perm(temp.y, 0, 0x4442)];
-
-		tmp[ 0]^= __ldg((uint2*)&whirl_b0[__byte_perm(n[0].x, 0, 0x4440)]);
-		tmp[ 0]^= sharedMemory[1][__byte_perm(n[7].x, 0, 0x4441)];
-		tmp[ 0]^= sharedMemory[2][__byte_perm(n[6].x, 0, 0x4442)];
-		tmp[ 0]^= sharedMemory[3][__byte_perm(n[5].x, 0, 0x4443)];
-
-		tmp[ 1]^= sharedMemory[1][__byte_perm(n[0].x, 0, 0x4441)];
-		tmp[ 1]^= sharedMemory[2][__byte_perm(n[7].x, 0, 0x4442)];
-		tmp[ 1]^= sharedMemory[3][__byte_perm(n[6].x, 0, 0x4443)];
-		tmp[ 1]^= sharedMemory[4][__byte_perm(n[5].y, 0, 0x4440)];
-
-		tmp[ 2]^= sharedMemory[2][__byte_perm(n[0].x, 0, 0x4442)];
-		tmp[ 2]^= sharedMemory[3][__byte_perm(n[7].x, 0, 0x4443)];
-		tmp[ 2]^= sharedMemory[4][__byte_perm(n[6].y, 0, 0x4440)];
-		tmp[ 2]^= sharedMemory[5][__byte_perm(n[5].y, 0, 0x4441)];
-
-		tmp[ 3]^= sharedMemory[3][__byte_perm(n[0].x, 0, 0x4443)];
-		tmp[ 3]^= sharedMemory[4][__byte_perm(n[7].y, 0, 0x4440)];
-		tmp[ 3]^= ROR24(__ldg((uint2*)&whirl_b0[__byte_perm(n[6].y, 0, 0x4441)]));
-		tmp[ 3]^= ROR8(__ldg((uint2*)&whirl_b7[__byte_perm(n[5].y, 0, 0x4442)]));
-
-		tmp[ 4]^= sharedMemory[4][__byte_perm(n[0].y, 0, 0x4440)];
-		tmp[ 4]^= sharedMemory[5][__byte_perm(n[7].y, 0, 0x4441)];
-		tmp[ 4]^= ROR8(__ldg((uint2*)&whirl_b7[__byte_perm(n[6].y, 0, 0x4442)]));
-		tmp[ 4]^= __ldg((uint2*)&whirl_b7[__byte_perm(n[5].y, 0, 0x4443)]);
-
-		tmp[ 5]^= __ldg((uint2*)&whirl_b0[__byte_perm(n[5].x, 0, 0x4440)]);
-		tmp[ 5]^= sharedMemory[5][__byte_perm(n[0].y, 0, 0x4441)];
-		tmp[ 5]^= sharedMemory[6][__byte_perm(n[7].y, 0, 0x4442)];
-		tmp[ 5]^= __ldg((uint2*)&whirl_b7[__byte_perm(n[6].y, 0, 0x4443)]);
-
-		tmp[ 6]^= __ldg((uint2*)&whirl_b0[__byte_perm(n[6].x, 0, 0x4440)]);
-		tmp[ 6]^= sharedMemory[1][__byte_perm(n[5].x, 0, 0x4441)];
-		tmp[ 6]^= sharedMemory[6][__byte_perm(n[0].y, 0, 0x4442)];
-		tmp[ 6]^= __ldg((uint2*)&whirl_b7[__byte_perm(n[7].y, 0, 0x4443)]);
-
-		tmp[ 7]^= __ldg((uint2*)&whirl_b0[__byte_perm(n[7].x, 0, 0x4440)]);
-		tmp[ 7]^= sharedMemory[1][__byte_perm(n[6].x, 0, 0x4441)];
-		tmp[ 7]^= sharedMemory[2][__byte_perm(n[5].x, 0, 0x4442)];
-		tmp[ 7]^= __ldg((uint2*)&whirl_b7[__byte_perm(n[0].y, 0, 0x4443)]);
-
-		TRANSFER(n, tmp);
-
-		for (int i=2; i<10; i++) {
-			tmp[ 0] = d_ROUND_ELT1_LDG(sharedMemory,n, 0, 7, 6, 5, 4, 3, 2, 1, precomputed_round_key_80[i*8+0]);
-			tmp[ 1] = d_ROUND_ELT1(    sharedMemory,n, 1, 0, 7, 6, 5, 4, 3, 2, precomputed_round_key_80[i*8+1]);
-			tmp[ 2] = d_ROUND_ELT1(    sharedMemory,n, 2, 1, 0, 7, 6, 5, 4, 3, precomputed_round_key_80[i*8+2]);
-			tmp[ 3] = d_ROUND_ELT1_LDG(sharedMemory,n, 3, 2, 1, 0, 7, 6, 5, 4, precomputed_round_key_80[i*8+3]);
-			tmp[ 4] = d_ROUND_ELT1_LDG(sharedMemory,n, 4, 3, 2, 1, 0, 7, 6, 5, precomputed_round_key_80[i*8+4]);
-			tmp[ 5] = d_ROUND_ELT1(    sharedMemory,n, 5, 4, 3, 2, 1, 0, 7, 6, precomputed_round_key_80[i*8+5]);
-			tmp[ 6] = d_ROUND_ELT1(    sharedMemory,n, 6, 5, 4, 3, 2, 1, 0, 7, precomputed_round_key_80[i*8+6]);
-			tmp[ 7] = d_ROUND_ELT1_LDG(sharedMemory,n, 7, 6, 5, 4, 3, 2, 1, 0, precomputed_round_key_80[i*8+7]);
-			TRANSFER(n, tmp);
-		}
-
-		state[0] = c_PaddedMessage80[0] ^ n[0];
-		state[1] = c_PaddedMessage80[1] ^ n[1] ^ vectorize(REPLACE_HIDWORD(devectorize(c_PaddedMessage80[9]),nonce));
-		state[2] = c_PaddedMessage80[2] ^ n[2] ^ vectorize(0x0000000000000080);
-		state[3] = c_PaddedMessage80[3] ^ n[3];
-		state[4] = c_PaddedMessage80[4] ^ n[4];
-		state[5] = c_PaddedMessage80[5] ^ n[5];
-		state[6] = c_PaddedMessage80[6] ^ n[6];
-		state[7] = c_PaddedMessage80[7] ^ n[7] ^ vectorize(0x8002000000000000);
-
-		#pragma unroll 2
-		for(int r=0;r<2;r++){
-			#pragma unroll 8
-			for(int i=0;i<8;i++)
-				hash[ i] = n[ i] = state[ i];
-
-			uint2 h[8] = {
-				{0xC0EE0B30,0x672990AF},{0x28282828,0x28282828},{0x28282828,0x28282828},{0x28282828,0x28282828},
-				{0x28282828,0x28282828},{0x28282828,0x28282828},{0x28282828,0x28282828},{0x28282828,0x28282828}
-			};
-
-			tmp[ 0] = d_ROUND_ELT1_LDG(sharedMemory,n, 0, 7, 6, 5, 4, 3, 2, 1, h[0]);
-			tmp[ 1] = d_ROUND_ELT1(sharedMemory,n, 1, 0, 7, 6, 5, 4, 3, 2, h[1]);
-			tmp[ 2] = d_ROUND_ELT1(sharedMemory,n, 2, 1, 0, 7, 6, 5, 4, 3, h[2]);
-			tmp[ 3] = d_ROUND_ELT1_LDG(sharedMemory,n, 3, 2, 1, 0, 7, 6, 5, 4, h[3]);
-			tmp[ 4] = d_ROUND_ELT1(sharedMemory,n, 4, 3, 2, 1, 0, 7, 6, 5, h[4]);
-			tmp[ 5] = d_ROUND_ELT1_LDG(sharedMemory,n, 5, 4, 3, 2, 1, 0, 7, 6, h[5]);
-			tmp[ 6] = d_ROUND_ELT1(sharedMemory,n, 6, 5, 4, 3, 2, 1, 0, 7, h[6]);
-			tmp[ 7] = d_ROUND_ELT1_LDG(sharedMemory,n, 7, 6, 5, 4, 3, 2, 1, 0, h[7]);
-			TRANSFER(n, tmp);
-	//		#pragma unroll 10
-			for (int i=1; i <10; i++){
-				tmp[ 0] = d_ROUND_ELT1_LDG(sharedMemory,n, 0, 7, 6, 5, 4, 3, 2, 1, whirl_precomputed_round_key_64[(i-1)*8+0]);
-				tmp[ 1] = d_ROUND_ELT1(    sharedMemory,n, 1, 0, 7, 6, 5, 4, 3, 2, whirl_precomputed_round_key_64[(i-1)*8+1]);
-				tmp[ 2] = d_ROUND_ELT1(    sharedMemory,n, 2, 1, 0, 7, 6, 5, 4, 3, whirl_precomputed_round_key_64[(i-1)*8+2]);
-				tmp[ 3] = d_ROUND_ELT1_LDG(sharedMemory,n, 3, 2, 1, 0, 7, 6, 5, 4, whirl_precomputed_round_key_64[(i-1)*8+3]);
-				tmp[ 4] = d_ROUND_ELT1(    sharedMemory,n, 4, 3, 2, 1, 0, 7, 6, 5, whirl_precomputed_round_key_64[(i-1)*8+4]);
-				tmp[ 5] = d_ROUND_ELT1(    sharedMemory,n, 5, 4, 3, 2, 1, 0, 7, 6, whirl_precomputed_round_key_64[(i-1)*8+5]);
-				tmp[ 6] = d_ROUND_ELT1(    sharedMemory,n, 6, 5, 4, 3, 2, 1, 0, 7, whirl_precomputed_round_key_64[(i-1)*8+6]);
-				tmp[ 7] = d_ROUND_ELT1_LDG(sharedMemory,n, 7, 6, 5, 4, 3, 2, 1, 0, whirl_precomputed_round_key_64[(i-1)*8+7]);
-				TRANSFER(n, tmp);
-			}
-			#pragma unroll 8
-			for (int i=0; i<8; i++)
-				state[i] = n[i] ^ hash[i];
-
-			#pragma unroll 6
-			for (int i=1; i<7; i++)
-				n[i]=vectorize(0);
-
-			n[0] = vectorize(0x80);
-			n[7] = vectorize(0x2000000000000);
-
-			#pragma unroll 8
-			for (int i=0; i < 8; i++) {
-				h[i] = state[i];
-				n[i] = n[i] ^ h[i];
-			}
-
-	//		#pragma unroll 10
-			for (int i=0; i < 10; i++) {
-				tmp[ 0] = d_ROUND_ELT1(sharedMemory, h, 0, 7, 6, 5, 4, 3, 2, 1, whirl_InitVector_RC[i]);
-				tmp[ 1] = d_ROUND_ELT(sharedMemory, h, 1, 0, 7, 6, 5, 4, 3, 2);
-				tmp[ 2] = d_ROUND_ELT_LDG(sharedMemory, h, 2, 1, 0, 7, 6, 5, 4, 3);
-				tmp[ 3] = d_ROUND_ELT(sharedMemory, h, 3, 2, 1, 0, 7, 6, 5, 4);
-				tmp[ 4] = d_ROUND_ELT_LDG(sharedMemory, h, 4, 3, 2, 1, 0, 7, 6, 5);
-				tmp[ 5] = d_ROUND_ELT(sharedMemory, h, 5, 4, 3, 2, 1, 0, 7, 6);
-				tmp[ 6] = d_ROUND_ELT_LDG(sharedMemory, h, 6, 5, 4, 3, 2, 1, 0, 7);
-				tmp[ 7] = d_ROUND_ELT(sharedMemory, h, 7, 6, 5, 4, 3, 2, 1, 0);
-				TRANSFER(h, tmp);
-				tmp[ 0] = d_ROUND_ELT1(sharedMemory,n, 0, 7, 6, 5, 4, 3, 2, 1, tmp[0]);
-				tmp[ 1] = d_ROUND_ELT1(sharedMemory,n, 1, 0, 7, 6, 5, 4, 3, 2, tmp[1]);
-				tmp[ 2] = d_ROUND_ELT1_LDG(sharedMemory,n, 2, 1, 0, 7, 6, 5, 4, 3, tmp[2]);
-				tmp[ 3] = d_ROUND_ELT1(sharedMemory,n, 3, 2, 1, 0, 7, 6, 5, 4, tmp[3]);
-				tmp[ 4] = d_ROUND_ELT1(sharedMemory,n, 4, 3, 2, 1, 0, 7, 6, 5, tmp[4]);
-				tmp[ 5] = d_ROUND_ELT1(sharedMemory,n, 5, 4, 3, 2, 1, 0, 7, 6, tmp[5]);
-				tmp[ 6] = d_ROUND_ELT1(sharedMemory,n, 6, 5, 4, 3, 2, 1, 0, 7, tmp[6]);
-				tmp[ 7] = d_ROUND_ELT1_LDG(sharedMemory,n, 7, 6, 5, 4, 3, 2, 1, 0, tmp[7]);
-				TRANSFER(n, tmp);
-			}
-
-			state[0] = xor3x(state[0], n[0], vectorize(0x80));
-			state[1] = state[1]^ n[1];
-			state[2] = state[2]^ n[2];
-			state[3] = state[3]^ n[3];
-			state[4] = state[4]^ n[4];
-			state[5] = state[5]^ n[5];
-			state[6] = state[6]^ n[6];
-			state[7] = xor3x(state[7], n[7], vectorize(0x2000000000000));
-		}
-
-		uint2 h[8] = {
-			{0xC0EE0B30,0x672990AF},{0x28282828,0x28282828},{0x28282828,0x28282828},{0x28282828,0x28282828},
-			{0x28282828,0x28282828},{0x28282828,0x28282828},{0x28282828,0x28282828},{0x28282828,0x28282828}
-		};
-
-		#pragma unroll 8
-		for(int i=0;i<8;i++)
-			n[i]=hash[i] = state[ i];
-
-		tmp[ 0] = d_ROUND_ELT1(sharedMemory,n, 0, 7, 6, 5, 4, 3, 2, 1, h[0]);
-		tmp[ 1] = d_ROUND_ELT1_LDG(sharedMemory,n, 1, 0, 7, 6, 5, 4, 3, 2, h[1]);
-		tmp[ 2] = d_ROUND_ELT1(sharedMemory,n, 2, 1, 0, 7, 6, 5, 4, 3, h[2]);
-		tmp[ 3] = d_ROUND_ELT1_LDG(sharedMemory,n, 3, 2, 1, 0, 7, 6, 5, 4, h[3]);
-		tmp[ 4] = d_ROUND_ELT1(sharedMemory,n, 4, 3, 2, 1, 0, 7, 6, 5, h[4]);
-		tmp[ 5] = d_ROUND_ELT1_LDG(sharedMemory,n, 5, 4, 3, 2, 1, 0, 7, 6, h[5]);
-		tmp[ 6] = d_ROUND_ELT1(sharedMemory,n, 6, 5, 4, 3, 2, 1, 0, 7, h[6]);
-		tmp[ 7] = d_ROUND_ELT1_LDG(sharedMemory,n, 7, 6, 5, 4, 3, 2, 1, 0, h[7]);
-		TRANSFER(n, tmp);
-//		#pragma unroll 10
-		for (int i=1; i <10; i++){
-			tmp[ 0] = d_ROUND_ELT1_LDG(sharedMemory,n, 0, 7, 6, 5, 4, 3, 2, 1, whirl_precomputed_round_key_64[(i-1)*8+0]);
-			tmp[ 1] = d_ROUND_ELT1(    sharedMemory,n, 1, 0, 7, 6, 5, 4, 3, 2, whirl_precomputed_round_key_64[(i-1)*8+1]);
-			tmp[ 2] = d_ROUND_ELT1(    sharedMemory,n, 2, 1, 0, 7, 6, 5, 4, 3, whirl_precomputed_round_key_64[(i-1)*8+2]);
-			tmp[ 3] = d_ROUND_ELT1_LDG(sharedMemory,n, 3, 2, 1, 0, 7, 6, 5, 4, whirl_precomputed_round_key_64[(i-1)*8+3]);
-			tmp[ 4] = d_ROUND_ELT1(    sharedMemory,n, 4, 3, 2, 1, 0, 7, 6, 5, whirl_precomputed_round_key_64[(i-1)*8+4]);
-			tmp[ 5] = d_ROUND_ELT1(    sharedMemory,n, 5, 4, 3, 2, 1, 0, 7, 6, whirl_precomputed_round_key_64[(i-1)*8+5]);
-			tmp[ 6] = d_ROUND_ELT1(    sharedMemory,n, 6, 5, 4, 3, 2, 1, 0, 7, whirl_precomputed_round_key_64[(i-1)*8+6]);
-			tmp[ 7] = d_ROUND_ELT1_LDG(sharedMemory,n, 7, 6, 5, 4, 3, 2, 1, 0, whirl_precomputed_round_key_64[(i-1)*8+7]);
-			TRANSFER(n, tmp);
-		}
-
-		#pragma unroll 8
-		for (int i=0; i<8; i++)
-			n[ i] = h[i] = n[i] ^ hash[i];
-
-		uint2 backup = h[ 3];
-
-		n[0]^= vectorize(0x80);
-		n[7]^= vectorize(0x2000000000000);
-
-//		#pragma unroll 8
-		for (int i=0; i < 8; i++) {
-			tmp[ 0] = d_ROUND_ELT1(sharedMemory, h, 0, 7, 6, 5, 4, 3, 2, 1, whirl_InitVector_RC[i]);
-			tmp[ 1] = d_ROUND_ELT(sharedMemory, h, 1, 0, 7, 6, 5, 4, 3, 2);
-			tmp[ 2] = d_ROUND_ELT_LDG(sharedMemory, h, 2, 1, 0, 7, 6, 5, 4, 3);
-			tmp[ 3] = d_ROUND_ELT(sharedMemory, h, 3, 2, 1, 0, 7, 6, 5, 4);
-			tmp[ 4] = d_ROUND_ELT_LDG(sharedMemory, h, 4, 3, 2, 1, 0, 7, 6, 5);
-			tmp[ 5] = d_ROUND_ELT(sharedMemory, h, 5, 4, 3, 2, 1, 0, 7, 6);
-			tmp[ 6] = d_ROUND_ELT_LDG(sharedMemory, h, 6, 5, 4, 3, 2, 1, 0, 7);
-			tmp[ 7] = d_ROUND_ELT(sharedMemory, h, 7, 6, 5, 4, 3, 2, 1, 0);
-			TRANSFER(h, tmp);
-			tmp[ 0] = d_ROUND_ELT1(sharedMemory,n, 0, 7, 6, 5, 4, 3, 2, 1, tmp[0]);
-			tmp[ 1] = d_ROUND_ELT1(sharedMemory,n, 1, 0, 7, 6, 5, 4, 3, 2, tmp[1]);
-			tmp[ 2] = d_ROUND_ELT1_LDG(sharedMemory,n, 2, 1, 0, 7, 6, 5, 4, 3, tmp[2]);
-			tmp[ 3] = d_ROUND_ELT1(sharedMemory,n, 3, 2, 1, 0, 7, 6, 5, 4, tmp[3]);
-			tmp[ 4] = d_ROUND_ELT1(sharedMemory,n, 4, 3, 2, 1, 0, 7, 6, 5, tmp[4]);
-			tmp[ 5] = d_ROUND_ELT1(sharedMemory,n, 5, 4, 3, 2, 1, 0, 7, 6, tmp[5]);
-			tmp[ 6] = d_ROUND_ELT1(sharedMemory,n, 6, 5, 4, 3, 2, 1, 0, 7, tmp[6]);
-			tmp[ 7] = d_ROUND_ELT1_LDG(sharedMemory,n, 7, 6, 5, 4, 3, 2, 1, 0, tmp[7]);
-			TRANSFER(n, tmp);
-		}
-		tmp[ 0] = d_ROUND_ELT1(sharedMemory, h, 0, 7, 6, 5, 4, 3, 2, 1, whirl_InitVector_RC[8]);
-		tmp[ 1] = d_ROUND_ELT(sharedMemory, h, 1, 0, 7, 6, 5, 4, 3, 2);
-		tmp[ 2] = d_ROUND_ELT_LDG(sharedMemory, h, 2, 1, 0, 7, 6, 5, 4, 3);
-		tmp[ 3] = d_ROUND_ELT(sharedMemory, h, 3, 2, 1, 0, 7, 6, 5, 4);
-		tmp[ 4] = d_ROUND_ELT_LDG(sharedMemory, h, 4, 3, 2, 1, 0, 7, 6, 5);
-		tmp[ 5] = d_ROUND_ELT(sharedMemory, h, 5, 4, 3, 2, 1, 0, 7, 6);
-		tmp[ 6] = d_ROUND_ELT(sharedMemory, h, 6, 5, 4, 3, 2, 1, 0, 7);
-		tmp[ 7] = d_ROUND_ELT(sharedMemory, h, 7, 6, 5, 4, 3, 2, 1, 0);
-		TRANSFER(h, tmp);
-		tmp[ 0] = d_ROUND_ELT1(sharedMemory,n, 0, 7, 6, 5, 4, 3, 2, 1, tmp[0]);
-		tmp[ 1] = d_ROUND_ELT1(sharedMemory,n, 1, 0, 7, 6, 5, 4, 3, 2, tmp[1]);
-		tmp[ 2] = d_ROUND_ELT1(sharedMemory,n, 2, 1, 0, 7, 6, 5, 4, 3, tmp[2]);
-		tmp[ 3] = d_ROUND_ELT1(sharedMemory,n, 3, 2, 1, 0, 7, 6, 5, 4, tmp[3]);
-		tmp[ 4] = d_ROUND_ELT1(sharedMemory,n, 4, 3, 2, 1, 0, 7, 6, 5, tmp[4]);
-		tmp[ 5] = d_ROUND_ELT1(sharedMemory,n, 5, 4, 3, 2, 1, 0, 7, 6, tmp[5]);
-		tmp[ 6] = d_ROUND_ELT1_LDG(sharedMemory,n, 6, 5, 4, 3, 2, 1, 0, 7, tmp[6]);
-		tmp[ 7] = d_ROUND_ELT1(sharedMemory,n, 7, 6, 5, 4, 3, 2, 1, 0, tmp[7]);
-
-		n[ 3] = backup ^ d_ROUND_ELT(sharedMemory,  h, 3, 2, 1, 0, 7, 6, 5, 4)
-			^ d_ROUND_ELT(sharedMemory,tmp, 3, 2, 1, 0, 7, 6, 5, 4);
-
-		if(devectorize(n[3]) <= target) {
-			report_candidate_2(resNonce, thread);
-		}
-
-	} // thread < threads
 }
 
-/* only for whirlpool algo, no data out!! */
 __host__
 void whirlpool512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *h_resNonces, const uint64_t target)
 {
-	dim3 grid((threads + TPB80-1) / TPB80);
+	const uint32_t nthr = (threads + 3) / 4;   /* four hashes per thread */
+	dim3 grid((nthr + TPB80 - 1) / TPB80);
 	dim3 block(TPB80);
 
 	cudaMemset(d_resNonce[thr_id], 0xff, 2*sizeof(uint32_t));
 
-	oldwhirlpool_gpu_hash_80<<<grid, block>>>(threads, startNounce, d_resNonce[thr_id], target);
+	whirlcoin_gpu_hash_80_x4<<<grid, block, 64 * TPB80 * sizeof(uint32_t)>>>(threads, startNounce, d_resNonce[thr_id], target);
 
 	cudaMemcpy(h_resNonces, d_resNonce[thr_id], 2*sizeof(uint32_t), cudaMemcpyDeviceToHost);
 	if (h_resNonces[0] != UINT32_MAX) h_resNonces[0] += startNounce;
 	if (h_resNonces[1] != UINT32_MAX) h_resNonces[1] += startNounce;
 }
 
-__global__
-__launch_bounds__(TPB64,2)
-void whirlpool512_gpu_hash_64(uint32_t threads, uint64_t *g_hash)
+/* Init self-test of the -a whirlpool chain vs 4 x sph_whirlpool1, at each hash's value and value - 1
+ * (the range avoids nonce 0xffffffff, the report's "none"). Clobbers the job constants. Fail-closed. */
+static bool whirlcoin_selftest(int thr_id)
 {
-	__shared__ uint2 sharedMemory[7][256];
+	static bool tested = false, passed = false;
+	if (tested) return passed;
+	tested = true;
 
-	whirlpool512_load_shared(sharedMemory);
-
-	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
-	if (thread < threads){
-
-		uint2 hash[8];
-
-		*(uint2x4*)&hash[ 0] = __ldg4((uint2x4*)&g_hash[(thread<<3) + 0]);
-		*(uint2x4*)&hash[ 4] = __ldg4((uint2x4*)&g_hash[(thread<<3) + 4]);
-
-		__syncthreads();
-
-		whirlpool512_hash_64(sharedMemory, hash);
-
-		*(uint2x4*)&g_hash[(thread<<3)+ 0] = *(uint2x4*)&hash[ 0];
-		*(uint2x4*)&g_hash[(thread<<3)+ 4] = *(uint2x4*)&hash[ 4];
+	uint8_t hdr[80];
+	for (int i = 0; i < 80; i++) hdr[i] = (uint8_t)(i * 29 + 3);
+	const uint32_t start = 0x7ffffffeu;
+	uint64_t v[3];
+	for (int j = 0; j < 3; j++) {
+		uint8_t m[80], h[64];
+		memcpy(m, hdr, 80);
+		const uint32_t n = start + (uint32_t) j;
+		m[76] = n >> 24; m[77] = n >> 16; m[78] = n >> 8; m[79] = n;
+		sph_whirlpool_context c;
+		sph_whirlpool1_init(&c); sph_whirlpool1(&c, m, 80); sph_whirlpool1_close(&c, h);
+		for (int k = 0; k < 3; k++) {
+			sph_whirlpool1_init(&c); sph_whirlpool1(&c, h, 64); sph_whirlpool1_close(&c, h);
+		}
+		memcpy(&v[j], h + 24, 8);
 	}
+	whirlpool512_setBlock_80(hdr, NULL);
+	int bad = 0;
+	for (int t = 0; t < 6; t++) {
+		const uint64_t tg = (t & 1) ? v[t >> 1] - 1 : v[t >> 1];
+		uint32_t e[2] = { UINT32_MAX, UINT32_MAX }, res[2];
+		for (int j = 0; j < 3; j++)
+			if (v[j] <= tg) { if (e[0] == UINT32_MAX) e[0] = start + j; else if (e[1] == UINT32_MAX) e[1] = start + j; }
+		whirlpool512_cpu_hash_80(thr_id, 3, start, res, tg);
+		if (cudaGetLastError() != cudaSuccess)
+			return selftest_gate(thr_id, "whirlpool", selftest_cuda_fault());
+		bad += res[0] != e[0] || res[1] != e[1];
+	}
+	passed = bad == 0;
+	if (!passed)
+		gpulog(LOG_ERR, thr_id, "whirlpool self-test FAILED (%d of 6 targets wrong)", bad);
+	else
+		gpulog(LOG_DEBUG, thr_id, "whirlpool self-test passed");
+	return selftest_gate(thr_id, "whirlpool", passed);
+}
+
+/* 64-byte stage: four hashes per thread (cuda/whirlpool512_x4_device.cuh), plain Whirlpool */
+__global__
+__launch_bounds__(TPB64_X4, 2)
+void whirlpool512_gpu_hash_64_x4(uint32_t threads, uint32_t *g_hash)
+{
+	extern __shared__ uint32_t stash[];                     /* [64][TPB64_X4] */
+	const uint32_t i0 = (blockDim.x * blockIdx.x + threadIdx.x) * 4;
+	if (i0 >= threads) return;
+
+	/* slots past the batch reload the first hash and are not written */
+	uint32_t in[4][16];
+	#pragma unroll
+	for (int h = 0; h < 4; h++) {
+		const uint32_t i = (i0 + h < threads) ? i0 + h : i0;
+		const uint4 *p = (const uint4*) &g_hash[(size_t)i << 4];
+		#pragma unroll
+		for (int k = 0; k < 4; k++) {
+			const uint4 v = p[k];
+			in[h][4*k] = v.x; in[h][4*k+1] = v.y; in[h][4*k+2] = v.z; in[h][4*k+3] = v.w;
+		}
+	}
+
+	whirlpool512_x4_hash_64(in, &stash[threadIdx.x], blockDim.x, g_hash, i0, (int) min(4u, threads - i0));
 }
 
 __host__
 static void whirlpool512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash)
 {
-	dim3 grid((threads + TPB64-1) / TPB64);
-	dim3 block(TPB64);
+	const uint32_t nthr = (threads + 3) / 4;   /* four hashes per thread */
+	dim3 grid((nthr + TPB64_X4 - 1) / TPB64_X4);
+	dim3 block(TPB64_X4);
 
-	whirlpool512_gpu_hash_64 <<<grid, block>>> (threads, (uint64_t*)d_hash);
+	whirlpool512_gpu_hash_64_x4 <<<grid, block, 64 * TPB64_X4 * sizeof(uint32_t)>>> (threads, d_hash);
 }
 
 __host__

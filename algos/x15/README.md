@@ -40,16 +40,13 @@ still call it:
 - `cuda_x15_whirlpool.cu`: `x15_whirlpool_cpu_*` → **`whirlpool512_cpu_*`**
   (also owns the standalone 80-byte `whirlpool512_setBlock_80` /
   `whirlpool512_cpu_hash_80`). Its T-tables header moved too
-  (`cuda_whirlpool_tables.cuh`; `cuda/whirlpool512_device.cuh` include updated).
-- `cuda_whirlpool512_80.cu` (was `cuda_x15_whirlpool_sm3.cu`): a second,
-  self-contained Whirlpool implementation (own `mixTob*Tox` constant tables)
-  that provides the **80-byte** entry points the x16-family chains consume —
-  `x16_whirlpool512_init` / `x16_whirlpool512_setBlock_80` /
-  `x16_whirlpool512_hash_80` (x16r/rv2/s, x21s, ghostrider). Its
-  `oldwhirlpool_gpu_hash_80` is the `void*`-output overload, distinct from the
-  whirlcoin target-compare kernel in `cuda_whirlpool512.cu`, so both TUs link
-  together. The `x16_whirlpool512_*` names are kept until the x16 family
-  migrates. (Legacy `whirlpool512_*_sm3` helpers in this TU are unreferenced.)
+  (`cuda_whirlpool_tables.cuh`, now host-side only; the device code is
+  `cuda/whirlpool512_x4_device.cuh`).
+- `cuda_whirlpool512_80.cu` (was `cuda_x15_whirlpool_sm3.cu`): the **80-byte**
+  entry points the x16-family chains consume, `x16_whirlpool512_init` /
+  `x16_whirlpool512_setBlock_80` / `x16_whirlpool512_hash_80` (x16r/rv2/s, x21s,
+  ghostrider, flex), on the same bitsliced device code. The `x16_whirlpool512_*`
+  names are kept until the x16 family migrates.
 
 The bare-name bridge `#define`s in `cuda_x_stages.h` were replaced with real
 declarations; the migrated x16 family / polytimos / veltor (which already called

@@ -51,7 +51,7 @@ extern "C" {
 #include "cuda/groestl512_x2_device.cuh"
 #include "cuda/echo512_device.cuh"
 #include "cuda/shavite512_device.cuh"
-#include "cuda/whirlpool512_device.cuh"
+#include "cuda/whirlpool512_x4_device.cuh"
 #include "cuda/tiger192_device.cuh"
 #include "cuda/hamsi512_device.cuh"  /* keep LAST: exports SBOX/ROUND_BIG macros */
 
@@ -1756,44 +1756,33 @@ static const uint8_t kat_whirlpool512_pat64[64] = {
 	0xF3, 0x84, 0x4C, 0xF1, 0xB7, 0x3A, 0x93, 0x55, 0xEE, 0x5D, 0x49, 0x6A, 0x2A, 0x1F, 0xB5, 0xB3
 };
 
-/* One 256-thread block (whirlpool512_load_shared fills the 7 rotated tables
- * with threads < 256); threads 0..count-1 then hash one vector each in
- * place. Tables are UPLOADED per TU: whirlpool512_init_tables(0) below. */
-__global__ __launch_bounds__(256, 1)
+/* four hashes per thread, as whirlpool512_gpu_hash_64_x4; count 1..4 per thread covers the
+ * partial last thread; slots past count are not written */
+__global__ __launch_bounds__(32, 1)
 void whirlpool512_selftest_gpu(uint32_t *io, int count)
 {
-	__shared__ uint2 sharedMemory[7][256];
-
-	whirlpool512_load_shared(sharedMemory);
-	__syncthreads(); // barrier: shared tables filled cooperatively
-
-	if (threadIdx.x < count) {
-		uint32_t *h = &io[threadIdx.x << 4];
-		uint2 hash[8];
-
-		#pragma unroll 8
-		for (int i = 0; i < 8; i++)
-			hash[i] = make_uint2(h[i*2], h[i*2+1]);
-
-		whirlpool512_hash_64(sharedMemory, hash);
-
-		#pragma unroll 8
-		for (int i = 0; i < 8; i++) {
-			h[i*2]     = hash[i].x;
-			h[i*2 + 1] = hash[i].y;
-		}
+	extern __shared__ uint32_t stash[];
+	const int v0 = threadIdx.x * 4;
+	if (v0 >= count) return;
+	uint32_t in[4][16];
+	#pragma unroll
+	for (int h = 0; h < 4; h++) {
+		const int v = v0 + h < count ? v0 + h : v0;
+		#pragma unroll
+		for (int w = 0; w < 16; w++) in[h][w] = io[(v << 4) + w];
 	}
+	whirlpool512_x4_hash_64(in, &stash[threadIdx.x], blockDim.x, io, v0, min(4, count - v0));
 }
 
 static bool whirlpool512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64], int count)
 {
 	uint32_t *d_io = NULL;
-	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
+	if (cudaMalloc(&d_io, (size_t) WHIRLPOOL512_ST_VEC * 64) != cudaSuccess)
 		return selftest_cuda_fault();
 
-	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
-	whirlpool512_selftest_gpu <<<1, 256>>> (d_io, count);
-	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
+	bool ok = (cudaMemcpy(d_io, msg, (size_t) WHIRLPOOL512_ST_VEC * 64, cudaMemcpyHostToDevice) == cudaSuccess);
+	whirlpool512_selftest_gpu <<<1, 32, 32 * 64 * sizeof(uint32_t)>>> (d_io, count);
+	ok = ok && (cudaMemcpy(dig, d_io, (size_t) WHIRLPOOL512_ST_VEC * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
 	cudaFree(d_io);
 	return ok ? true : selftest_cuda_fault();
 }
@@ -1804,9 +1793,6 @@ bool whirlpool512_device_selftest(int thr_id)
 	static bool tested = false, passed = false;
 	if (tested) return passed;
 	tested = true;
-
-	/* this TU's copies of the mode-switched tables (plain Whirlpool) */
-	whirlpool512_init_tables(0);
 
 	sph_whirlpool_context ctx;
 	uint8_t dig[64];
@@ -1840,17 +1826,26 @@ bool whirlpool512_device_selftest(int thr_id)
 	bool gpu_ok = whirlpool512_selftest_run(msg, gpu, WHIRLPOOL512_ST_VEC)
 	           && (memcmp(gpu, ref, sizeof(ref)) == 0);
 
+	// --- a partial thread: 3 and 1 hashes, the slots after them stay untouched ---
+	bool odd_ok = true;
+	for (int n = 3; n >= 1 && odd_ok; n -= 2) {
+		uint8_t odd[WHIRLPOOL512_ST_VEC][64];
+		odd_ok = whirlpool512_selftest_run(msg, odd, n)
+		      && (memcmp(odd, ref, (size_t) n * 64) == 0)
+		      && (memcmp(odd[n], msg[n], (size_t) (WHIRLPOOL512_ST_VEC - n) * 64) == 0);
+	}
+
 	// --- negative test: one flipped input bit must change the digest ---
-	uint8_t negmsg[1][64], negdig[1][64];
-	memcpy(negmsg[0], msg[0], 64);
+	uint8_t negmsg[WHIRLPOOL512_ST_VEC][64], negdig[WHIRLPOOL512_ST_VEC][64];
+	memcpy(negmsg, msg, sizeof(negmsg));
 	negmsg[0][0] ^= 0x01;
 	const bool neg_ok = whirlpool512_selftest_run(negmsg, negdig, 1)
 	                 && (memcmp(negdig[0], ref[0], 64) != 0);
 
-	passed = sph_ok && kat_ok && gpu_ok && neg_ok;
+	passed = sph_ok && kat_ok && gpu_ok && odd_ok && neg_ok;
 	if (!passed)
-		gpulog(LOG_ERR, thr_id, "whirlpool512 device-library self-test FAILED (sph %d kat %d gpu %d neg %d)",
-			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) neg_ok);
+		gpulog(LOG_ERR, thr_id, "whirlpool512 device-library self-test FAILED (sph %d kat %d gpu %d odd %d neg %d)",
+			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) odd_ok, (int) neg_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "whirlpool512 device-library self-test passed");
 	return selftest_gate(thr_id, "whirlpool512", passed);

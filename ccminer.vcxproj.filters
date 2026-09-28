@@ -735,7 +735,7 @@
     <ClInclude Include="cuda\shavite512_device.cuh">
       <Filter>Source Files\CUDA\x11</Filter>
     </ClInclude>
-    <ClInclude Include="cuda\whirlpool512_device.cuh">
+    <ClInclude Include="cuda\whirlpool512_x4_device.cuh">
       <Filter>Source Files\CUDA\x15</Filter>
     </ClInclude>
     <ClInclude Include="cuda\tiger192_device.cuh">

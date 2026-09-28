@@ -556,7 +556,7 @@
     <ClInclude Include="cuda\lyra2_device.cuh" />
     <ClInclude Include="cuda\echo512_device.cuh" />
     <ClInclude Include="cuda\shavite512_device.cuh" />
-    <ClInclude Include="cuda\whirlpool512_device.cuh" />
+    <ClInclude Include="cuda\whirlpool512_x4_device.cuh" />
     <ClInclude Include="cuda\tiger192_device.cuh" />
   </ItemGroup>
   <ItemGroup>

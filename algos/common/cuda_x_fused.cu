@@ -39,8 +39,9 @@
 #define TPB_FUSED 256 /* tiger192_load_shared needs exactly 256 threads */
 
 /* the full 64-byte-stage id sequence of the current hash order (uploaded
- * once per order change); kernels take (start, len) into it */
-__constant__ uint8_t c_fused_order[24];
+ * once per order change); kernels take (start, len) into it. 30 = x16rv2:
+ * 15 stages, each may be preceded by tiger */
+__constant__ uint8_t c_fused_order[30];
 
 __device__ __forceinline__
 void x_fused_stage(const int id, uint64_t *const s, const uint64_t *sharedMem, const uint4 *__restrict__ TB)

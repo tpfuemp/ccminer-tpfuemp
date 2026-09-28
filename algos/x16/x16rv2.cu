@@ -82,8 +82,9 @@ static __thread uint32_t s_ntime = UINT32_MAX;
 static __thread char hashOrder[HASH_FUNC_COUNT + 1] = { 0 };
 
 #define X16RV2_TIGER 16 /* pseudo-stage id (see cuda_x_stages.h / cuda_x_fused.cu) */
-static __thread uint8_t eff_ids[20];          /* 64-byte stage sequence incl. tiger insertions */
-static __thread uint8_t eff_run[20] = { 0 };  /* fused run length starting at eff index, 0 = none */
+#define X16RV2_EFF_MAX 30 /* 15 stages, each may be preceded by tiger */
+static __thread uint8_t eff_ids[X16RV2_EFF_MAX];          /* 64-byte stage sequence incl. tiger insertions */
+static __thread uint8_t eff_run[X16RV2_EFF_MAX] = { 0 };  /* fused run length starting at eff index, 0 = none */
 static __thread int eff_count = 0;
 
 static void getAlgoString(const uint32_t* prevblock, char *output)
