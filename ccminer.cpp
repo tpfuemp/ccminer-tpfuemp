@@ -341,7 +341,8 @@ Options:\n\
 #ifdef WITH_HEAVY_ALGO
 "			mjollnir	Mjollnircoin (Hefty)\n"
 #endif
-"			myr-gr		Myriad-Groestl\n\
+"			minotaurx	MinotaurX (Avian, Pulsar)\n\
+			myr-gr		Myriad-Groestl\n\
 			neoscrypt	FeatherCoin, Phoenix, UFO...\n\
 			xaya/neoscrypt-xaya	XAYA's version...\n\
 			nist5		NIST5 (TalkCoin)\n\
@@ -2846,6 +2847,7 @@ static void *miner_thread(void *userdata)
 				case ALGO_YESPOWERR16:
 				case ALGO_POWER2B:
 				case ALGO_YESPOWEREQPAY:
+				case ALGO_MINOTAURX:
 				minmax = 0x8000;
 				break;
 			case ALGO_CRYPTOLIGHT:
@@ -3206,6 +3208,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_FLEX:
 			rc = scanhash_flex(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_MINOTAURX:
+			rc = scanhash_minotaurx(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_SHA3T:
 			rc = scanhash_sha3t(thr_id, &work, max_nonce, &hashes_done);

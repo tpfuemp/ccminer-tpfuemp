@@ -95,6 +95,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `meowpow` | MeowPow (Meowcoin) |
 | `meraki` | Meraki (Telestai) |
 | `mike` | Mike (VKAX, FortuneBlock) |
+| `minotaurx` | MinotaurX (Avian, Pulsar): yespower 1.0 r=8 behind an x16 walk |
 | `mjollnir` | Mjollnir (Hefty hash) |
 | `myr-gr` | Myriad-Groestl |
 | `neoscrypt` | NeoScrypt (FeatherCoin, Phoenix, UFO…) |

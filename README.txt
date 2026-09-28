@@ -83,6 +83,7 @@ its command line interface and options.
                           meowpow             MeowPow (Meowcoin)
                           meraki              Meraki (Telestai)
                           mike                Mike (VKAX, FortuneBlock)
+                          minotaurx           MinotaurX (Avian, Pulsar)
                           mjollnir            Mjollnir (Hefty hash)
                           myr-gr              Myriad-Groestl
                           neoscrypt           NeoScrypt (FeatherCoin, Phoenix, UFO...)

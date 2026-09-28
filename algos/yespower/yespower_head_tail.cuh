@@ -33,10 +33,12 @@
 /* The personalisation string, uploaded once per job.  96 bytes covers every
  * known variant; the longest is EqPay's 88-byte string, ahead of cpupower's 73.
  * The PBKDF2 salt block count is computed from c_yp_perslen rather than fixed,
- * so this bound is the only thing a longer pers needs. */
+ * so this bound is the only thing a longer pers needs.
+ *
+ * `static`: two TUs include this (yespower, minotaurx), and each uploads its own. */
 #define YP_PERS_MAX 96
-__constant__ uint8_t  c_yp_pers[YP_PERS_MAX];
-__constant__ uint32_t c_yp_perslen;
+static __constant__ uint8_t  c_yp_pers[YP_PERS_MAX];
+static __constant__ uint32_t c_yp_perslen;
 
 __device__ __forceinline__ void yp_sha256_init(uint32_t st[8])
 {
@@ -106,6 +108,27 @@ __device__ __forceinline__ void yp_sha256_181(const uint32_t *hdr, uint32_t w19,
 	in[13] = (hdr[45] & 0xff000000u) | 0x00800000u;
 	in[14] = 0;
 	in[15] = 181u * 8u;                       /* 1448 bits */
+	sha256_transform_full(in, out, c_sha256_K);
+}
+
+/* --------------------------------------------------------------------------
+ * Head: SHA-256 of a 64-byte message (minotaurx).  `hdr` is 16 words in
+ * SHA-256 input order, per instance; there is no nonce word.
+ * ------------------------------------------------------------------------ */
+__device__ __forceinline__ void yp_sha256_64(const uint32_t *hdr, uint32_t out[8])
+{
+	uint32_t in[16];
+
+	yp_sha256_init(out);
+
+#pragma unroll
+	for (int i = 0; i < 16; i++) in[i] = hdr[i];
+	sha256_transform_full(in, out, c_sha256_K);
+
+	in[0] = 0x80000000u;
+#pragma unroll
+	for (int i = 1; i < 15; i++) in[i] = 0;
+	in[15] = 64u * 8u;                        /* 512 bits */
 	sha256_transform_full(in, out, c_sha256_K);
 }
 

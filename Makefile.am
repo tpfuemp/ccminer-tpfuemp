@@ -52,6 +52,8 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/mike/mike.cu algos/mike/mike_hash.cpp \
 			  algos/flex/flex.cu algos/flex/flex_hash.cpp \
 			  algos/flex/flex.h algos/flex/flex_kat.h algos/flex/flex_schedule.h \
+			  algos/minotaurx/minotaurx.cu algos/minotaurx/minotaurx_hash.cpp \
+			  algos/minotaurx/minotaurx.h algos/minotaurx/minotaurx_kat.h \
 			  algos/mike/mike.h algos/mike/mike_kat.h \
 			  algos/argon2d/argon2d.cu algos/argon2d/argon2d_fill.cu \
 			  algos/argon2d/blake2b_kernels.cu \

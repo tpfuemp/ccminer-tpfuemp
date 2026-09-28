@@ -379,6 +379,7 @@ extern int scanhash_hoohash(int thr_id, struct work* work, uint32_t max_nonce, u
 extern int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_mike(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_minotaurx(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_sha3t(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_soterg(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_x25x(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
@@ -488,6 +489,7 @@ extern void free_hoohash(int thr_id);
 extern void free_ghostrider(int thr_id);
 extern void free_mike(int thr_id);
 extern void free_flex(int thr_id);
+extern void free_minotaurx(int thr_id);
 extern void free_sha3t(int thr_id);
 extern void free_soterg(int thr_id);
 extern void free_x25x(int thr_id);
