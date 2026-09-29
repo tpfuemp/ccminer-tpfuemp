@@ -10,7 +10,8 @@
 
 #include <cuda_helper.h>
 
-#define TPB 256
+/* 384 x 2 blocks at 80 registers */
+#define TPB 384
 
 #include "cuda/fugue512_device.cuh"
 #include "cuda/candidate_report.cuh"
@@ -18,13 +19,12 @@
 /***************************************************/
 // GPU Hash Function
 __global__
-__launch_bounds__(TPB)
+__launch_bounds__(TPB, 2)
 void fugue512_gpu_hash_64(uint32_t threads, uint64_t *g_hash)
 {
-	__shared__ uint32_t mixtabs[1024];
+	__shared__ uint32_t mixtabs[256 * FUGUE512_R];
 
-	// load shared mem (with 256 threads)
-	fugue512_load_shared(mixtabs);
+	fugue512_load_shared_r(mixtabs);
 
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 
@@ -38,7 +38,7 @@ void fugue512_gpu_hash_64(uint32_t threads, uint64_t *g_hash)
 		for(int i = 0; i < 4; i++)
 			AS_UINT4(&Hash[i*4]) = AS_UINT4(&pHash[i*2]);
 
-		fugue512_hash_64(mixtabs, Hash);
+		fugue512_hash_64_r(mixtabs, Hash);
 
 		#pragma unroll 4
 		for(int i = 0; i < 4; i++)
@@ -51,12 +51,12 @@ void fugue512_gpu_hash_64(uint32_t threads, uint64_t *g_hash)
 // bits compared against the target on-device, and the two lowest candidates
 // reported (cuda/candidate_report.cuh) instead of storing d_hash.
 __global__
-__launch_bounds__(TPB)
+__launch_bounds__(TPB, 2)
 void fugue512_gpu_hash_64_final(uint32_t threads, uint64_t *g_hash, uint32_t *resNonce, const uint64_t target)
 {
-	__shared__ uint32_t mixtabs[1024];
+	__shared__ uint32_t mixtabs[256 * FUGUE512_R];
 
-	fugue512_load_shared(mixtabs);
+	fugue512_load_shared_r(mixtabs);
 
 	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 
@@ -69,7 +69,7 @@ void fugue512_gpu_hash_64_final(uint32_t threads, uint64_t *g_hash, uint32_t *re
 		for(int i = 0; i < 4; i++)
 			AS_UINT4(&Hash[i*4]) = AS_UINT4(&pHash[i*2]);
 
-		fugue512_hash_64(mixtabs, Hash);
+		fugue512_hash_64_r(mixtabs, Hash);
 
 		if (*(uint64_t*)&Hash[6] <= target) {
 			report_candidate_2(resNonce, thread);

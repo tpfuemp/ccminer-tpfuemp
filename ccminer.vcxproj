@@ -374,6 +374,7 @@
     <ClInclude Include="sph\yescrypt-platform.h" />
     <ClInclude Include="sph\yescrypt.h" />
     <ClInclude Include="sph\yespower.h" />
+    <ClInclude Include="algos\common\cuda_x_fused.h" />
     <ClInclude Include="algos\common\cuda_x_stages.h" />
     <CudaCompile Include="algos\bmw\bmw.cu" />
     <CudaCompile Include="algos\bmw\bmw512.cu" />
@@ -549,6 +550,7 @@
     <ClInclude Include="cuda\lyra2_device.cuh" />
     <ClInclude Include="cuda\echo512_device.cuh" />
     <ClInclude Include="cuda\shavite512_device.cuh" />
+    <ClInclude Include="cuda\shavite512_sp_device.cuh" />
     <ClInclude Include="cuda\whirlpool512_x4_device.cuh" />
     <ClInclude Include="cuda\tiger192_device.cuh" />
   </ItemGroup>

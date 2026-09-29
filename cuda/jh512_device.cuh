@@ -87,41 +87,22 @@ __constant__ static __align__(16) uint32_t c_E8_bslice32[42][8] = {
 /*swapping bits 16i||16i+1||......||16i+7  with bits 16i+8||16i+9||......||16i+15 of 32-bit x*/
 #define JH512_SWAP8(x) (x) = __byte_perm(x, 0, 0x2301);
 
-__device__ __forceinline__
-static void jh512_SWAP4x4(uint32_t *x) {
-	#pragma nounroll
-	// y is used as tmp register too
-	for (uint32_t y=0; y<4; y++, ++x) {
-		asm("and.b32 %1, %0, 0xF0F0F0F0;\n\t"
-		"xor.b32 %0, %0, %1; shr.b32 %1, %1, 4;\n\t"
-		"vshl.u32.u32.u32.clamp.add %0, %0, 4, %1;"
-		: "+r"(*x) : "r"(y));
-	}
-}
+/* one lop3 per statement, LUT over (a, b, c) = (0xF0, 0xCC, 0xAA); asm keeps the circuit as written */
+#define JH512_LOP3(d, a, b, c, lut) asm("lop3.b32 %0, %1, %2, %3, " #lut ";" : "=r"(d) : "r"(a), "r"(b), "r"(c))
 
-__device__ __forceinline__
-static void jh512_SWAP2x4(uint32_t *x) {
-	#pragma nounroll
-	// y is used as tmp register too
-	for (uint32_t y=0; y<4; y++, ++x) {
-		asm("and.b32 %1, %0, 0xCCCCCCCC;\n\t"
-		"xor.b32 %0, %0, %1; shr.b32 %1, %1, 2; \n\t"
-		"vshl.u32.u32.u32.clamp.add %0, %0, 2, %1;"
-		: "+r"(*x) : "r"(y));
+/* swap the N-bit groups selected by ~LO and LO: shr, shl and one select (a & c) | (b & ~c) */
+template <int N, uint32_t LO>
+__device__ __forceinline__ static void jh512_SWAPx4(uint32_t *x) {
+	#pragma unroll
+	for (int i = 0; i < 4; i++) {
+		uint32_t r;
+		asm("lop3.b32 %0, %1, %2, %3, 0xE4;" : "=r"(r) : "r"(x[i] >> N), "r"(x[i] << N), "n"(LO));
+		x[i] = r;
 	}
 }
-
-__device__ __forceinline__
-static void jh512_SWAP1x4(uint32_t *x) {
-	#pragma nounroll
-	// y is used as tmp register too
-	for (uint32_t y=0; y<4; y++, ++x) {
-		asm("and.b32 %1, %0, 0xAAAAAAAA;\n\t"
-		"xor.b32 %0, %0, %1; shr.b32 %1, %1, 1; \n\t"
-		"vshl.u32.u32.u32.clamp.add %0, %0, 1, %1;"
-		: "+r"(*x) : "r"(y));
-	}
-}
+#define jh512_SWAP4x4(x) jh512_SWAPx4<4, 0x0F0F0F0Fu>(x)
+#define jh512_SWAP2x4(x) jh512_SWAPx4<2, 0x33333333u>(x)
+#define jh512_SWAP1x4(x) jh512_SWAPx4<1, 0x55555555u>(x)
 
 /* The MDS transform */
 #define JH512_L(m0,m1,m2,m3,m4,m5,m6,m7) \
@@ -134,19 +115,19 @@ static void jh512_SWAP1x4(uint32_t *x) {
       m2 ^= m4 ^ m7;               \
       m3 ^= m4;
 
-/* The Sbox */
-#define JH512_Sbox(m0, m1, m2, m3, cc)   \
-      m3  = ~(m3);                 \
-      m0 ^= (~(m2)) & cc;          \
-      temp0 = cc ^ (m0 & m1);      \
-      m0 ^= m2 & m3;               \
-      m3 ^= (~(m1)) & m2;          \
-      m1 ^= m0 & m2;               \
-      m2 ^= m0 & (~(m3));          \
-      m0 ^= m1 | m3;               \
-      m3 ^= m1 & m2;               \
-      m1 ^= temp0 & m0;            \
-      m2 ^= temp0;
+/* The Sbox (m3 is inverted on entry, folded into the LUTs) */
+#define JH512_Sbox(m0, m1, m2, m3, cc) { \
+      uint32_t n_; \
+      JH512_LOP3(n_, m0, m2, cc, 0xD2);    m0 = n_; /* m0 ^= ~m2 & cc       */ \
+      JH512_LOP3(temp0, cc, m0, m1, 0x78);          /* t0 = cc ^ (m0 & m1)   */ \
+      JH512_LOP3(n_, m0, m2, m3, 0xB4);    m0 = n_; /* m0 ^= m2 & ~m3        */ \
+      JH512_LOP3(n_, m3, m1, m2, 0x2D);    m3 = n_; /* m3 = ~m3 ^ (~m1 & m2) */ \
+      JH512_LOP3(n_, m1, m0, m2, 0x78);    m1 = n_; /* m1 ^= m0 & m2         */ \
+      JH512_LOP3(n_, m2, m0, m3, 0xB4);    m2 = n_; /* m2 ^= m0 & ~m3        */ \
+      JH512_LOP3(n_, m0, m1, m3, 0x1E);    m0 = n_; /* m0 ^= m1 | m3         */ \
+      JH512_LOP3(n_, m3, m1, m2, 0x78);    m3 = n_; /* m3 ^= m1 & m2         */ \
+      JH512_LOP3(n_, m1, temp0, m0, 0x78); m1 = n_; /* m1 ^= t0 & m0         */ \
+      m2 ^= temp0; }
 
 __device__ __forceinline__
 static void jh512_Sbox_and_MDS_layer(uint32_t x[8][4], const int rnd)
@@ -165,6 +146,7 @@ static void jh512_Sbox_and_MDS_layer(uint32_t x[8][4], const int rnd)
 
 #undef JH512_Sbox
 #undef JH512_L
+#undef JH512_LOP3
 
 __device__ __forceinline__
 static void jh512_RoundFunction0(uint32_t x[8][4], const int rnd)
@@ -254,6 +236,9 @@ static void jh512_RoundFunction6(uint32_t x[8][4], const int rnd)
 
 #undef JH512_SWAP16
 #undef JH512_SWAP8
+#undef jh512_SWAP4x4
+#undef jh512_SWAP2x4
+#undef jh512_SWAP1x4
 
 /* The bijective function E8, in bitslice form */
 __device__

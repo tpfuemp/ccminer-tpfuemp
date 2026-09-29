@@ -10,7 +10,9 @@
 
 #include "cuda/echo512_device.cuh"
 
-__global__ __launch_bounds__(128, 5)
+/* 256x3 on Pascal (32 table copies), 128x5 above */
+template <int TPB, int MINB>
+__global__ __launch_bounds__(TPB, MINB)
 static void x16_echo512_gpu_hash_64(uint32_t threads, uint32_t* g_hash)
 {
 	__shared__ uint32_t sharedMemory[1][ECHO_TAB];
@@ -44,12 +46,10 @@ void echo512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash)
 {
 	echo512_alexis_device_selftest(thr_id);
 
-	const uint32_t threadsperblock = 128;
-
-	dim3 grid((threads + threadsperblock-1)/threadsperblock);
-	dim3 block(threadsperblock);
-
-	x16_echo512_gpu_hash_64 <<<grid, block>>> (threads, d_hash);
+	if (device_sm[device_map[thr_id]] < 700)
+		x16_echo512_gpu_hash_64<256, 3> <<<(threads + 255) / 256, 256>>> (threads, d_hash);
+	else
+		x16_echo512_gpu_hash_64<128, 5> <<<(threads + 127) / 128, 128>>> (threads, d_hash);
 }
 
 /* Legacy forwarder — consumers not yet migrated (x17, skydoge, x21s,

@@ -1148,31 +1148,45 @@ static const uint8_t kat_fugue512_pat64[64] = {
 	0x0E, 0xC6, 0x1C, 0xEE, 0x1E, 0x32, 0x02, 0xA0, 0x04, 0xE5, 0xED, 0x28, 0xAE, 0x90, 0xC9, 0x8B
 };
 
-/* One 256-thread block (for the cooperative shared fill); thread 0 hashes
- * `count` 64-byte vectors in place (d_hash word order). */
-__global__ __launch_bounds__(256, 1)
-void fugue512_selftest_gpu(uint32_t *io, int count)
+/* One 256-thread block (for the cooperative shared fill). Every thread t hashes vector
+ * t % count into out[t], so every copy of the replicated table is read (d_hash word order). */
+#define FUGUE512_ST_THREADS 256
+__global__ __launch_bounds__(FUGUE512_ST_THREADS, 1)
+void fugue512_selftest_gpu(const uint32_t *in, uint32_t *out, int count)
 {
-	__shared__ uint32_t mixtabs[1024];
-	fugue512_load_shared(mixtabs);
+	__shared__ uint32_t mixtabs[256 * FUGUE512_R];
+	fugue512_load_shared_r(mixtabs);
 
-	if (threadIdx.x == 0) {
-		for (int v = 0; v < count; v++)
-			fugue512_hash_64(mixtabs, &io[v << 4]);
-	}
+	uint32_t h[16];
+	for (int k = 0; k < 16; k++) h[k] = in[((threadIdx.x % count) << 4) + k];
+	fugue512_hash_64_r(mixtabs, h);
+	for (int k = 0; k < 16; k++) out[(threadIdx.x << 4) + k] = h[k];
 }
 
+/* dig[v] = the digest of thread v; false if any other thread computing vector v disagrees */
 static bool fugue512_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64], int count)
 {
-	uint32_t *d_io = NULL;
-	if (cudaMalloc(&d_io, (size_t) count * 64) != cudaSuccess)
+	uint32_t *d_in = NULL, *d_out = NULL;
+	if (cudaMalloc(&d_in, (size_t) count * 64) != cudaSuccess)
 		return selftest_cuda_fault();
+	if (cudaMalloc(&d_out, (size_t) FUGUE512_ST_THREADS * 64) != cudaSuccess) {
+		cudaFree(d_in);
+		return selftest_cuda_fault();
+	}
 
-	bool ok = (cudaMemcpy(d_io, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
-	fugue512_selftest_gpu <<<1, 256>>> (d_io, count);
-	ok = ok && (cudaMemcpy(dig, d_io, (size_t) count * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
-	cudaFree(d_io);
-	return ok ? true : selftest_cuda_fault();
+	static uint8_t all[FUGUE512_ST_THREADS][64];
+	bool ok = (cudaMemcpy(d_in, msg, (size_t) count * 64, cudaMemcpyHostToDevice) == cudaSuccess);
+	fugue512_selftest_gpu <<<1, FUGUE512_ST_THREADS>>> (d_in, d_out, count);
+	ok = ok && (cudaMemcpy(all, d_out, sizeof(all), cudaMemcpyDeviceToHost) == cudaSuccess);
+	cudaFree(d_in);
+	cudaFree(d_out);
+	if (!ok)
+		return selftest_cuda_fault();
+	memcpy(dig, all, (size_t) count * 64);
+	for (int t = count; t < FUGUE512_ST_THREADS; t++)
+		if (memcmp(all[t], all[t % count], 64) != 0)
+			return false;
+	return true;
 }
 
 __host__
@@ -1286,6 +1300,44 @@ static bool groestl512_x2_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[
 	return ok ? true : selftest_cuda_fault();
 }
 
+/* two hashes per lane PAIR, as groestl512_gpu_hash_64_pair (the Pascal stage); lanes past the end compute
+ * on vector 0 and skip the store */
+__global__ __launch_bounds__(32, 1)
+void groestl512_pair_selftest_gpu(uint32_t *io, int count)
+{
+	extern __shared__ uint32_t stash[];
+	const uint32_t lane = threadIdx.x & 1;
+	const int v0 = (threadIdx.x >> 1) * 2;
+	const bool active = v0 < count, two = v0 + 1 < count;
+	uint32_t inq[2][8];
+	#pragma unroll
+	for (int h = 0; h < 2; h++) {
+		const int v = !active ? 0 : (two ? v0 + h : v0);
+		#pragma unroll
+		for (int n = 0; n < 8; n++) inq[h][n] = io[(v << 4) + 2 * n + lane];
+	}
+	groestl512_pair_hash_64(inq, &stash[threadIdx.x], blockDim.x);
+	if (!active) return;
+	#pragma unroll
+	for (int h = 0; h < 2; h++)
+		if (h == 0 || two)
+			#pragma unroll
+			for (int n = 0; n < 8; n++) io[((v0 + h) << 4) + 2 * n + lane] = inq[h][n];
+}
+
+static bool groestl512_pair_selftest_run(const uint8_t (*msg)[64], uint8_t (*dig)[64], int count)
+{
+	uint32_t *d_io = NULL;
+	if (cudaMalloc(&d_io, (size_t) GROESTL512_ST_VEC * 64) != cudaSuccess)
+		return selftest_cuda_fault();
+
+	bool ok = (cudaMemcpy(d_io, msg, (size_t) GROESTL512_ST_VEC * 64, cudaMemcpyHostToDevice) == cudaSuccess);
+	groestl512_pair_selftest_gpu <<<1, 32, 32 * 32 * sizeof(uint32_t)>>> (d_io, count);
+	ok = ok && (cudaMemcpy(dig, d_io, (size_t) GROESTL512_ST_VEC * 64, cudaMemcpyDeviceToHost) == cudaSuccess);
+	cudaFree(d_io);
+	return ok ? true : selftest_cuda_fault();
+}
+
 /* 80-byte headers as groestl512_gpu_hash_80_x2 builds them: word 19 = nonce[2t], nonce[2t+1] */
 __global__ __launch_bounds__(32, 1)
 void groestl512_x2_80_selftest_gpu(const uint32_t *hdr, const uint32_t *nonce, uint32_t *out, int count)
@@ -1392,10 +1444,16 @@ bool groestl512_device_selftest(int thr_id)
 		h80_ok = memcmp(d80[v], r80, 64) == 0;
 	}
 
-	passed = sph_ok && kat_ok && gpu_ok && odd_ok && neg_ok && h80_ok;
+	// --- the lane-pair path (Pascal stage), odd count: lone last hash, the slot after it untouched ---
+	uint8_t pr[GROESTL512_ST_VEC][64];
+	const bool pair_ok = groestl512_pair_selftest_run(msg, pr, GROESTL512_ST_VEC - 1)
+	      && (memcmp(pr, ref, (GROESTL512_ST_VEC - 1) * 64) == 0)
+	      && (memcmp(pr[GROESTL512_ST_VEC - 1], msg[GROESTL512_ST_VEC - 1], 64) == 0);
+
+	passed = sph_ok && kat_ok && gpu_ok && odd_ok && neg_ok && h80_ok && pair_ok;
 	if (!passed)
-		gpulog(LOG_ERR, thr_id, "groestl512 device-library self-test FAILED (sph %d kat %d gpu %d odd %d neg %d 80 %d)",
-			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) odd_ok, (int) neg_ok, (int) h80_ok);
+		gpulog(LOG_ERR, thr_id, "groestl512 device-library self-test FAILED (sph %d kat %d gpu %d odd %d neg %d 80 %d pair %d)",
+			(int) sph_ok, (int) kat_ok, (int) gpu_ok, (int) odd_ok, (int) neg_ok, (int) h80_ok, (int) pair_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "groestl512 device-library self-test passed");
 	return selftest_gate(thr_id, "groestl512", passed);
@@ -1860,6 +1918,7 @@ bool whirlpool512_device_selftest(int thr_id)
  * clobbered — callers must re-upload their order afterwards. */
 extern void x_fused_setOrder(const uint8_t *ids, int count);
 extern void x_fused_cpu_hash_64(int thr_id, uint32_t threads, int start, int len, int has_tiger, uint32_t *d_hash);
+#include "algos/common/cuda_x_fused.h"
 
 static void x_fused_sph_stage(int id, uint8_t *h /* 64 bytes in/out */)
 {
@@ -1874,6 +1933,7 @@ static void x_fused_sph_stage(int id, uint8_t *h /* 64 bytes in/out */)
 	case 11: { sph_hamsi512_context c;   sph_hamsi512_init(&c);   sph_hamsi512(&c, h, 64);   sph_hamsi512_close(&c, h);   break; }
 	case 13: { sph_shabal512_context c;  sph_shabal512_init(&c);  sph_shabal512(&c, h, 64);  sph_shabal512_close(&c, h);  break; }
 	case 15: { sph_sha512_context c;     sph_sha512_init(&c);     sph_sha512(&c, h, 64);     sph_sha512_close(&c, h);     break; }
+	case X_FUSED_SHAVITE: { sph_shavite512_context c; sph_shavite512_init(&c); sph_shavite512(&c, h, 64); sph_shavite512_close(&c, h); break; }
 	case 16: { /* tiger192, zero-padded */
 		sph_tiger_context c; uint8_t d[24];
 		sph_tiger_init(&c); sph_tiger(&c, h, 64); sph_tiger_close(&c, d);
@@ -1962,10 +2022,34 @@ bool x_fused_device_selftest(int thr_id)
 		}
 	}
 
-	passed = single_ok && chain_ok && adj_ok;
+	// --- the compile-time-specialised kernels of the fixed-order chains ---
+	bool fixed_ok = true;
+	for (int seq = 0; seq < XF_FIXED_COUNT; seq++) {
+		uint8_t ids[8], rref[64], rgpu[64];
+		const int n = x_fused_fixed_ids(seq, ids);
+		memcpy(rref, msg, 64);
+		for (int k = 0; k < n; k++)
+			x_fused_sph_stage(ids[k], rref);
+		uint32_t *d_io = NULL;
+		bool ok = n > 0 && cudaMalloc(&d_io, 64) == cudaSuccess
+		       && cudaMemcpy(d_io, msg, 64, cudaMemcpyHostToDevice) == cudaSuccess;
+		if (ok) {
+			x_fused_fixed_cpu_hash_64(1, seq, d_io);
+			ok = cudaDeviceSynchronize() == cudaSuccess
+			  && cudaMemcpy(rgpu, d_io, 64, cudaMemcpyDeviceToHost) == cudaSuccess;
+		}
+		if (d_io) cudaFree(d_io);
+		if (!ok) return selftest_cuda_fault();
+		if (memcmp(rgpu, rref, 64) != 0) {
+			gpulog(LOG_WARNING, thr_id, "x-fused fixed sequence %d FAILED", seq);
+			fixed_ok = false;
+		}
+	}
+
+	passed = single_ok && chain_ok && adj_ok && fixed_ok;
 	if (!passed)
-		gpulog(LOG_ERR, thr_id, "x-fused device self-test FAILED (single %d chain %d)",
-			(int) single_ok, (int) chain_ok);
+		gpulog(LOG_ERR, thr_id, "x-fused device self-test FAILED (single %d chain %d adj %d fixed %d)",
+			(int) single_ok, (int) chain_ok, (int) adj_ok, (int) fixed_ok);
 	else
 		gpulog(LOG_DEBUG, thr_id, "x-fused device self-test passed");
 	return selftest_gate(thr_id, "x-fused", passed);

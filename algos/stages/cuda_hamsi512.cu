@@ -49,9 +49,42 @@ const uint4 *hamsi512_table(void)
 	return d_hamsi_TB[dev];
 }
 
-__global__ __launch_bounds__(128, 5)
-void hamsi512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t *g_hash, uint32_t *g_nonceVector, const uint4 *__restrict__ TB)
+/* nibble table for hamsi512_hash_64_nt, [8][256] uint2, per device; copied to shared per block */
+static uint2 *d_hamsi_NT[MAX_GPUS];
+
+__global__ void hamsi512_fill_nt(uint2 *nt)
 {
+	const int i = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i >= 8 * 256) return;
+	const int k = i >> 8, e = i & 255, p = e >> 4, v = e & 15;
+	uint32_t x = 0, y = 0;
+	for (int b = 0; b < 4; b++) if (v & (1 << b)) { x ^= d_T512[4 * p + b][2 * k]; y ^= d_T512[4 * p + b][2 * k + 1]; }
+	nt[i] = make_uint2(x, y);
+}
+
+static const uint2 *hamsi512_ntable(void)
+{
+	int dev = 0;
+	cudaGetDevice(&dev);
+	pthread_mutex_lock(&hamsi_tb_lock);
+	if (!d_hamsi_NT[dev]) {
+		CUDA_SAFE_CALL(cudaMalloc(&d_hamsi_NT[dev], 8 * 256 * sizeof(uint2)));
+		hamsi512_fill_nt<<<8, 256>>>(d_hamsi_NT[dev]);
+		CUDA_SAFE_CALL(cudaDeviceSynchronize());
+	}
+	pthread_mutex_unlock(&hamsi_tb_lock);
+	return d_hamsi_NT[dev];
+}
+
+/* 512x2 on Pascal, 256x3 above */
+template <int TPB, int MINB>
+__global__ __launch_bounds__(TPB, MINB)
+void hamsi512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t *g_hash, uint32_t *g_nonceVector, const uint2 *__restrict__ gnt)
+{
+	__shared__ uint2 nt[8][256];
+	for (int i = threadIdx.x; i < 8 * 256; i += TPB) nt[i >> 8][i & 255] = __ldg(&gnt[i]);
+	__syncthreads();
+
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
 	{
@@ -60,7 +93,7 @@ void hamsi512_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint64_t *g_ha
 		int hashPosition = nounce - startNounce;
 		uint32_t *Hash = (uint32_t*)&g_hash[hashPosition<<3];
 
-		hamsi512_hash_64_tb(Hash, TB);
+		hamsi512_hash_64_nt(Hash, nt);
 	}
 }
 
@@ -74,18 +107,19 @@ void hamsi512_cpu_init(int thr_id, uint32_t threads)
 {
 	hamsi512_device_selftest(thr_id);
 	hamsi512_table();
+	hamsi512_ntable();
 	hamsi512_stage_selftest(thr_id, threads);
 }
 
 __host__
 void hamsi512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
-	const uint32_t threadsperblock = 128;
-
-	dim3 grid((threads + threadsperblock-1)/threadsperblock);
-	dim3 block(threadsperblock);
-
-	hamsi512_gpu_hash_64<<<grid, block>>>(threads, startNounce, (uint64_t*)d_hash, d_nonceVector, hamsi512_table());
+	const uint2 *nt = hamsi512_ntable();
+	if (device_sm[device_map[thr_id]] < 700) {
+		hamsi512_gpu_hash_64<512, 2><<<(threads + 511) / 512, 512>>>(threads, startNounce, (uint64_t*)d_hash, d_nonceVector, nt);
+	} else {
+		hamsi512_gpu_hash_64<256, 3><<<(threads + 255) / 256, 256>>>(threads, startNounce, (uint64_t*)d_hash, d_nonceVector, nt);
+	}
 	//MyStreamSynchronize(NULL, order, thr_id);
 }
 

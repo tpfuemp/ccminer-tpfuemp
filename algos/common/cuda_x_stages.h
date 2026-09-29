@@ -130,6 +130,7 @@ void sha512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint
 void x_fused_setOrder(const uint8_t *ids, int count);
 void x_fused_cpu_hash_64(int thr_id, uint32_t threads, int start, int len, int has_tiger, uint32_t *d_hash);
 bool x_fused_device_selftest(int thr_id);
+#include "cuda_x_fused.h"
 
 /* stages whose device-library primitive runs register-resident (no shared
  * table fill, no quad-lane interface, no multi-kernel pipeline) — the set

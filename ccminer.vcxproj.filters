@@ -735,6 +735,9 @@
     <ClInclude Include="cuda\shavite512_device.cuh">
       <Filter>Source Files\CUDA\x11</Filter>
     </ClInclude>
+    <ClInclude Include="cuda\shavite512_sp_device.cuh">
+      <Filter>Source Files\CUDA\x11</Filter>
+    </ClInclude>
     <ClInclude Include="cuda\whirlpool512_x4_device.cuh">
       <Filter>Source Files\CUDA\x15</Filter>
     </ClInclude>
@@ -815,6 +818,9 @@
     </ClInclude>
     <ClInclude Include="algos/heavyhash/heavyhash-gate.h" />
     <ClInclude Include="algos/heavyhash/keccak_tiny.h" />
+    <ClInclude Include="algos\common\cuda_x_fused.h">
+      <Filter>Header Files\CUDA</Filter>
+    </ClInclude>
     <ClInclude Include="algos\common\cuda_x_stages.h">
       <Filter>Header Files\CUDA</Filter>
     </ClInclude>

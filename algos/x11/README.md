@@ -19,8 +19,8 @@ Guideline: `docs/coding-guideline.md`
 
 x11's order is fixed, so unlike x16r there is no per-hash-order run search: the
 one maximal fusible run — **skein → jh → keccak → luffa → cubehash** (five
-consecutive register-resident stages) — is uploaded once at init
-(`x_fused_setOrder`) and executed by `x_fused_cpu_hash_64` (one launch,
+consecutive register-resident stages) — is executed by
+`x_fused_fixed_cpu_hash_64`, a kernel compiled for this sequence (one launch,
 64-byte state kept in registers instead of bouncing through `d_hash`). This
 replaces the four separate launches of the old path (standalone skein/jh/keccak
 plus the combined `x11_luffaCubehash512` kernel). blake is the 80-byte first

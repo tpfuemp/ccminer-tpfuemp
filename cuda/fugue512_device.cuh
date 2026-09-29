@@ -85,7 +85,7 @@ static __constant__ uint32_t c_fugue_mixtab0[256] = {
 	x20 ^= x06; \
 }
 
-#define SMIX(x0, x1, x2, x3) { \
+#define SMIX_TAB(x0, x1, x2, x3) { \
 	uint32_t tmp; \
 	uint32_t r0 = 0; \
 	uint32_t r1 = 0; \
@@ -143,6 +143,7 @@ static __constant__ uint32_t c_fugue_mixtab0[256] = {
 	x3 = ((c3 ^ (r0 << 24)) & 0xFF000000) | ((c0 ^ (r1 >>  8)) & 0x00FF0000) \
 		| ((c1 ^ (r2 >>  8)) & 0x0000FF00) | ((c2 ^ (r3 >>  8)) & 0x000000FF); \
 }
+#define SMIX SMIX_TAB
 
 #define SUB_ROR3 { \
 	B33 = S33, B34 = S34, B35 = S35; \
@@ -378,6 +379,156 @@ void fugue512_hash_64(const uint32_t *mixtabs, uint32_t *Hash)
 		Hash[14] = cuda_swab32(S29);
 		Hash[15] = cuda_swab32(S30);
 }
+
+/* Replicated-table variant (64-byte stage): one table in FUGUE512_R copies [256][R], lane l reads
+ * copy l & (R-1); the rotated tables are derived after the load. Caller: __shared__ uint32_t
+ * tab[256 * FUGUE512_R], fugue512_load_shared_r(tab) with >= 256 threads, fugue512_hash_64_r. */
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
+#define FUGUE512_R 32
+#else
+#define FUGUE512_R 16
+#endif
+
+__device__ __forceinline__
+void fugue512_load_shared_r(uint32_t *tab)
+{
+	if (threadIdx.x < 256) {
+		const uint32_t tmp = c_fugue_mixtab0[threadIdx.x];
+		/* column order rotated by lane: conflict-free stores */
+		#pragma unroll
+		for (int k = 0; k < FUGUE512_R; k++)
+			tab[threadIdx.x * FUGUE512_R + ((k + threadIdx.x) & (FUGUE512_R - 1))] = tmp;
+	}
+	__syncthreads();
+}
+
+#undef mixtab0
+#undef mixtab1
+#undef mixtab2
+#undef mixtab3
+/* object-like: a function-like macro with a parameter named x would rewrite threadIdx.x */
+#define FUGUE512_LANE (threadIdx.x & (FUGUE512_R - 1))
+#define mixtab0(i) mixtabs[(i) * FUGUE512_R + FUGUE512_LANE]
+#define mixtab1(i) FUGUE_ROR8(mixtabs[(i) * FUGUE512_R + FUGUE512_LANE])
+#define mixtab2(i) FUGUE_ROL16(mixtabs[(i) * FUGUE512_R + FUGUE512_LANE])
+#define mixtab3(i) FUGUE_ROL8(mixtabs[(i) * FUGUE512_R + FUGUE512_LANE])
+
+/* SMIX by byte permutes: x_j byte (3-k) = c_{(j+k)&3} byte (3-k) ^ r_k byte ((3-k-j)&3) */
+#define FUGUE512_B(x, k) __byte_perm((x), 0, 0x4440 + (k))
+#define FUGUE512_SEL(p, q, s, t) __byte_perm(__byte_perm((s), (t), 0x0014), __byte_perm((p), (q), 0x3600), 0x7610)
+#define SMIX_PRMT(x0, x1, x2, x3) { \
+	const uint32_t a0 = mixtab0(FUGUE512_B(x0, 3)), a1 = mixtab1(FUGUE512_B(x0, 2)), a2 = mixtab2(FUGUE512_B(x0, 1)), a3 = mixtab3(FUGUE512_B(x0, 0)); \
+	const uint32_t b0 = mixtab0(FUGUE512_B(x1, 3)), b1 = mixtab1(FUGUE512_B(x1, 2)), b2 = mixtab2(FUGUE512_B(x1, 1)), b3 = mixtab3(FUGUE512_B(x1, 0)); \
+	const uint32_t d0 = mixtab0(FUGUE512_B(x2, 3)), d1 = mixtab1(FUGUE512_B(x2, 2)), d2 = mixtab2(FUGUE512_B(x2, 1)), d3 = mixtab3(FUGUE512_B(x2, 0)); \
+	const uint32_t e0 = mixtab0(FUGUE512_B(x3, 3)), e1 = mixtab1(FUGUE512_B(x3, 2)), e2 = mixtab2(FUGUE512_B(x3, 1)), e3 = mixtab3(FUGUE512_B(x3, 0)); \
+	const uint32_t c0 = a0 ^ a1 ^ a2 ^ a3, c1 = b0 ^ b1 ^ b2 ^ b3, c2 = d0 ^ d1 ^ d2 ^ d3, c3 = e0 ^ e1 ^ e2 ^ e3; \
+	const uint32_t r0 = b0 ^ d0 ^ e0, r1 = a1 ^ d1 ^ e1, r2 = a2 ^ b2 ^ e2, r3 = a3 ^ b3 ^ d3; \
+	x0 = FUGUE512_SEL(c0, c1, c2, c3) ^ __byte_perm(__byte_perm(r2, r3, 0x0014), __byte_perm(r0, r1, 0x3600), 0x7610); \
+	x1 = FUGUE512_SEL(c1, c2, c3, c0) ^ __byte_perm(__byte_perm(r2, r3, 0x0007), __byte_perm(r0, r1, 0x2500), 0x7610); \
+	x2 = FUGUE512_SEL(c2, c3, c0, c1) ^ __byte_perm(__byte_perm(r2, r3, 0x0036), __byte_perm(r0, r1, 0x1400), 0x7610); \
+	x3 = FUGUE512_SEL(c3, c0, c1, c2) ^ __byte_perm(__byte_perm(r2, r3, 0x0025), __byte_perm(r0, r1, 0x0700), 0x7610); \
+}
+#undef SMIX
+#define SMIX SMIX_PRMT
+
+__device__ __forceinline__
+void fugue512_hash_64_r(const uint32_t *mixtabs, uint32_t *Hash)
+{
+	#pragma unroll 16
+	for (int i = 0; i < 16; i++)
+		Hash[i] = cuda_swab32(Hash[i]);
+
+	uint32_t S00, S01, S02, S03, S04, S05, S06, S07, S08, S09;
+	uint32_t S10, S11, S12, S13, S14, S15, S16, S17, S18, S19;
+	uint32_t S20, S21, S22, S23, S24, S25, S26, S27, S28, S29;
+	uint32_t S30, S31, S32, S33, S34, S35;
+
+	uint32_t B27, B28, B29, B30, B31, B32, B33, B34, B35;
+
+	S00 = S01 = S02 = S03 = S04 = S05 = S06 = S07 = S08 = S09 = 0;
+	S10 = S11 = S12 = S13 = S14 = S15 = S16 = S17 = S18 = S19 = 0;
+	S20 = 0x8807a57e; S21 = 0xe616af75; S22 = 0xc5d3e4db; S23 = 0xac9ab027;
+	S24 = 0xd915f117; S25 = 0xb6eecc54; S26 = 0x06e8020b; S27 = 0x4a92efd1;
+	S28 = 0xaac6e2c9; S29 = 0xddb21398; S30 = 0xcae65838; S31 = 0x437f203f;
+	S32 = 0x25ea78e7; S33 = 0x951fddd6; S34 = 0xda6ed11d; S35 = 0xe13e3567;
+
+	/* absorb: 5 trips over the first 15 words, the message shifted down by 3 each trip */
+	#pragma unroll 1
+	for (int i = 0; i < 5; i++) {
+		FUGUE512_3((Hash[0x0]), (Hash[0x1]), (Hash[0x2]));
+		#pragma unroll
+		for (int k = 0; k < 13; k++) Hash[k] = Hash[k + 3];
+	}
+	FUGUE512_3((Hash[0x0]), 0u /*bchi*/, 512u /*bclo*/);
+
+	#pragma unroll 4
+	for (int i = 0; i < 32; i ++) {
+		SUB_ROR3;
+		CMIX36(S00, S01, S02, S04, S05, S06, S18, S19, S20);
+		SMIX(S00, S01, S02, S03);
+	}
+	#pragma unroll 1
+	for (int i = 0; i < 13; i++) {
+		S04 ^= S00;
+		S09 ^= S00;
+		S18 ^= S00;
+		S27 ^= S00;
+		SUB_ROR9;
+		SMIX(S00, S01, S02, S03);
+		S04 ^= S00;
+		S10 ^= S00;
+		S18 ^= S00;
+		S27 ^= S00;
+		SUB_ROR9;
+		SMIX(S00, S01, S02, S03);
+		S04 ^= S00;
+		S10 ^= S00;
+		S19 ^= S00;
+		S27 ^= S00;
+		SUB_ROR9;
+		SMIX(S00, S01, S02, S03);
+		S04 ^= S00;
+		S10 ^= S00;
+		S19 ^= S00;
+		S28 ^= S00;
+		SUB_ROR8;
+		SMIX(S00, S01, S02, S03);
+	}
+	S04 ^= S00;
+	S09 ^= S00;
+	S18 ^= S00;
+	S27 ^= S00;
+
+	Hash[0] = cuda_swab32(S01);
+	Hash[1] = cuda_swab32(S02);
+	Hash[2] = cuda_swab32(S03);
+	Hash[3] = cuda_swab32(S04);
+	Hash[4] = cuda_swab32(S09);
+	Hash[5] = cuda_swab32(S10);
+	Hash[6] = cuda_swab32(S11);
+	Hash[7] = cuda_swab32(S12);
+	Hash[8] = cuda_swab32(S18);
+	Hash[9] = cuda_swab32(S19);
+	Hash[10] = cuda_swab32(S20);
+	Hash[11] = cuda_swab32(S21);
+	Hash[12] = cuda_swab32(S27);
+	Hash[13] = cuda_swab32(S28);
+	Hash[14] = cuda_swab32(S29);
+	Hash[15] = cuda_swab32(S30);
+}
+
+/* restore the 4-table access for the other users of SMIX (80-byte stage) */
+#undef SMIX
+#define SMIX SMIX_TAB
+#undef FUGUE512_LANE
+#undef mixtab0
+#undef mixtab1
+#undef mixtab2
+#undef mixtab3
+#define mixtab0(x) mixtabs[(x)]
+#define mixtab1(x) mixtabs[(x)+256]
+#define mixtab2(x) mixtabs[(x)+512]
+#define mixtab3(x) mixtabs[(x)+768]
 
 #endif /* __CUDACC__ */
 

@@ -24,7 +24,7 @@ empty). The first 11 stages are identical to x11/x13, so hsr reuses the shared
 launchers in `algos/stages/` and the shared **register-resident fused kernel**
 (`algos/common/cuda_x_fused.cu`): the consecutive fusible run
 skein→jh→keccak→luffa→cubehash runs in a single launch. The order is fixed, so
-the fused sequence is uploaded once at init.
+the fused kernel is compiled for this sequence (stage ids as template constants).
 
 ## Optimization
 

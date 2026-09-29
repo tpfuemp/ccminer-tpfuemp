@@ -22,6 +22,9 @@
 #include <cuda_helper_alexis.h>
 #include <cuda_vectors_alexis.h>
 #include <miner.h>
+#include <string.h>
+
+#include "cuda_x_fused.h"
 
 #include "cuda/blake512_device.cuh"
 #include "cuda/keccak_device.cuh"
@@ -33,6 +36,7 @@
 #include "cuda/shabal512_device.cuh"
 #include "cuda/cubehash512_device.cuh"
 #include "cuda/tiger192_device.cuh"
+#include "cuda/shavite512_sp_device.cuh"
 #include "cuda/hamsi512_device.cuh"  /* keep LAST: exports SBOX/ROUND_BIG macros */
 
 #define X_FUSED_TIGER 16
@@ -136,6 +140,113 @@ void x_fused_gpu_hash_64_tiger(const uint32_t threads, uint64_t *g_hash, const i
 		*(uint2x4*)&pHash[0] = *(uint2x4*)&s[0];
 		*(uint2x4*)&pHash[4] = *(uint2x4*)&s[4];
 	}
+}
+
+/* fixed-order chains: the stage ids are template constants, so each kernel
+ * holds only its own stages (no switch over all cases, no local stack) */
+template <int... IDS>
+__global__ __launch_bounds__(TPB_FUSED, 2)
+void x_fused_fixed_gpu_hash_64(const uint32_t threads, uint64_t *g_hash)
+{
+	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
+	if (thread < threads)
+	{
+		uint64_t *pHash = &g_hash[thread << 3];
+		uint64_t __align__(16) s[8];
+
+		*(uint2x4*)&s[0] = __ldg4((uint2x4*)&pHash[0]);
+		*(uint2x4*)&s[4] = __ldg4((uint2x4*)&pHash[4]);
+
+		/* braced-list expansion runs the stages left to right */
+		const int seq[] = { (x_fused_stage(IDS, s, NULL, NULL), 0)... };
+		(void) seq;
+
+		*(uint2x4*)&pHash[0] = *(uint2x4*)&s[0];
+		*(uint2x4*)&pHash[4] = *(uint2x4*)&s[4];
+	}
+}
+
+/* the same, followed by shavite (AES table in shared memory) in the same kernel */
+template <int... IDS>
+__global__ __launch_bounds__(TPB_FUSED, 3)
+void x_fused_fixed_shavite_gpu_hash_64(const uint32_t threads, uint64_t *g_hash)
+{
+	__shared__ uint32_t sharedMemory[256][32];
+
+	aes_gpu_init256_s(sharedMemory); /* TPB_FUSED == 256 threads fill the 256 rows */
+
+	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
+	uint64_t *pHash = &g_hash[thread << 3];
+	uint64_t __align__(16) s[8];
+
+	if (thread < threads)
+	{
+		*(uint2x4*)&s[0] = __ldg4((uint2x4*)&pHash[0]);
+		*(uint2x4*)&s[4] = __ldg4((uint2x4*)&pHash[4]);
+
+		const int seq[] = { (x_fused_stage(IDS, s, NULL, NULL), 0)... };
+		(void) seq;
+	}
+	__syncthreads(); /* outside the guard: the whole block reaches it */
+
+	if (thread < threads)
+	{
+		shavite512_hash_64_s<false>(sharedMemory, (uint32_t*)s, NULL);
+
+		*(uint2x4*)&pHash[0] = *(uint2x4*)&s[0];
+		*(uint2x4*)&pHash[4] = *(uint2x4*)&s[4];
+	}
+}
+
+/* sequence, stage ids (no hamsi/tiger: they need a table argument) */
+#define X_FUSED_FIXED_LIST(X) \
+	X(XF_JH_LUFFA_KECCAK_CUBE,       3, 6, 4, 7) \
+	X(XF_JH_LUFFA_KECCAK,            3, 6, 4) \
+	X(XF_SKEIN_JH_KECCAK,            5, 3, 4) \
+	X(XF_SKEIN_BMW,                  5, 1) \
+	X(XF_LUFFA_CUBE,                 6, 7) \
+	X(XF_JH_KECCAK,                  3, 4) \
+	X(XF_JH_CUBE,                    3, 7)
+
+/* sequences ending in shavite: the ids before it */
+#define X_FUSED_FIXED_SHAVITE_LIST(X) \
+	X(XF_SKEIN_JH_KECCAK_LUFFA_CUBE_SHAVITE, 5, 3, 4, 6, 7) \
+	X(XF_JH_KECCAK_SKEIN_LUFFA_CUBE_SHAVITE, 3, 4, 5, 6, 7) \
+	X(XF_LUFFA_CUBE_SHAVITE,                 6, 7)
+
+__host__
+void x_fused_fixed_cpu_hash_64(uint32_t threads, int seq, uint32_t *d_hash)
+{
+	dim3 grid((threads + TPB_FUSED - 1) / TPB_FUSED);
+	dim3 block(TPB_FUSED);
+
+	#define XF_LAUNCH(name, ...) case name: \
+		x_fused_fixed_gpu_hash_64<__VA_ARGS__> <<<grid, block>>> (threads, (uint64_t*)d_hash); break;
+	#define XF_LAUNCH_SHAVITE(name, ...) case name: \
+		x_fused_fixed_shavite_gpu_hash_64<__VA_ARGS__> <<<grid, block>>> (threads, (uint64_t*)d_hash); break;
+	switch (seq) {
+	X_FUSED_FIXED_LIST(XF_LAUNCH)
+	X_FUSED_FIXED_SHAVITE_LIST(XF_LAUNCH_SHAVITE)
+	}
+	#undef XF_LAUNCH
+	#undef XF_LAUNCH_SHAVITE
+}
+
+/* the stage ids of a fixed sequence (for the self-test), shavite as X_FUSED_SHAVITE; returns the count */
+__host__
+int x_fused_fixed_ids(int seq, uint8_t ids[8])
+{
+	#define XF_IDS(name, ...) case name: { \
+		static const uint8_t v[] = { __VA_ARGS__ }; memcpy(ids, v, sizeof(v)); return (int) sizeof(v); }
+	#define XF_IDS_SHAVITE(name, ...) case name: { \
+		static const uint8_t v[] = { __VA_ARGS__, X_FUSED_SHAVITE }; memcpy(ids, v, sizeof(v)); return (int) sizeof(v); }
+	switch (seq) {
+	X_FUSED_FIXED_LIST(XF_IDS)
+	X_FUSED_FIXED_SHAVITE_LIST(XF_IDS_SHAVITE)
+	}
+	#undef XF_IDS
+	#undef XF_IDS_SHAVITE
+	return 0;
 }
 
 /* hamsi byte table of the current device (algos/stages/cuda_hamsi512.cu) */

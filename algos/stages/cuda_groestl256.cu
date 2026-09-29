@@ -37,31 +37,8 @@ void groestl256_x4_round(uint32_t (&s)[8][8], const uint32_t r, const bool q, co
 		for (int b = 0; b < 8; b++) s[i][b] = __funnelshift_r(s[i][b], s[i][b], rot[i]);
 	#pragma unroll
 	for (int i = 0; i < 8; i++) groestl512_x2_sbox(s[i]);
-	/* MixBytes, the groestl512_x2 t/x/y/w/v chain (same matrix for both widths) */
-	uint32_t x[8][8], y[8][8];
-	#pragma unroll
-	for (int b = 0; b < 8; b++) {
-		uint32_t t[8];
-		#pragma unroll
-		for (int i = 0; i < 8; i++) t[i] = s[i][b] ^ s[(i + 1) & 7][b];
-		#pragma unroll
-		for (int i = 0; i < 8; i++) {
-			x[i][b] = t[i] ^ t[(i + 3) & 7];
-			y[i][b] = t[i] ^ t[(i + 2) & 7] ^ s[(i + 6) & 7][b];
-		}
-	}
-	#pragma unroll
-	for (int j = 0; j < 8; j++) {
-		uint32_t m[8]; groestl512_x2_mul2(x[j], m);
-		#pragma unroll
-		for (int b = 0; b < 8; b++) x[j][b] = m[b] ^ y[(j + 4) & 7][b];
-	}
-	#pragma unroll
-	for (int i = 0; i < 8; i++) {
-		uint32_t m[8]; groestl512_x2_mul2(x[(i + 3) & 7], m);
-		#pragma unroll
-		for (int b = 0; b < 8; b++) s[i][b] = m[b] ^ y[(i + 4) & 7][b];
-	}
+	/* MixBytes: the groestl512_x2 network (same matrix for both widths) */
+	groestl512_x2_mix(s);
 }
 
 __device__ __forceinline__

@@ -37,14 +37,6 @@ extern bool streebog_device_selftest(int thr_id);
 static uint32_t *d_hash[MAX_GPUS];
 static uint32_t *d_resNonce[MAX_GPUS];
 
-/* stage ids match enum Algo in x16r.cu / the fused kernel switch */
-enum Algo {
-	BLAKE = 0, BMW, GROESTL, JH, KECCAK, SKEIN, LUFFA, CUBEHASH, SHAVITE, SIMD, ECHO
-};
-
-/* the fusible run in phi's fixed order: jh -> cubehash (register-resident) */
-static const uint8_t phi_fused_ids[2] = { JH, CUBEHASH };
-
 extern "C" void phihash(void *output, const void *input)
 {
 	unsigned char _ALIGN(128) hash[128] = { 0 };
@@ -123,11 +115,8 @@ extern "C" int scanhash_phi(int thr_id, struct work* work, uint32_t max_nonce, u
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_hash[thr_id], (size_t)64 * throughput), -1);
 		CUDA_SAFE_CALL(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)));
 
-		/* fused-kernel unit test (clobbers the order constant) must run before
-		 * the real upload of the fixed phi fused sequence */
 		streebog_device_selftest(thr_id);
 		x_fused_device_selftest(thr_id);
-		x_fused_setOrder(phi_fused_ids, 2);
 
 		init[thr_id] = true;
 	}
@@ -145,7 +134,7 @@ extern "C" int scanhash_phi(int thr_id, struct work* work, uint32_t max_nonce, u
 
 		skein512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], 1); order++;
 		/* fused: jh - cubehash (register-resident) */
-		x_fused_cpu_hash_64(thr_id, throughput, 0, 2, 0, d_hash[thr_id]); order += 2;
+		x_fused_fixed_cpu_hash_64(throughput, XF_JH_CUBE, d_hash[thr_id]); order += 2;
 		fugue512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 		streebog_cpu_hash_64(thr_id, throughput, d_hash[thr_id]);
 		/* echo + on-device target compare, 2 nonces via atomicExch chain */

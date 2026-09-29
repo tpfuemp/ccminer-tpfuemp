@@ -486,10 +486,13 @@ static __device__ uint32_t c_echo_AES0[256] = {
 	0xC3414182, 0xB0999929, 0x772D2D5A, 0x110F0F1E, 0xCBB0B07B, 0xFC5454A8, 0xD6BBBB6D, 0x3A16162C
 };
 
-/* Shared layout: tables 1..3 are byte rotations of table 0, so one table is kept, in 16 copies;
- * lane l reads copy l % 16, which spreads the random-index lookups over the banks. Kernels declare
- * __shared__ uint32_t sharedMemory[1][ECHO_TAB], call echo_fill_rep and __syncthreads(). */
+/* Tables 1..3 are byte rotations of table 0: one table in ECHO_R copies, lane l reads copy l % ECHO_R.
+ * Kernels declare __shared__ uint32_t sharedMemory[1][ECHO_TAB], call echo_fill_rep and __syncthreads(). */
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
+#define ECHO_R   32
+#else
 #define ECHO_R   16
+#endif
 #define ECHO_TAB (256 * ECHO_R)
 
 __device__ __forceinline__ uint32_t echo_rotk(uint32_t v, int k)

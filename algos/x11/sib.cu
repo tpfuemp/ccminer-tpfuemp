@@ -7,9 +7,9 @@
  * Migrated to the shared x-family machinery (docs/coding-guideline.md §2/§3):
  * the 64-byte stages call the bare <prim>512 device-launcher names through the
  * cuda_x_stages.h bridge. The two consecutive fusible runs are executed by the
- * shared register-resident fused kernel (cuda_x_fused.cu), uploaded once at init:
- *   run A = skein->jh->keccak    (order[0..3))
- *   run B = luffa->cubehash      (order[3..5))
+ * shared register-resident fused kernel (cuda_x_fused.cu), one kernel compiled per run:
+ *   run A = skein->jh->keccak
+ *   run B = luffa->cubehash
  * groestl and streebog are the quad/table boundaries between/around them;
  * shavite/simd/echo are the trailing boundary stages.
  */
@@ -42,26 +42,6 @@ extern bool streebog_device_selftest(int thr_id);
 
 static uint32_t *d_hash[MAX_GPUS];
 static uint32_t *d_resNonce[MAX_GPUS];
-
-/* stage ids match enum Algo in x16r.cu / the fused kernel switch */
-enum Algo {
-	BLAKE = 0,
-	BMW,
-	GROESTL,
-	JH,
-	KECCAK,
-	SKEIN,
-	LUFFA,
-	CUBEHASH,
-	SHAVITE,
-	SIMD,
-	ECHO
-};
-
-/* the two maximal fusible runs of the fixed sib order, concatenated:
- *   [0..3) skein->jh->keccak   [3..5) luffa->cubehash
- * (groestl + streebog boundaries sit around them, run standalone) */
-static const uint8_t sib_fused_ids[5] = { SKEIN, JH, KECCAK, LUFFA, CUBEHASH };
 
 // Sibcoin CPU Hash
 extern "C" void sibhash(void *output, const void *input)
@@ -186,10 +166,7 @@ extern "C" int scanhash_sib(int thr_id, struct work* work, uint32_t max_nonce, u
 		cuda_check_cpu_init(thr_id, throughput);
 
 		streebog_device_selftest(thr_id);
-		/* fused-kernel unit test (clobbers the order constant) must run before
-		 * the real upload of the fixed sib fused sequence */
 		x_fused_device_selftest(thr_id);
-		x_fused_setOrder(sib_fused_ids, 5);
 
 		init[thr_id] = true;
 	}
@@ -215,14 +192,12 @@ extern "C" int scanhash_sib(int thr_id, struct work* work, uint32_t max_nonce, u
 		groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 		TRACE("groestl:");
 		/* fused run A: skein - jh - keccak (register-resident) */
-		x_fused_cpu_hash_64(thr_id, throughput, 0, 3, 0, d_hash[thr_id]); order += 3;
+		x_fused_fixed_cpu_hash_64(throughput, XF_SKEIN_JH_KECCAK, d_hash[thr_id]); order += 3;
 		TRACE("fusedA :");
 		streebog_cpu_hash_64(thr_id, throughput, d_hash[thr_id]);
 		TRACE("gost   :");
-		/* fused run B: luffa - cubehash (register-resident) */
-		x_fused_cpu_hash_64(thr_id, throughput, 3, 2, 0, d_hash[thr_id]); order += 2;
-		TRACE("fusedB :");
-		shavite512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
+		/* fused run B: luffa - cubehash - shavite (one kernel) */
+		x_fused_fixed_cpu_hash_64(throughput, XF_LUFFA_CUBE_SHAVITE, d_hash[thr_id]); order += 3;
 		TRACE("shavite:");
 		simd512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 		TRACE("simd   :");

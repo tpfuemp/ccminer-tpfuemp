@@ -9,7 +9,7 @@
  * cuda_x_stages.h bridge, and the consecutive fusible run skein->jh->keccak->
  * luffa->cubehash (identical to x11/x13's) is executed by the shared register-
  * resident fused kernel (cuda_x_fused.cu). Order is fixed, so the fused
- * sequence is uploaded once at init. Echo/hamsi/fugue are mid-chain here
+ * kernel is compiled for this sequence. Echo/hamsi/fugue are mid-chain here
  * (shabal follows), so echo uses the plain 64-byte launcher; shabal is the
  * terminal and the best nonce is found by the shared cuda_check_hash pass.
  */
@@ -41,25 +41,6 @@ extern "C" {
 // Memory for the hash functions
 static uint32_t *d_hash[MAX_GPUS] = { 0 };
 static uint32_t *d_resNonce[MAX_GPUS] = { 0 };
-
-/* stage ids match enum Algo in x16r.cu / the fused kernel switch */
-enum Algo {
-	BLAKE = 0,
-	BMW,
-	GROESTL,
-	JH,
-	KECCAK,
-	SKEIN,
-	LUFFA,
-	CUBEHASH,
-	SHAVITE,
-	SIMD,
-	ECHO
-};
-
-/* the maximal fusible run in the fixed x14 order: skein->jh->keccak->luffa->
- * cubehash (the kernel walks it in this order) */
-static const uint8_t x14_fused_ids[5] = { SKEIN, JH, KECCAK, LUFFA, CUBEHASH };
 
 // X14 CPU Hash function
 extern "C" void x14hash(void *output, const void *input)
@@ -201,10 +182,7 @@ extern "C" int scanhash_x14(int thr_id,  struct work* work, uint32_t max_nonce, 
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput), 0);
 		CUDA_SAFE_CALL(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)));
 
-		/* fused-kernel unit test (clobbers the order constant) must run before
-		 * the real upload of the fixed x14 fused sequence */
 		x_fused_device_selftest(thr_id);
-		x_fused_setOrder(x14_fused_ids, 5);
 
 		init[thr_id] = true;
 	}
@@ -225,10 +203,8 @@ extern "C" int scanhash_x14(int thr_id,  struct work* work, uint32_t max_nonce, 
 		TRACE("bmw    :");
 		groestl512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 		TRACE("groestl:");
-		/* fused: skein - jh - keccak - luffa - cubehash (register-resident) */
-		x_fused_cpu_hash_64(thr_id, throughput, 0, 5, 0, d_hash[thr_id]); order += 5;
-		TRACE("fused  :");
-		shavite512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
+		/* fused: skein - jh - keccak - luffa - cubehash - shavite (one kernel) */
+		x_fused_fixed_cpu_hash_64(throughput, XF_SKEIN_JH_KECCAK_LUFFA_CUBE_SHAVITE, d_hash[thr_id]); order += 6;
 		TRACE("shavite:");
 		simd512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 		TRACE("simd   :");

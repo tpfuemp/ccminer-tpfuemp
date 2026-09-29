@@ -17,7 +17,7 @@ SIMD-512  →  Echo-512  →  Hamsi-512  →  Fugue-512 (terminal)
   `algos/stages/` and the shared **register-resident fused kernel**
   (`algos/common/cuda_x_fused.cu`): the consecutive fusible run
   skein→jh→keccak→luffa→cubehash runs in a single launch. The order is fixed,
-  so the fused sequence is uploaded once at init (unlike x16r's per-hash order).
+  so the fused kernel is compiled for this sequence (unlike x16r's per-hash order).
 - The two x13-specific stages moved to `algos/stages/` during this migration:
   - `cuda_x13_hamsi512.cu` — the 64-byte Hamsi stage (plus the 80-byte
     `x16_hamsi512` head variant used by the x16 family). Built with
