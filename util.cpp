@@ -1645,6 +1645,55 @@ static bool kawpow_stratum_set_target(struct stratum_ctx *sctx, json_t *params)
 	return true;
 }
 
+// Lumenite (MeshPool) mining.notify, with the finished header:
+// [job_id, header_hex(160), nbits_hex, clean, extranonce2_hex, ntime_hex].
+// The standard submit echoes this extranonce2.
+static bool lumenite_stratum_notify(struct stratum_ctx *sctx, json_t *params)
+{
+	const char *job_id = json_string_value(json_array_get(params, 0));
+	const char *header = json_string_value(json_array_get(params, 1));
+	const char *nbits  = json_string_value(json_array_get(params, 2));
+	json_t *j_clean    = json_array_get(params, 3);
+	const char *xn2    = json_string_value(json_array_get(params, 4));
+	const char *stime  = json_string_value(json_array_get(params, 5));
+	int i;
+
+	if (!job_id || !header || !nbits || !xn2 || !stime ||
+	    strlen(header) != 160 || strlen(nbits) != 8 || strlen(stime) != 8 ||
+	    (strlen(xn2) & 1) || strlen(xn2) > 2 * sizeof(sctx->job.lmt_xnonce2)) {
+		applog(LOG_ERR, "Lumenite notify: invalid parameters");
+		return false;
+	}
+
+	pthread_mutex_lock(&stratum_work_lock);
+
+	free(sctx->job.job_id);
+	sctx->job.job_id = strdup(job_id);
+	if (!hex2bin(sctx->job.lmt_header, header, 80) ||
+	    !hex2bin(sctx->job.lmt_xnonce2, xn2, strlen(xn2) / 2)) {
+		pthread_mutex_unlock(&stratum_work_lock);
+		applog(LOG_ERR, "Lumenite notify: bad hex");
+		return false;
+	}
+	sctx->job.lmt_xnonce2_len = strlen(xn2) / 2;
+	hex2bin(sctx->job.nbits, nbits, 4);
+	hex2bin(sctx->job.ntime, stime, 4);
+	memcpy(sctx->job.version, sctx->job.lmt_header, 4);
+	/* no merkle branch: drop any left from a standard job */
+	for (i = 0; i < sctx->job.merkle_count; i++)
+		free(sctx->job.merkle[i]);
+	free(sctx->job.merkle);
+	sctx->job.merkle = NULL;
+	sctx->job.merkle_count = 0;
+	sctx->job.height = 0;
+	sctx->job.clean = j_clean ? json_is_true(j_clean) : true;
+	sctx->job.lmt_job = true;
+	sctx->job.diff = sctx->next_diff;
+
+	pthread_mutex_unlock(&stratum_work_lock);
+	return true;
+}
+
 static bool stratum_notify(struct stratum_ctx *sctx, json_t *params)
 {
 	const char *job_id, *prevhash, *coinb1, *coinb2, *version, *nbits, *stime;
@@ -1683,6 +1732,9 @@ static bool stratum_notify(struct stratum_ctx *sctx, json_t *params)
 	if (opt_algo == ALGO_SHA256DV) {
 		return sha256dv_stratum_notify(sctx, params);
 	}
+
+	if (opt_algo == ALGO_HOMESCRYPT && json_array_size(params) == 6)
+		return lumenite_stratum_notify(sctx, params);
 
 	job_id = json_string_value(json_array_get(params, p++));
 	prevhash = json_string_value(json_array_get(params, p++));
@@ -1790,6 +1842,7 @@ static bool stratum_notify(struct stratum_ctx *sctx, json_t *params)
 			hex2bin(sctx->job.nreward, nreward, 2);
 	}
 	sctx->job.clean = clean;
+	sctx->job.lmt_job = false;
 
 	sctx->job.diff = sctx->next_diff;
 

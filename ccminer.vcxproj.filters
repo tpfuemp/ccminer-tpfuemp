@@ -405,6 +405,9 @@
     <ClCompile Include="algos\minotaurx\minotaurx_hash.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="algos\homescrypt\homescrypt_hash.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="algos\cryptonight\mman.c">
       <Filter>Source Files\cryptonight\bbr</Filter>
     </ClCompile>
@@ -1438,6 +1441,9 @@
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\minotaurx\minotaurx.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\homescrypt\homescrypt.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
   </ItemGroup>

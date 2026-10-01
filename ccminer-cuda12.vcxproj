@@ -281,6 +281,8 @@
     <ClInclude Include="algos\yespower\yespower_hash.cuh" />
     <ClInclude Include="algos\minotaurx\minotaurx.h" />
     <ClInclude Include="algos\minotaurx\minotaurx_kat.h" />
+    <ClInclude Include="algos\homescrypt\homescrypt.h" />
+    <ClInclude Include="algos\homescrypt\homescrypt_kat.h" />
     <ClInclude Include="cuda\shabal512_device.cuh" />
     <ClInclude Include="cuda\sha512_device.cuh" />
     <ClInclude Include="cuda\skein512_device.cuh" />
@@ -301,6 +303,7 @@
     <ClCompile Include="algos\mike\mike_hash.cpp" />
     <ClCompile Include="algos\flex\flex_hash.cpp" />
     <ClCompile Include="algos\minotaurx\minotaurx_hash.cpp" />
+    <ClCompile Include="algos\homescrypt\homescrypt_hash.cpp" />
     <ClCompile Include="algos\cryptonight\cpu\c_keccak.c" />
     <ClCompile Include="algos\equihash\blake2\blake2bx.cpp">
       <EnableEnhancedInstructionSet Condition="'$(Platform)'=='Win32'">StreamingSIMDExtensions</EnableEnhancedInstructionSet>
@@ -407,6 +410,12 @@
     <CudaCompile Include="algos\mike\mike.cu" />
     <CudaCompile Include="algos\flex\flex.cu" />
     <CudaCompile Include="algos\minotaurx\minotaurx.cu" />
+    <CudaCompile Include="algos\homescrypt\homescrypt.cu">
+      <FastMath>false</FastMath>
+      <FmadOptimization>false</FmadOptimization>
+      <Defines>_ALLOW_COMPILER_AND_STL_VERSION_MISMATCH</Defines>
+      <AdditionalOptions>--fmad=false --prec-div=true --prec-sqrt=true --ftz=false -allow-unsupported-compiler --Wno-deprecated-gpu-targets %(AdditionalOptions)</AdditionalOptions>
+    </CudaCompile>
     <CudaCompile Include="algos\odocrypt\cuda_odocrypt.cu" />
     <CudaCompile Include="algos\blake2b\blake2b.cu" />
     <CudaCompile Include="algos\blake2b\cuda_blake2b_selftest.cu" />

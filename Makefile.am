@@ -54,6 +54,8 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/flex/flex.h algos/flex/flex_kat.h algos/flex/flex_schedule.h \
 			  algos/minotaurx/minotaurx.cu algos/minotaurx/minotaurx_hash.cpp \
 			  algos/minotaurx/minotaurx.h algos/minotaurx/minotaurx_kat.h \
+			  algos/homescrypt/homescrypt.cu algos/homescrypt/homescrypt_hash.cpp \
+			  algos/homescrypt/homescrypt.h algos/homescrypt/homescrypt_kat.h \
 			  algos/mike/mike.h algos/mike/mike_kat.h \
 			  algos/argon2d/argon2d.cu algos/argon2d/argon2d_fill.cu \
 			  algos/argon2d/blake2b_kernels.cu \
@@ -244,6 +246,10 @@ algos/equihash/cuda_equi24b_192.o: algos/equihash/cuda_equi24b_192.cu algos/equi
 # HoohashV110 device TU: consensus-critical strict FP (must match the glibc oracle).
 # No fast-math; disable FMA contraction; precise div/sqrt; no flush-to-zero.
 algos/hoohash/cuda_hoohashv110.o: algos/hoohash/cuda_hoohashv110.cu
+	$(NVCC) $(nvcc_FLAGS) --maxrregcount=128 --fmad=false --prec-div=true --prec-sqrt=true --ftz=false -o $@ -c $<
+
+# homescrypt: its consensus binary32 FMA chain gets the same strict-FP flags.
+algos/homescrypt/homescrypt.o: algos/homescrypt/homescrypt.cu algos/homescrypt/homescrypt.h algos/homescrypt/homescrypt_kat.h
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=128 --fmad=false --prec-div=true --prec-sqrt=true --ftz=false -o $@ -c $<
 
 algos/blake256/blake256.o: algos/blake256/blake256.cu

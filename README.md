@@ -79,6 +79,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `heavy` | Heavycoin *(build-gated: `WITH_HEAVY_ALGO`)* |
 | `heavyhash` | HeavyHash (oBTC) |
 | `hmq1725` (`hmq17`) | HMQ1725 (Doubloons / Espers) |
+| `homescrypt` | HomeScrypt v1.2 (Lumenite) |
 | `hoohash` (`hoohashv110`, `pepepow`) | HoohashV110 (PEPEPOW) |
 | `hsr` (`hshare`) | HShare / HSR (X13 + SM3) |
 | `jackpot` | JHA v8 |

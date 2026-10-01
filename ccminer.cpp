@@ -321,6 +321,7 @@ Options:\n\
 #endif
 "			heavyhash	oBTC coin\n\
 			hmq1725		Doubloons / Espers\n\
+			homescrypt	HomeScrypt v1.2 (Lumenite)\n\
 			hoohash		HoohashV110 (PEPEPOW)\n\
 			hsr		Hshare / HSR (X13 SM3)\n\
 			jackpot		JHA v8\n\
@@ -1887,6 +1888,19 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 	// and the pool of the current stratum
 	work->pooln = sctx->pooln;
 
+	if (opt_algo == ALGO_HOMESCRYPT && sctx->job.lmt_job) {
+		// Lumenite pools send the finished header. Store each word as the
+		// big-endian decode of the wire so scanhash's be32enc restores it; ntime
+		// (data[17]) and the nonce then submit on the default path.
+		memset(work->data, 0, sizeof(work->data));
+		for (i = 0; i < 20; i++)
+			work->data[i] = be32dec(sctx->job.lmt_header + 4 * i);
+		work->data[19] = 0;
+		memcpy(work->xnonce2, sctx->job.lmt_xnonce2, sctx->job.lmt_xnonce2_len);
+		work->xnonce2_len = sctx->job.lmt_xnonce2_len;
+		goto header_done;
+	}
+
 	/* Generate merkle root */
 	switch (opt_algo) {
 		case ALGO_DECRED:
@@ -2076,6 +2090,7 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		work->data[31] = (opt_algo == ALGO_MJOLLNIR) ? 0x000002A0 : 0x00000280;
 	}
 
+header_done:
 	if (opt_showdiff || opt_max_diff > 0.)
 		calc_network_diff(work);
 
@@ -2854,6 +2869,7 @@ static void *miner_thread(void *userdata)
 			case ALGO_CRYPTOLIGHT:
 			case ALGO_CRYPTONIGHT:
 			case ALGO_SCRYPT_JANE:
+			case ALGO_HOMESCRYPT:  // 16 MB scratchpad per hash
 			case ALGO_LYRA2Z330:  // ~7.7 MB matrix per hash, so VRAM caps it at a few kH/s
 				minmax = 0x1000;
 				break;
@@ -3212,6 +3228,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_MINOTAURX:
 			rc = scanhash_minotaurx(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_HOMESCRYPT:
+			rc = scanhash_homescrypt(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_SHA3T:
 			rc = scanhash_sha3t(thr_id, &work, max_nonce, &hashes_done);

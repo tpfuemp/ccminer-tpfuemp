@@ -67,6 +67,7 @@ its command line interface and options.
                           heavy               Heavycoin (build-gated WITH_HEAVY_ALGO)
                           heavyhash           HeavyHash (oBTC)
                           hmq1725 / hmq17     HMQ1725 (Doubloons / Espers)
+                          homescrypt          HomeScrypt v1.2 (Lumenite)
                           hoohash / pepepow   HoohashV110 (PEPEPOW)
                           hsr / hshare        HShare / HSR (X13 + SM3)
                           jackpot             JHA v8

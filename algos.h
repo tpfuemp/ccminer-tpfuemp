@@ -122,6 +122,7 @@ enum sha_algos {
 	ALGO_MIKE,
 	ALGO_FLEX,
 	ALGO_MINOTAURX,
+	ALGO_HOMESCRYPT,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -262,6 +263,7 @@ static const char *algo_names[] = {
 	"mike",
 	"flex",
 	"minotaurx",
+	"homescrypt",
 	"auto", /* reserved for multi algo */
 	""
 };

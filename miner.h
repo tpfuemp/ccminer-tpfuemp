@@ -380,6 +380,7 @@ extern int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_nonce
 extern int scanhash_mike(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_minotaurx(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_homescrypt(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_sha3t(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_soterg(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_x25x(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
@@ -490,6 +491,7 @@ extern void free_ghostrider(int thr_id);
 extern void free_mike(int thr_id);
 extern void free_flex(int thr_id);
 extern void free_minotaurx(int thr_id);
+extern void free_homescrypt(int thr_id);
 extern void free_sha3t(int thr_id);
 extern void free_soterg(int thr_id);
 extern void free_x25x(int thr_id);
@@ -797,6 +799,12 @@ struct stratum_job {
 	// notify parameter after prevhash. Wire order, un-swapped.
 	bool          has_eqpay_roots;
 	unsigned char eqpay_roots[64];
+	// Lumenite pools (MeshPool): notify carries the finished 80-byte header and
+	// the extranonce2 the submit must echo; there is no coinbase or merkle.
+	bool          lmt_job;
+	unsigned char lmt_header[80];
+	unsigned char lmt_xnonce2[32];
+	size_t        lmt_xnonce2_len;
 };
 
 struct stratum_ctx {
