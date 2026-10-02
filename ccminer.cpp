@@ -377,7 +377,7 @@ Options:\n\
 			vanilla		Blake256-8 (VNL)\n\
 			veltor		Thorsriddle streebog\n\
 			verthash	Verthash (Vertcoin)\n\
-			verus		VerusHash 2.2 (Verus, PBaaS)\n\
+			verus		VerusHash 2.2 (Verus, PBaaS), alias verushash\n\
 			whirlcoin	Old Whirlcoin (Whirlpool algo)\n\
 			whirlpool	Whirlpool algo\n\
 			whirlpoolx	WhirlpoolX\n\
@@ -404,10 +404,9 @@ Options:\n\
 			yespower	yespower 1.0, params via --yespower-param/-key\n\
 			yespowereqpay	EqPay (EQPAY), 181-byte header\n\
 			yespowerr16	yespower 1.0 N=4096 r=16 (Yenten)\n\
-			 coin aliases	yespowerSUGAR yespowerURX yespowerLTNCG yespowerMGPC\n\
-					yespowerIC yespowerIOTS yespowerLITB yespowerLTNCG\n\
-					yespowerMGPC yespowerSUGAR yespowerTIDE yespowerURX\n\
-					yespowerSMT\n\
+			 coin aliases	yespowerADVC yespowerARWN yespowerIC yespowerIOTS\n\
+					yespowerLITB yespowerLTNCG yespowerMGPC yespowerSMT\n\
+					yespowerSUGAR yespowerTIDE yespowerURX cpupower\n\
 			zr5		ZR5 (ZiftrCoin)\n\
   -d, --devices         Comma separated list of CUDA devices to use.\n\
                         Device IDs start counting from 0! Alternatively takes\n\

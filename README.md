@@ -131,7 +131,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `vanilla` | Blake256-8 (VNL) |
 | `veltor` (`thorsriddle`) | Veltor (Thorsriddle + Streebog) |
 | `verthash` | Verthash (Vertcoin) |
-| `verus` | VerusHash 2.2 (Verus, PBaaS) |
+| `verus` (`verushash`) | VerusHash 2.2 (Verus, PBaaS) |
 | `whirlcoin` | Old Whirlcoin (Whirlpool) |
 | `whirlpool` (`whirl`) | Whirlpool |
 | `whirlpoolx` | WhirlpoolX |
@@ -166,7 +166,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 The yespower coins share one `-a` name and differ only in `(N, r, pers)`, which
 the algo name alone cannot carry. Select one either with its own alias
 (`yespowersugar`, `sugarchain`, `yespowerurx`, `yespowerltncg`, `yespowermgpc`,
-`yespowertide`, `yespowersmt`, `yespowerarwn`, `yespoweric`, `yespoweriots`, `yespowerlitb`,
+`yespowertide`, `yespowersmt`, `yespowerarwn`, `yespoweradvc`, `yespoweric`, `yespoweriots`, `yespowerlitb`,
 `cpupower`) or with the pool's `"algo"` field, which is honoured on a pool switch.
 
 Run `ccminer --help` for the authoritative list and per-algo notes.

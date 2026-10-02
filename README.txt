@@ -1,5 +1,5 @@
 
-ccminer-tpfuemp 2026.09.1   "yespower 1.0 family (yespower/yespowerr16/power2b) + argon2id1024, BLAKE3 decred, REST API, CUDA 12 readiness"
+ccminer-tpfuemp 2026.09.2   "VerusHash 2.2, HomeScrypt, MinotaurX, yespowerSMT; bitsliced groestl and whirlpool, faster x-family"
 ---------------------------------------------------------------
 
 Donation addresses and contributor credits are in CREDITS.txt.
@@ -121,7 +121,7 @@ its command line interface and options.
                           vanilla             Blake256-8 (VNL)
                           veltor              Veltor (Thorsriddle + Streebog)
                           verthash            Verthash (Vertcoin)
-                          verus               VerusHash 2.2 (Verus, PBaaS)
+                          verus / verushash   VerusHash 2.2 (Verus, PBaaS)
                           whirlcoin           Old Whirlcoin (Whirlpool)
                           whirlpool           Whirlpool
                           whirlpoolx          WhirlpoolX
@@ -326,6 +326,45 @@ Toolkit, use the upstream project instead -- it retains that wider hardware and
 toolkit range: https://github.com/tpruvot/ccminer
 
 >>> RELEASE HISTORY <<<
+  Oct. 2nd 2026  ccminer-tpfuemp 2026.09.2
+
+                  New algorithms
+                    verus            VerusHash 2.2 (Verus, PBaaS chains)
+                    homescrypt       HomeScrypt v1.2 (Lumenite)
+                    minotaurx        MinotaurX (Avian, Pulsar)
+                    yespowersmt      Smartiecoin (SMT), yespower N=256 r=8
+
+                  Speed
+                    whirlpool  four hashes per thread, bitsliced: 1.2-2.9x
+                    groestl    several hashes per thread, bitsliced (x-family
+                               stages, groestlcoin, myr-gr, allium, lyra2)
+                    x-family   fused kernels compiled per fixed stage order;
+                               faster jh, shavite, groestl, fugue, hamsi, echo,
+                               simd and groestl256 stages
+                    lyra2      matrix columns held in registers: allium +39%,
+                               lyra2 +37%, lyra2v2 +6% (RTX 3060), lyra2v2
+                               +13% (GTX 1080 Ti)
+                    cryptonight, flex, gr, mike: faster CN core, and a batch
+                               now stops at a job change
+
+                  Fixes
+                    streebog   1 in 256 inputs hashed wrong (gost, polytimos,
+                               skunk, veltor, sib, phi, x21s, x25x)
+                    x16rv2     some stage orders hashed wrong (the stage list
+                               was too short)
+                    lyra2v2    batches whose thread count was not a multiple
+                               of 64 hashed wrong
+                    shared stage finals report the two lowest candidates
+                    atomically; a third concurrent candidate could be lost
+                    missing barriers after shared table fills (echo512,
+                    streebog); bmw512's last launch wrapped past the range
+                    REST API: an algo switch now resets speed and share
+                    counters, as a pool switch already did
+
+                  Build
+                    Linux binaries link the CUDA runtime statically, so they
+                    need only the NVIDIA driver
+
   Sep. 22nd 2026  ccminer-tpfuemp 2026.09.1
 
                   New algorithms
