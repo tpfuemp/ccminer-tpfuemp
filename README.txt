@@ -121,6 +121,7 @@ its command line interface and options.
                           vanilla             Blake256-8 (VNL)
                           veltor              Veltor (Thorsriddle + Streebog)
                           verthash            Verthash (Vertcoin)
+                          verus               VerusHash 2.2 (Verus, PBaaS)
                           whirlcoin           Old Whirlcoin (Whirlpool)
                           whirlpool           Whirlpool
                           whirlpoolx          WhirlpoolX

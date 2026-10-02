@@ -276,6 +276,16 @@
     <ClInclude Include="algos\minotaurx\minotaurx_kat.h" />
     <ClInclude Include="algos\homescrypt\homescrypt.h" />
     <ClInclude Include="algos\homescrypt\homescrypt_kat.h" />
+    <ClInclude Include="algos\verus\verus_host.h" />
+    <ClInclude Include="algos\verus\verus_portable.h" />
+    <ClInclude Include="algos\verus\verus_warp.cuh" />
+    <ClInclude Include="algos\verus\verus-kat.h" />
+    <ClInclude Include="algos\verus\haraka.h" />
+    <ClInclude Include="algos\verus\haraka_portable.h" />
+    <ClInclude Include="algos\verus\verus_clhash.h" />
+    <ClInclude Include="algos\verus\verus_clhash_iter.h" />
+    <ClInclude Include="algos\verus\verus-simd.h" />
+    <ClInclude Include="algos\verus\verus_host_target.h" />
     <ClInclude Include="cuda\shabal512_device.cuh" />
     <ClInclude Include="cuda\sha512_device.cuh" />
     <ClInclude Include="cuda\skein512_device.cuh" />
@@ -297,6 +307,10 @@
     <ClCompile Include="algos\flex\flex_hash.cpp" />
     <ClCompile Include="algos\minotaurx\minotaurx_hash.cpp" />
     <ClCompile Include="algos\homescrypt\homescrypt_hash.cpp" />
+    <ClCompile Include="algos\verus\haraka.c" />
+    <ClCompile Include="algos\verus\haraka_portable.c" />
+    <ClCompile Include="algos\verus\verus_clhash.c" />
+    <ClCompile Include="algos\verus\verus_host.c" />
     <ClCompile Include="algos\cryptonight\cpu\c_keccak.c" />
     <ClCompile Include="algos\equihash\blake2\blake2bx.cpp">
       <EnableEnhancedInstructionSet Condition="'$(Platform)'=='Win32'">StreamingSIMDExtensions</EnableEnhancedInstructionSet>
@@ -403,6 +417,7 @@
     <CudaCompile Include="algos\mike\mike.cu" />
     <CudaCompile Include="algos\flex\flex.cu" />
     <CudaCompile Include="algos\minotaurx\minotaurx.cu" />
+    <CudaCompile Include="algos\verus\verus.cu" />
     <CudaCompile Include="algos\homescrypt\homescrypt.cu">
       <FastMath>false</FastMath>
       <FmadOptimization>false</FmadOptimization>

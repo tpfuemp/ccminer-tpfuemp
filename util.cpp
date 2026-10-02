@@ -1225,6 +1225,17 @@ static bool stratum_parse_extranonce(struct stratum_ctx *sctx, json_t *params, i
 		goto out;
 	}
 	xn2_size = (int) json_integer_value(json_array_get(params, pndx+1));
+	if (opt_algo == ALGO_VERUS) {
+		/* the miner owns the rest of the 32-byte nNonce, whatever the pool
+		 * declares; only 7 extranonce1 bytes reach the hashed nonce space */
+		int xn1_size = (int)strlen(xnonce1) / 2;
+		if (xn1_size < 1 || xn1_size > 7) {
+			applog(LOG_ERR, "verus: unsupported extranonce1 size %d (1..7)", xn1_size);
+			goto out;
+		}
+		xn2_size = 32 - xn1_size;
+		goto skip_n2;
+	}
 	if (!xn2_size) {
 		char algo[64] = { 0 };
 		get_currentalgo(algo, sizeof(algo));
@@ -1725,6 +1736,9 @@ static bool stratum_notify(struct stratum_ctx *sctx, json_t *params)
 	 * ProgPoW one, so the flag must not outlive the algo that set it. */
 	sctx->job.is_kawpow = false;
 
+	/* Verus uses the equihash stratum dialect */
+	if (opt_algo == ALGO_VERUS)
+		sctx->is_equihash = true;
 	if (sctx->is_equihash) {
 		return equi_stratum_notify(sctx, params);
 	}

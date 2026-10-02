@@ -125,6 +125,7 @@ void algo_free_all(int thr_id)
 	free_flex(thr_id);
 	free_minotaurx(thr_id);
 	free_homescrypt(thr_id);
+	free_verus(thr_id);
 	free_zr5(thr_id);
 	free_curvehash(thr_id);
 	free_kawpow(thr_id);

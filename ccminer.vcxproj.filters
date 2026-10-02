@@ -408,6 +408,18 @@
     <ClCompile Include="algos\homescrypt\homescrypt_hash.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="algos\verus\haraka.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="algos\verus\haraka_portable.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="algos\verus\verus_clhash.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="algos\verus\verus_host.c">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="algos\cryptonight\mman.c">
       <Filter>Source Files\cryptonight\bbr</Filter>
     </ClCompile>
@@ -1444,6 +1456,9 @@
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\homescrypt\homescrypt.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\verus\verus.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
   </ItemGroup>

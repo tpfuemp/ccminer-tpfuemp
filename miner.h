@@ -381,6 +381,7 @@ extern int scanhash_mike(int thr_id, struct work* work, uint32_t max_nonce, unsi
 extern int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_minotaurx(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_homescrypt(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_verus(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_sha3t(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_soterg(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_x25x(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
@@ -492,6 +493,7 @@ extern void free_mike(int thr_id);
 extern void free_flex(int thr_id);
 extern void free_minotaurx(int thr_id);
 extern void free_homescrypt(int thr_id);
+extern void free_verus(int thr_id);
 extern void free_sha3t(int thr_id);
 extern void free_soterg(int thr_id);
 extern void free_x25x(int thr_id);
@@ -805,6 +807,14 @@ struct stratum_job {
 	unsigned char lmt_header[80];
 	unsigned char lmt_xnonce2[32];
 	size_t        lmt_xnonce2_len;
+	// Verus: notify param[8] is the solution template (zero-padded to the
+	// chain's fixed 1344 bytes; 0 = none), and mining.set_target the exact
+	// 256-bit share target, MSB first.
+	uint16_t      verus_sol_len;
+#define VERUS_SOL_FIXED_LEN 1344   /* VRSC SOLUTION_SIZE_FIXED; work->extra holds 3 + this */
+	unsigned char verus_solution[VERUS_SOL_FIXED_LEN];
+	bool          has_verus_target;
+	unsigned char verus_target[32];
 };
 
 struct stratum_ctx {

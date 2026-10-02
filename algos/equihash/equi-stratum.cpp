@@ -7,6 +7,7 @@
 #include <string.h>
 #include <unistd.h>
 #include <miner.h>
+#include "algos.h"
 
 #include "equihash.h"
 
@@ -93,6 +94,23 @@ bool equi_stratum_set_target(struct stratum_ctx *sctx, json_t *params)
 	if (!target_hex || strlen(target_hex) == 0)
 		return false;
 
+	if (opt_algo == ALGO_VERUS) {
+		/* keep the whole 256-bit target (the equihash path keeps 3 bytes) */
+		uint32_t tw[8];
+		if (strlen(target_hex) != 64 || !hex2bin(target_bin, target_hex, 32)) {
+			applog(LOG_ERR, "verus: invalid mining.set_target %s", target_hex);
+			return false;
+		}
+		for (int i = 0; i < 8; i++)
+			tw[7 - i] = be32dec(target_bin + 4 * i);
+		pthread_mutex_lock(&stratum_work_lock);
+		memcpy(sctx->job.verus_target, target_bin, 32);
+		sctx->job.has_verus_target = true;
+		sctx->next_diff = target_to_diff(tw);
+		pthread_mutex_unlock(&stratum_work_lock);
+		return true;
+	}
+
 	hex2bin(target_bin, target_hex, 32);
 	memset(target_be, 0xff, 32);
 	int filled = 0;
@@ -132,7 +150,8 @@ bool equi_stratum_notify(struct stratum_ctx *sctx, json_t *params)
 	// 8-char personalization. When present these are AUTHORITATIVE -- the solver
 	// must hash with the personalization the pool validates against (e.g. a
 	// 144/5 pool advertising "ZcashPoW"). Absent -> keep the -a/env default.
-	{
+	// Verus uses that slot (param 8) for its solution template instead.
+	if (opt_algo != ALGO_VERUS) {
 		const char *eqp = json_string_value(json_array_get(params, p++));
 		const char *eqpers = json_string_value(json_array_get(params, p++));
 		if (eqp && eqpers) {
@@ -189,6 +208,22 @@ bool equi_stratum_notify(struct stratum_ctx *sctx, json_t *params)
 	hex2bin(sctx->job.nbits, nbits, 4);
 	hex2bin(sctx->job.ntime, stime, 4);
 	sctx->job.clean = clean;
+
+	if (opt_algo == ALGO_VERUS) {
+		/* pools send a short solution template; zero-pad it to the chain's
+		 * fixed size, which is also the size the pool expects back */
+		const char *sol = json_string_value(json_array_get(params, 8));
+		const size_t hexlen = sol ? strlen(sol) : 0;
+		const size_t recv = hexlen / 2;
+		sctx->job.verus_sol_len = 0;
+		memset(sctx->job.verus_solution, 0, sizeof(sctx->job.verus_solution));
+		if (!sol || (hexlen & 1) || recv < 8 || recv > VERUS_SOL_FIXED_LEN)
+			applog(LOG_ERR, "verus notify: missing or unusable solution (%u bytes)", (uint32_t) recv);
+		else if (!hex2bin(sctx->job.verus_solution, sol, recv))
+			applog(LOG_ERR, "verus notify: solution hex decode failed");
+		else
+			sctx->job.verus_sol_len = VERUS_SOL_FIXED_LEN;
+	}
 
 	sctx->job.diff = sctx->next_diff;
 	pthread_mutex_unlock(&stratum_work_lock);
@@ -262,7 +297,28 @@ bool equi_stratum_submit(struct pool_infos *pool, struct work *work)
 		applog(LOG_ERR, "unable to alloc share memory");
 		return false;
 	}
-	cbin2hex(solhex, (const char*) work->extra, eq_variant_storelen());
+	if (opt_algo == ALGO_VERUS) {
+		/* PBaaS: the 15 hashed nonce bytes (header bytes 108..114, data[32],
+		 * counter) go into the solution tail; the header nNonce is sent as zeros */
+		const int sol_len = (work->extra[0] == 0xfd) ? (work->extra[1] | work->extra[2] << 8) : 0;
+		uint8_t sol[3 + VERUS_SOL_FIXED_LEN];
+		uint8_t *ns;
+		const uint32_t n = work->nonces[idnonce];
+		if (sol_len != VERUS_SOL_FIXED_LEN) {
+			applog(LOG_ERR, "verus: share has no solution template, not submitted");
+			free(solhex); free(noncestr);
+			return false;
+		}
+		memcpy(sol, work->extra, 3 + sol_len);
+		ns = sol + 3 + sol_len - 15;
+		memcpy(ns, ((const uint8_t*) work->data) + 108, 7);
+		memcpy(ns + 7, &work->data[32], 4);
+		ns[11] = (uint8_t) n;         ns[12] = (uint8_t) (n >> 8);
+		ns[13] = (uint8_t) (n >> 16); ns[14] = (uint8_t) (n >> 24);
+		cbin2hex(solhex, (const char*) sol, 3 + sol_len);
+		memset(noncestr, '0', strlen(noncestr));
+	} else
+		cbin2hex(solhex, (const char*) work->extra, eq_variant_storelen());
 
 	jobid = work->job_id + 8;
 	sprintf(timehex, "%08x", swab32(work->data[25]));

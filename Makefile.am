@@ -56,6 +56,10 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/minotaurx/minotaurx.h algos/minotaurx/minotaurx_kat.h \
 			  algos/homescrypt/homescrypt.cu algos/homescrypt/homescrypt_hash.cpp \
 			  algos/homescrypt/homescrypt.h algos/homescrypt/homescrypt_kat.h \
+			  algos/verus/verus.cu algos/verus/verus_host.c algos/verus/haraka.c \
+			  algos/verus/haraka_portable.c algos/verus/verus_clhash.c \
+			  algos/verus/verus_host.h algos/verus/verus_portable.h algos/verus/verus_warp.cuh algos/verus/verus-kat.h algos/verus/haraka.h \
+			  algos/verus/haraka_portable.h algos/verus/verus_clhash.h algos/verus/verus_clhash_iter.h algos/verus/verus-simd.h algos/verus/verus_host_target.h \
 			  algos/mike/mike.h algos/mike/mike_kat.h \
 			  algos/argon2d/argon2d.cu algos/argon2d/argon2d_fill.cu \
 			  algos/argon2d/blake2b_kernels.cu \

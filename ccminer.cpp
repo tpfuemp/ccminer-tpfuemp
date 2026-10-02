@@ -377,6 +377,7 @@ Options:\n\
 			vanilla		Blake256-8 (VNL)\n\
 			veltor		Thorsriddle streebog\n\
 			verthash	Verthash (Vertcoin)\n\
+			verus		VerusHash 2.2 (Verus, PBaaS)\n\
 			whirlcoin	Old Whirlcoin (Whirlpool algo)\n\
 			whirlpool	Whirlpool algo\n\
 			whirlpoolx	WhirlpoolX\n\
@@ -836,6 +837,9 @@ static void calc_network_diff(struct work *work)
 		net_diff = equi_network_diff(work);
 		return;
 	}
+	// Verus keeps the raw little-endian header bytes, so data[26] already has
+	// the exponent in its high byte; its pools use the Bitcoin diff-1 scale.
+	if (opt_algo == ALGO_VERUS) nbits = work->data[26];
 
 	uint32_t bits = (nbits & 0xffffff);
 	int16_t shift = (swab32(nbits) & 0xff); // 0x1c = 28
@@ -1091,6 +1095,36 @@ static bool submit_id_lookup(uint32_t id, double *diff)
 	return hit;
 }
 
+/* Verus: is a found share still valid at the pool? If the newest job has a
+ * different id and clean_jobs set, the old id is gone: a re-issue with the same
+ * hashed bytes is resubmitted under the new id, anything else is stale. */
+static bool verus_share_current(struct work *w)
+{
+	bool ok = true;
+	pthread_mutex_lock(&stratum_work_lock);
+	const char *cur = stratum.job.job_id;
+	if (cur && strcmp(w->job_id + 8, cur) && stratum.job.clean && !opt_submit_stale && !submit_old) {
+		bool same = stratum.job.coinbase && stratum.job.coinbase_size >= 64 &&
+		            stratum.job.verus_sol_len == VERUS_SOL_FIXED_LEN && w->extra[0] == 0xfd &&
+		            w->data[0] == le32dec(stratum.job.version) &&
+		            w->data[25] == le32dec(stratum.job.ntime) &&
+		            w->data[26] == le32dec(stratum.job.nbits) &&
+		            !memcmp(&w->data[9], stratum.job.coinbase, 64) &&
+		            !memcmp(w->extra + 3, stratum.job.verus_solution, VERUS_SOL_FIXED_LEN);
+		for (int i = 0; same && i < 8; i++)
+			same = w->data[1 + i] == le32dec((uint32_t *) stratum.job.prevhash + i);
+		if (same) {
+			if (opt_debug)
+				applog(LOG_DEBUG, "share of job %s sent as job %s (same work)", w->job_id + 8, cur);
+			snprintf(w->job_id, sizeof(w->job_id), "%07x %s",
+			         be32dec(stratum.job.ntime) & 0xfffffff, cur);
+		} else
+			ok = false;
+	}
+	pthread_mutex_unlock(&stratum_work_lock);
+	return ok;
+}
+
 static bool submit_upstream_work(CURL *curl, struct work *work)
 {
 	char s[512];
@@ -1113,6 +1147,12 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 	if (pool->type & POOL_STRATUM && stratum.is_equihash) {
 		struct work submit_work;
 		memcpy(&submit_work, work, sizeof(struct work));
+		if (opt_algo == ALGO_VERUS && !verus_share_current(&submit_work)) {
+			pool->stales_count++;
+			if (!opt_quiet)
+				applog(LOG_INFO, "stale share dropped (job %s replaced)", work->job_id + 8);
+			return true;
+		}
 		//if (!hashlog_already_submittted(submit_work.job_id, submit_work.nonces[idnonce])) {
 			if (equi_stratum_submit(pool, &submit_work))
 				hashlog_remember_submit(&submit_work, submit_work.nonces[idnonce]);
@@ -1905,6 +1945,7 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 	switch (opt_algo) {
 		case ALGO_DECRED:
 		case ALGO_EQUIHASH:
+		case ALGO_VERUS:
 		case ALGO_SIA:
 		case ALGO_SHA256DV:
 		case ALGO_KAWPOW:
@@ -2004,12 +2045,24 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 		work->data[17] = swab32(le32dec(sctx->job.ntime));
 		work->data[18] = swab32(le32dec(sctx->job.nbits));
 		work->data[19] = 0;
-	} else if (opt_algo == ALGO_EQUIHASH) {
+	} else if (opt_algo == ALGO_EQUIHASH || opt_algo == ALGO_VERUS) {
 		memcpy(&work->data[9], sctx->job.coinbase, 32+32); // merkle [9..16] + reserved
 		work->data[25] = le32dec(sctx->job.ntime);
 		work->data[26] = le32dec(sctx->job.nbits);
 		memcpy(&work->data[27], sctx->xnonce1, sctx->xnonce1_size & 0x1F); // pool extranonce
-		work->data[35] = 0x80;
+		if (opt_algo == ALGO_EQUIHASH)
+			work->data[35] = 0x80;
+		else {
+			// Verus: the pool's solution template, as CompactSize + bytes. The
+			// miner varies only its last 15 bytes (algos/verus/verus.cu).
+			memset(work->extra, 0, sizeof(work->extra));
+			if (sctx->job.verus_sol_len) {
+				work->extra[0] = 0xfd;
+				work->extra[1] = (uint8_t) (sctx->job.verus_sol_len & 0xff);
+				work->extra[2] = (uint8_t) (sctx->job.verus_sol_len >> 8);
+				memcpy(work->extra + 3, sctx->job.verus_solution, sctx->job.verus_sol_len);
+			}
+		}
 		//applog_hex(work->data, 140);
 	} else if (opt_algo == ALGO_LBRY) {
 		for (i = 0; i < 8; i++)
@@ -2114,7 +2167,8 @@ header_done:
 
 	pthread_mutex_unlock(&stratum_work_lock);
 
-	if (opt_debug && opt_algo != ALGO_DECRED && opt_algo != ALGO_EQUIHASH && opt_algo != ALGO_SIA) {
+	if (opt_debug && opt_algo != ALGO_DECRED && opt_algo != ALGO_EQUIHASH && opt_algo != ALGO_VERUS &&
+	    opt_algo != ALGO_SIA) {
 		uint32_t utm = work->data[17];
 		if (opt_algo != ALGO_ZR5) utm = swab32(utm);
 		char *tm = atime2str(utm - sctx->srvtime_diff);
@@ -2202,6 +2256,15 @@ header_done:
 			break;
 		case ALGO_EQUIHASH:
 			equi_work_set_target(work, sctx->job.diff / opt_difficulty);
+			break;
+		case ALGO_VERUS:
+			// the pool's exact 256-bit target; the difficulty only as fallback
+			if (sctx->job.has_verus_target && opt_difficulty == 1.) {
+				for (i = 0; i < 8; i++)
+					work->target[7 - i] = be32dec(sctx->job.verus_target + 4 * i);
+				work->targetdiff = target_to_diff(work->target);
+			} else
+				work_set_target(work, sctx->job.diff / opt_difficulty);
 			break;
 		case ALGO_KAWPOW:
 		case ALGO_MEOWPOW:
@@ -2404,7 +2467,7 @@ static void *miner_thread(void *userdata)
 		} else if (opt_algo == ALGO_CRYPTOLIGHT || opt_algo == ALGO_CRYPTONIGHT) {
 			nonceptr = (uint32_t*) (((char*)work.data) + 39);
 			wcmplen = 39;
-		} else if (opt_algo == ALGO_EQUIHASH) {
+		} else if (opt_algo == ALGO_EQUIHASH || opt_algo == ALGO_VERUS) {
 			nonceptr = &work.data[EQNONCE_OFFSET]; // 27 is pool extranonce (256bits nonce space)
 			// 108 = version+prevhash+merkle+hashReserved+nTime+nBits, i.e. the whole header up
 			// to the 256-bit nonce space (data[27..34]). The old 68 only compared
@@ -2521,7 +2584,11 @@ static void *miner_thread(void *userdata)
 			}
 		}
 
-		else if (memcmp(&work.data[wcmpoft], &g_work.data[wcmpoft], wcmplen)) {
+		else if (memcmp(&work.data[wcmpoft], &g_work.data[wcmpoft], wcmplen) ||
+		         /* Verus pools can push a new solution template with an unchanged
+		          * header; the template is hashed, so it is new work */
+		         (opt_algo == ALGO_VERUS &&
+		          memcmp(work.extra, g_work.extra, 3 + VERUS_SOL_FIXED_LEN))) {
 			#if 0
 			if (opt_debug) {
 				for (int n=0; n <= (wcmplen-8); n+=8) {
@@ -2535,6 +2602,13 @@ static void *miner_thread(void *userdata)
 			#endif
 			memcpy(&work, &g_work, sizeof(struct work));
 			nonceptr[0] = (UINT32_MAX / opt_n_threads) * thr_id; // 0 if single thr
+		} else if (opt_algo == ALGO_VERUS && strcmp(work.job_id, g_work.job_id)) {
+			/* pools can re-issue an identical job under a new id and drop the
+			 * old one: adopt the id, keep the nonce position and data[32] roll */
+			const uint32_t pos = nonceptr[0], roll = nonceptr[2];
+			memcpy(&work, &g_work, sizeof(struct work));
+			nonceptr[0] = pos;
+			nonceptr[2] = roll;
 		} else
 			nonceptr[0]++; //??
 
@@ -2558,6 +2632,10 @@ static void *miner_thread(void *userdata)
 			nonceptr[1]++;
 			nonceptr[1] |= thr_id << 24;
 			//applog_hex(&work.data[27], 32);
+		} else if (opt_algo == ALGO_VERUS) {
+			// Verus hashes data[32], not data[31]: roll it with the thread in
+			// the top byte so GPUs never share a nonce space
+			nonceptr[2] = ((nonceptr[2] + 1) & 0x00ffffffu) | ((uint32_t) thr_id << 24);
 		} else if (opt_algo == ALGO_WILDKECCAK) {
 			//nonceptr[1] += 1;
 		} else if (opt_algo == ALGO_SIA) {
@@ -3250,6 +3328,9 @@ static void *miner_thread(void *userdata)
 		case ALGO_EQUIHASH:
 			rc = scanhash_equihash(thr_id, &work, max_nonce, &hashes_done);
 			break;
+		case ALGO_VERUS:
+			rc = scanhash_verus(thr_id, &work, max_nonce, &hashes_done);
+			break;
 		case ALGO_ZR5:
 			rc = scanhash_zr5(thr_id, &work, max_nonce, &hashes_done);
 			break;
@@ -3369,7 +3450,8 @@ static void *miner_thread(void *userdata)
 		}
 
 		// only required to debug purpose
-		if (opt_debug && check_dups && opt_algo != ALGO_DECRED && opt_algo != ALGO_EQUIHASH && opt_algo != ALGO_SIA)
+		if (opt_debug && check_dups && opt_algo != ALGO_DECRED && opt_algo != ALGO_EQUIHASH &&
+		    opt_algo != ALGO_VERUS && opt_algo != ALGO_SIA)
 			hashlog_remember_scan_range(&work);
 
 		/* output */
@@ -4936,7 +5018,7 @@ int main(int argc, char *argv[])
 		allow_mininginfo = false;
 	}
 
-	if (opt_algo == ALGO_EQUIHASH) {
+	if (opt_algo == ALGO_EQUIHASH || opt_algo == ALGO_VERUS) {
 		opt_extranonce = false; // disable subscribe
 	}
 

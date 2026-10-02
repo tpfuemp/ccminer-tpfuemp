@@ -131,6 +131,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `vanilla` | Blake256-8 (VNL) |
 | `veltor` (`thorsriddle`) | Veltor (Thorsriddle + Streebog) |
 | `verthash` | Verthash (Vertcoin) |
+| `verus` | VerusHash 2.2 (Verus, PBaaS) |
 | `whirlcoin` | Old Whirlcoin (Whirlpool) |
 | `whirlpool` (`whirl`) | Whirlpool |
 | `whirlpoolx` | WhirlpoolX |

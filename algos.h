@@ -123,6 +123,7 @@ enum sha_algos {
 	ALGO_FLEX,
 	ALGO_MINOTAURX,
 	ALGO_HOMESCRYPT,
+	ALGO_VERUS,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -264,6 +265,7 @@ static const char *algo_names[] = {
 	"flex",
 	"minotaurx",
 	"homescrypt",
+	"verus",
 	"auto", /* reserved for multi algo */
 	""
 };
@@ -309,6 +311,8 @@ static inline int algo_to_int(char* arg)
 			i = ALGO_YESPOWER;
 		else if (!strcasecmp("hoohashv110", arg))
 			i = ALGO_HOOHASH;
+		else if (!strcasecmp("verushash", arg))
+			i = ALGO_VERUS;
 		else if (!strcasecmp("pepepow", arg))
 			i = ALGO_HOOHASH;
 		else if (!strcasecmp("gr", arg))
