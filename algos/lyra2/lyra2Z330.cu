@@ -203,14 +203,21 @@ extern "C" int scanhash_lyra2z330(int thr_id, struct work* work, uint32_t max_no
 	lyra2z330_setBlock_80(endiandata);
 
 	do {
+		// clamp the launch to the range left, max_nonce included
+		const uint32_t n = (uint32_t)min((uint64_t)throughput, (uint64_t)max_nonce - pdata[19] + 1);
+		if (n == 0) {
+			pdata[19] = max_nonce;
+			break;
+		}
+
 		CUDA_SAFE_CALL(cudaMemset(d_resNonces[thr_id], 0xff, 2 * sizeof(uint32_t)));
 
-		lyra2z330_cpu_hash(thr_id, throughput, pdata[19], d_matrix[thr_id], d_hash[thr_id],
+		lyra2z330_cpu_hash(thr_id, n, pdata[19], d_matrix[thr_id], d_hash[thr_id],
 			d_resNonces[thr_id], ptarget[7]);
 
 		CUDA_SAFE_CALL(cudaMemcpy(h_resNonces, d_resNonces[thr_id], 2 * sizeof(uint32_t), cudaMemcpyDeviceToHost));
 
-		*hashes_done = pdata[19] - first_nonce + throughput;
+		*hashes_done = pdata[19] - first_nonce + n;
 
 		if (h_resNonces[0] != UINT32_MAX)
 		{
@@ -240,7 +247,7 @@ extern "C" int scanhash_lyra2z330(int thr_id, struct work* work, uint32_t max_no
 					pdata[19] = max(work->nonces[0], h_resNonces[1]) + 1;
 				} else {
 					// sole candidate: skip the rest of the batch (the caller adds 1)
-					const uint64_t next = (uint64_t)pdata[19] + throughput;
+					const uint64_t next = (uint64_t)pdata[19] + n;
 					pdata[19] = (next > max_nonce) ? max_nonce : (uint32_t)next - 1;
 				}
 				return work->valid_nonces;
@@ -258,11 +265,11 @@ extern "C" int scanhash_lyra2z330(int thr_id, struct work* work, uint32_t max_no
 			}
 		}
 
-		if ((uint64_t)throughput + pdata[19] >= max_nonce) {
+		if ((uint64_t)pdata[19] + n > max_nonce) {
 			pdata[19] = max_nonce;
 			break;
 		}
-		pdata[19] += throughput;
+		pdata[19] += n;
 
 	} while (!work_restart[thr_id].restart);
 

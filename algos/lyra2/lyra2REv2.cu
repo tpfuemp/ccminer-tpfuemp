@@ -86,7 +86,6 @@ extern "C" int scanhash_lyra2v2(int thr_id, struct work* work, uint32_t max_nonc
 	int intensity = is_windows() ? 19 : 20;
 	if (device_sm[dev_id] == 610) intensity = 22;   // sm_61
 	uint32_t throughput = cuda_default_throughput(dev_id, 1UL << intensity);
-	if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
 	if (opt_benchmark)
 		ptarget[7] = 0x000f;
@@ -130,19 +129,26 @@ extern "C" int scanhash_lyra2v2(int thr_id, struct work* work, uint32_t max_nonc
 	bmw256_setTarget(ptarget);
 
 	do {
+		// clamp the launch to the range left, max_nonce included
+		const uint32_t n = (uint32_t)min((uint64_t)throughput, (uint64_t)max_nonce - pdata[19] + 1);
+		if (n == 0) {
+			pdata[19] = max_nonce;
+			break;
+		}
+
 		int order = 0;
 
 		//blake256_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
-		blakeKeccak256_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
-		cubehash256_cpu_hash_32(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
-		lyra2v2_cpu_hash_32_soa(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
-		skein256_cpu_hash_32(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
-		cubehash256_cpu_hash_32(thr_id, throughput,pdata[19], d_hash[thr_id], order++);
+		blakeKeccak256_cpu_hash_80(thr_id, n, pdata[19], d_hash[thr_id], order++);
+		cubehash256_cpu_hash_32(thr_id, n, pdata[19], d_hash[thr_id], order++);
+		lyra2v2_cpu_hash_32_soa(thr_id, n, pdata[19], d_hash[thr_id], order++);
+		skein256_cpu_hash_32(thr_id, n, pdata[19], d_hash[thr_id], order++);
+		cubehash256_cpu_hash_32(thr_id, n,pdata[19], d_hash[thr_id], order++);
 
 		memset(work->nonces, 0xff, sizeof(work->nonces));   // UINT32_MAX = "none", matches bmw256
-		bmw256_cpu_hash_32(thr_id, throughput, pdata[19], d_hash[thr_id], work->nonces);
+		bmw256_cpu_hash_32(thr_id, n, pdata[19], d_hash[thr_id], work->nonces);
 
-		*hashes_done = pdata[19] - first_nonce + throughput;
+		*hashes_done = pdata[19] - first_nonce + n;
 
 		if (work->nonces[0] != UINT32_MAX)
 		{
@@ -169,7 +175,7 @@ extern "C" int scanhash_lyra2v2(int thr_id, struct work* work, uint32_t max_nonc
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				} else {
 					// sole candidate: skip the rest of the batch (the caller adds 1)
-					const uint64_t next = (uint64_t)pdata[19] + throughput;
+					const uint64_t next = (uint64_t)pdata[19] + n;
 					pdata[19] = (next > max_nonce) ? max_nonce : (uint32_t)next - 1;
 				}
 				return work->valid_nonces;
@@ -187,11 +193,11 @@ extern "C" int scanhash_lyra2v2(int thr_id, struct work* work, uint32_t max_nonc
 			}
 		}
 
-		if ((uint64_t)throughput + pdata[19] >= max_nonce) {
+		if ((uint64_t)pdata[19] + n > max_nonce) {
 			pdata[19] = max_nonce;
 			break;
 		}
-		pdata[19] += throughput;
+		pdata[19] += n;
 
 	} while (!work_restart[thr_id].restart && !abort_flag);
 

@@ -127,15 +127,22 @@ extern "C" int scanhash_allium(int thr_id, struct work* work, uint32_t max_nonce
 	do {
 		int order = 0;
 
-		blakeKeccak256_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
-		lyra2_cpu_hash_32(thr_id, throughput, d_hash[thr_id]);
-		cubehash256_cpu_hash_32(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
-		lyra2_cpu_hash_32(thr_id, throughput, d_hash[thr_id]);
-		skein256_cpu_hash_32(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
+		// clamp the launch to the range left, max_nonce included
+		const uint32_t n = (uint32_t)min((uint64_t)throughput, (uint64_t)max_nonce - pdata[19] + 1);
+		if (n == 0) {
+			pdata[19] = max_nonce;
+			break;
+		}
 
-		*hashes_done = pdata[19] - first_nonce + throughput;
+		blakeKeccak256_cpu_hash_80(thr_id, n, pdata[19], d_hash[thr_id], order++);
+		lyra2_cpu_hash_32(thr_id, n, d_hash[thr_id]);
+		cubehash256_cpu_hash_32(thr_id, n, pdata[19], d_hash[thr_id], order++);
+		lyra2_cpu_hash_32(thr_id, n, d_hash[thr_id]);
+		skein256_cpu_hash_32(thr_id, n, pdata[19], d_hash[thr_id], order++);
 
-		work->nonces[0] = groestl256_cpu_hash_32(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
+		*hashes_done = pdata[19] - first_nonce + n;
+
+		work->nonces[0] = groestl256_cpu_hash_32(thr_id, n, pdata[19], d_hash[thr_id], order++);
 		if (work->nonces[0] != UINT32_MAX)
 		{
 			const uint32_t Htarg = ptarget[7];
@@ -163,7 +170,7 @@ extern "C" int scanhash_allium(int thr_id, struct work* work, uint32_t max_nonce
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				} else {
 					// sole candidate: skip the rest of the batch (the caller adds 1)
-					const uint64_t next = (uint64_t)pdata[19] + throughput;
+					const uint64_t next = (uint64_t)pdata[19] + n;
 					pdata[19] = (next > max_nonce) ? max_nonce : (uint32_t)next - 1;
 				}
 				return work->valid_nonces;
@@ -181,11 +188,11 @@ extern "C" int scanhash_allium(int thr_id, struct work* work, uint32_t max_nonce
 			}
 		}
 
-		if ((uint64_t)throughput + pdata[19] >= max_nonce) {
+		if ((uint64_t)pdata[19] + n > max_nonce) {
 			pdata[19] = max_nonce;
 			break;
 		}
-		pdata[19] += throughput;
+		pdata[19] += n;
 
 	} while (!work_restart[thr_id].restart);
 
