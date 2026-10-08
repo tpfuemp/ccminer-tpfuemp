@@ -2,6 +2,7 @@
 #include "argon2ref/argon2.h"
 #include "argon2d_kernel.h"
 #include "cuda_helper.h"
+#include "cuda/selftest_gate.cuh"
 #include <cuda_runtime.h>
 
 #define NBN 2
@@ -16,7 +17,8 @@ static bool init[MAX_GPUS] = {0};
 static bool diff_done[MAX_GPUS] = {0};
 uint8_t* memory[MAX_GPUS];
 
-/* Per-coin Argon2 geometry (all: outlen=32, salt=pwd=header). */
+/* Per-coin Argon2 geometry (all: outlen=32, salt=pwd=header).
+ * lanes must be a power of two: compute_ref_pos() masks with lanes-1. */
 static const argon2d_variant v_argon2d500   = ARGON2D_VARIANT_INIT(500, 8, 2, ARGON2_VERSION_10, ARGON2_D);    /* Dynamic (DYN) */
 static const argon2d_variant v_argon2d1000  = ARGON2D_VARIANT_INIT(1000, 8, 2, ARGON2_VERSION_10, ARGON2_D);   /* Zero Dynamics Cash */
 static const argon2d_variant v_argon2d4096  = ARGON2D_VARIANT_INIT(4096, 1, 1, ARGON2_VERSION_13, ARGON2_D);   /* Argentum / Myriad */
@@ -91,6 +93,9 @@ void argon2id1024_hash( void *output, const void *input )
  * only variant that fails CLOSED.
  */
 static bool argon2id_ok = false;
+/* Host KAT verdicts; the GPU self-test compares against the same CPU
+ * reference, so it refuses on these too. */
+static bool kat500_ok, kat1000_ok, kat4096_ok, kat16000_ok, host_neg_ok;
 
 /* Bitweb mainnet block 76523, raw 80-byte header.
  * Source: https://explorer.bitwebcore.net/info
@@ -181,18 +186,25 @@ static void argon2d_selftest_once(void)
 		0xf4,0xfb,0x55,0x64,0xe6,0x71,0x0f,0xd1,0xb8,0xd5,0x6a,0x3c,0x8d,0x24,0xc6,0x94,
 		0x34,0x1b,0x25,0x02,0xd6,0xab,0xa3,0x92,0x99,0x3c,0x66,0x71,0x9e,0x37,0xfb,0xfb
 	};
+	static const unsigned char kat16000[32] = { /* version 0x10, argon2-cffi */
+		0x09,0xa8,0x23,0x46,0x4a,0xca,0x85,0x66,0x73,0xae,0x65,0xcf,0x71,0x5e,0xdf,0x48,
+		0xdd,0x5c,0x56,0x27,0xba,0xf9,0x07,0x36,0xb3,0xa4,0x83,0x0f,0xe5,0xa4,0x1f,0xf4
+	};
 	unsigned char hdr[80], out[32];
 	for (int i = 0; i < 80; i++)
 		hdr[i] = (unsigned char)i;
 
 	argon2d500_hash(out, hdr);
-	const bool kat500_ok = (memcmp(out, kat500, 32) == 0);
+	kat500_ok = (memcmp(out, kat500, 32) == 0);
 
 	argon2d1000_0dync_hash(out, hdr);
-	const bool kat1000_ok = (memcmp(out, kat1000, 32) == 0);
+	kat1000_ok = (memcmp(out, kat1000, 32) == 0);
 
 	argon2d4096_hash(out, hdr);
-	const bool kat4096_ok = (memcmp(out, kat4096, 32) == 0);
+	kat4096_ok = (memcmp(out, kat4096, 32) == 0);
+
+	argon2d16000_hash(out, hdr);
+	kat16000_ok = (memcmp(out, kat16000, 32) == 0);
 
 	argon2id1024_hash(out, hdr);
 	const bool kat_id1024_ok = (memcmp(out, kat_id1024, 32) == 0);
@@ -209,13 +221,14 @@ static void argon2d_selftest_once(void)
 
 	hdr[40] ^= 0x01; /* flip one bit */
 	argon2d500_hash(out, hdr);
-	const bool neg_ok = (memcmp(out, kat500, 32) != 0);
+	host_neg_ok = (memcmp(out, kat500, 32) != 0);
+	const bool neg_ok = host_neg_ok;
 
 	argon2id_ok = kat_id1024_ok && hdr_ok && kat_id_block_ok && rfc_ok && neg_ok;
 
-	if (!(kat500_ok && kat1000_ok && kat4096_ok && neg_ok))
-		applog(LOG_ERR, "argon2d self-test FAILED (kat500 %d kat1000 %d kat4096 %d neg %d)",
-		       (int)kat500_ok, (int)kat1000_ok, (int)kat4096_ok, (int)neg_ok);
+	if (!(kat500_ok && kat1000_ok && kat4096_ok && kat16000_ok && neg_ok))
+		applog(LOG_ERR, "argon2d self-test FAILED (kat500 %d kat1000 %d kat4096 %d kat16000 %d neg %d)",
+		       (int)kat500_ok, (int)kat1000_ok, (int)kat4096_ok, (int)kat16000_ok, (int)neg_ok);
 
 	if (!argon2id_ok) {
 		if (!hdr_ok)
@@ -318,24 +331,17 @@ __host__ static void argon2d_hash_cuda(int thr_id, uint32_t throughput, uint32_t
  */
 #define ARGON2D_DIFF_NONCES 64
 
-static void argon2d_gpu_differential(int thr_id, const argon2d_variant *v,
-    void (*cpu_hash)(void*, const void*), uint32_t *endiandata, uint32_t startNonce)
+/* Runs the three shipping kernels over n consecutive nonces of the header
+ * already uploaded with set_data() and copies the 32-byte digests to h.
+ * n must be a multiple of 16 (the initialize/finalize block geometry) and at
+ * most the allocated batch. Returns false on a CUDA failure. */
+static bool argon2d_gpu_digests(int thr_id, const argon2d_variant *v,
+    uint32_t startNonce, uint32_t n, uint32_t *h)
 {
-    const uint32_t n = ARGON2D_DIFF_NONCES;
-    uint32_t *d_digests = NULL, *h_digests = NULL;
-    uint32_t _ALIGN(64) hdr[20];
-    int bad = 0;
-
-    if (n > throughputs[thr_id]) {
-        gpulog(LOG_DEBUG, thr_id, "differential skipped: batch %u < %u",
-               throughputs[thr_id], n);
-        return;
-    }
+    uint32_t *d_digests = NULL;
 
     if (cudaMalloc((void**)&d_digests, n * 32) != cudaSuccess)
-        return;
-    h_digests = (uint32_t*)calloc(n, 32);
-    if (!h_digests) { cudaFree(d_digests); return; }
+        return false;
 
     const dim3 th_1 = dim3(16, 16, 1);
     const dim3 th_2 = dim3(THREADS_PER_LANE, v->lanes, 1);
@@ -349,7 +355,31 @@ static void argon2d_gpu_differential(int thr_id, const argon2d_variant *v,
     argon2_finalize<<<n/16, th_3, 16 * 258 * sizeof(uint32_t)>>>((block*) memory[thr_id],
         startNonce, 0, d_resNonces[thr_id], v->total_blocks, d_digests);
 
-    if (cudaMemcpy(h_digests, d_digests, n * 32, cudaMemcpyDeviceToHost) == cudaSuccess) {
+    const bool ok = cudaGetLastError() == cudaSuccess &&
+        cudaMemcpy(h, d_digests, n * 32, cudaMemcpyDeviceToHost) == cudaSuccess;
+    cudaFree(d_digests);
+    return ok;
+}
+
+static void argon2d_gpu_differential(int thr_id, const argon2d_variant *v,
+    void (*cpu_hash)(void*, const void*), uint32_t *endiandata, uint32_t startNonce)
+{
+    const uint32_t n = ARGON2D_DIFF_NONCES;
+    uint32_t *h_digests = NULL;
+    uint32_t _ALIGN(64) hdr[20];
+    int bad = 0;
+
+    if (n > throughputs[thr_id]) {
+        gpulog(LOG_DEBUG, thr_id, "differential skipped: batch %u < %u",
+               throughputs[thr_id], n);
+        return;
+    }
+
+    h_digests = (uint32_t*)calloc(n, 32);
+    if (!h_digests)
+        return;
+
+    if (argon2d_gpu_digests(thr_id, v, startNonce, n, h_digests)) {
         memcpy(hdr, endiandata, 80);
         for (uint32_t i = 0; i < n; i++) {
             uint32_t _ALIGN(64) vhash[8];
@@ -372,12 +402,105 @@ static void argon2d_gpu_differential(int thr_id, const argon2d_variant *v,
             gpulog(LOG_DEBUG, thr_id, "GPU/CPU differential: %u/%u digests match", n, n);
     }
 
-    cudaFree(d_digests);
     free(h_digests);
 }
 
+/*
+ * Init-time GPU self-test, once per thread: the three kernels against the CPU
+ * reference over ARGON2D_KAT_NONCES nonces, plus a header bit flipped on the
+ * device that must change the digest and still match the CPU. Fails closed
+ * on a mismatch; a CUDA resource failure only warns.
+ * ARGON2D_SELFTEST_FAULT = kat | neg | cuda | host forces a failure.
+ */
+#define ARGON2D_KAT_NONCES 32 /* two initialize/finalize blocks */
+#define ARGON2D_KAT_START  0x01000007u
+
+static const char *argon2d_fault_mode(int thr_id)
+{
+    const char *m = getenv("ARGON2D_SELFTEST_FAULT");
+    if (m && *m)
+        gpulog(LOG_WARNING, thr_id, "argon2d: SELF-TEST FAULT INJECTION ACTIVE (%s) -- for testing only", m);
+    return (m && *m) ? m : NULL;
+}
+
+static bool argon2d_gpu_selftest_run(int thr_id, const argon2d_variant *v,
+    void (*cpu_hash)(void*, const void*), int *mism, bool *neg_ok)
+{
+    const char *fault = argon2d_fault_mode(thr_id);
+    const uint32_t n = ARGON2D_KAT_NONCES;
+    uint32_t _ALIGN(64) hdr[20], vhash[8];
+    uint32_t _ALIGN(64) gpu[ARGON2D_KAT_NONCES * 8], gpu_neg[8 * ARGON2D_KAT_NONCES];
+
+    *mism = 0;
+    *neg_ok = false;
+
+    for (int i = 0; i < 80; i++)
+        ((uint8_t*)hdr)[i] = (uint8_t)(i * 7 + 1);
+
+    if (fault && !strcmp(fault, "cuda"))
+        return selftest_cuda_fault();
+
+    set_data(hdr);
+    if (!argon2d_gpu_digests(thr_id, v, ARGON2D_KAT_START, n, gpu))
+        return selftest_cuda_fault();
+
+    if (fault && !strcmp(fault, "kat"))
+        gpu[3] ^= 1u;
+
+    for (uint32_t i = 0; i < n; i++) {
+        be32enc(&hdr[19], ARGON2D_KAT_START + i);
+        cpu_hash(vhash, hdr);
+        if (memcmp(vhash, &gpu[i * 8], 32) != 0)
+            (*mism)++;
+    }
+
+    /* negative leg, perturbed on the device side */
+    if (!(fault && !strcmp(fault, "neg")))
+        hdr[1] ^= 0x00000100u;
+    set_data(hdr);
+    if (!argon2d_gpu_digests(thr_id, v, ARGON2D_KAT_START, n, gpu_neg))
+        return selftest_cuda_fault();
+    be32enc(&hdr[19], ARGON2D_KAT_START);
+    cpu_hash(vhash, hdr);
+    *neg_ok = memcmp(gpu_neg, gpu, 32) != 0 && memcmp(gpu_neg, vhash, 32) == 0;
+
+    return true;
+}
+
+/* The host KAT verdict for this variant (argon2d_selftest_once). */
+static bool argon2d_host_kat_ok(const argon2d_variant *v)
+{
+    if (v == &v_argon2d500)   return kat500_ok && host_neg_ok;
+    if (v == &v_argon2d1000)  return kat1000_ok && host_neg_ok;
+    if (v == &v_argon2d4096)  return kat4096_ok && host_neg_ok;
+    if (v == &v_argon2d16000) return kat16000_ok && host_neg_ok;
+    return argon2id_ok;
+}
+
+static void argon2d_gpu_selftest(int thr_id, const char *name, const argon2d_variant *v,
+    void (*cpu_hash)(void*, const void*))
+{
+    int mism = 0;
+    bool neg_ok = false;
+    bool passed = argon2d_gpu_selftest_run(thr_id, v, cpu_hash, &mism, &neg_ok);
+    const char *fault = getenv("ARGON2D_SELFTEST_FAULT");
+    const bool host_ok = argon2d_host_kat_ok(v) && !(fault && !strcmp(fault, "host"));
+
+    /* a failed host KAT is a wrong answer, never a resource fault */
+    if (!host_ok)
+        s_selftest_cuda_fault = false;
+    passed = passed && mism == 0 && neg_ok && host_ok;
+    if (passed)
+        gpulog(LOG_INFO, thr_id, "%s GPU self-test OK (%d/%d digests + negative)",
+               name, ARGON2D_KAT_NONCES, ARGON2D_KAT_NONCES);
+    else
+        gpulog(LOG_ERR, thr_id, "%s GPU self-test FAILED (%d of %d digests differ, negative %d, host KAT %d)",
+               name, mism, ARGON2D_KAT_NONCES, (int)neg_ok, (int)host_ok);
+    selftest_gate(thr_id, name, passed);
+}
+
 static int scanhash_argon2d( int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done,
-    const argon2d_variant *v, void (*cpu_hash)(void*, const void*) )
+    const char *name, const argon2d_variant *v, void (*cpu_hash)(void*, const void*) )
 {
     uint32_t _ALIGN(64) endiandata[20];
     uint32_t *pdata = work->data;
@@ -385,8 +508,13 @@ static int scanhash_argon2d( int thr_id, struct work *work, uint32_t max_nonce, 
     const uint32_t first_nonce = pdata[19];
     uint32_t throughput = 0;
 
-    if (opt_benchmark)
+    /* Benchmark mode restarts this window after every find, so a looser
+     * screen would lower the rate. The wide lower word makes the host accept
+     * everything the GPU screen passes. */
+    if (opt_benchmark) {
         ptarget[7] = 0x0fff;
+        ptarget[6] = 0xffffffff;
+    }
 
     if (!init[thr_id])
     {
@@ -399,8 +527,8 @@ static int scanhash_argon2d( int thr_id, struct work *work, uint32_t max_nonce, 
 
         argon2d_selftest_once();
 
-        /* Fail closed; the four Argon2d variants keep their historic
-         * warn-and-continue behaviour. */
+        /* Fail closed before allocating. The four Argon2d variants refuse
+         * on their host KAT in argon2d_gpu_selftest() below. */
         if (v->type == ARGON2_ID && !argon2id_ok) {
             applog(LOG_ERR, "argon2id1024: refusing to start after a failed self-test");
             proper_exit(EXIT_CODE_SW_INIT_ERROR);
@@ -409,6 +537,8 @@ static int scanhash_argon2d( int thr_id, struct work *work, uint32_t max_nonce, 
         ar_set_throughput(thr_id, v);
 
         argon2d_init(thr_id, v);
+
+        argon2d_gpu_selftest(thr_id, name, v, cpu_hash);
 
         init[thr_id] = true;
     }
@@ -422,7 +552,8 @@ static int scanhash_argon2d( int thr_id, struct work *work, uint32_t max_nonce, 
 
     if (opt_debug && !diff_done[thr_id]) {
         diff_done[thr_id] = true;
-        argon2d_gpu_differential(thr_id, v, cpu_hash, endiandata, pdata[19]);
+        /* unaligned start, so a nonce-mapping slip shows */
+        argon2d_gpu_differential(thr_id, v, cpu_hash, endiandata, pdata[19] + 7);
     }
 
     do {
@@ -433,36 +564,31 @@ static int scanhash_argon2d( int thr_id, struct work *work, uint32_t max_nonce, 
 
         pdata[19] += throughput;
 
-        if (work->nonces[0] != UINT32_MAX)
-        {
+        /* Re-verify each slot on its own: a failure is counted and logged,
+         * and a valid second candidate is kept when the first one fails. */
+        uint32_t valid[NBN];
+        int nvalid = 0;
+        for (int k = 0; k < NBN; k++) {
+            const uint32_t nonce = work->nonces[k];
+            if (nonce == UINT32_MAX)
+                continue;
 
             uint32_t _ALIGN(64) vhash[8];
-            const uint32_t Htarg = ptarget[7];
-            be32enc(&endiandata[19], work->nonces[0]);
-            cpu_hash( vhash, endiandata );
+            be32enc(&endiandata[19], nonce);
+            cpu_hash(vhash, endiandata);
 
-            if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
-                work->valid_nonces = 1;
-                work_set_target_ratio(work, vhash);
+            if (vhash[7] <= ptarget[7] && fulltest(vhash, ptarget)) {
+                if (nvalid == 0)
+                    work_set_target_ratio(work, vhash);
+                else
+                    bn_set_target_ratio(work, vhash, 1);
+                valid[nvalid++] = nonce;
                 if (opt_debug)
-                    gpulog(LOG_DEBUG, thr_id, "found nonce %08x (vhash7 %08x)", work->nonces[0], vhash[7]);
-
-                if (work->nonces[1] != UINT32_MAX) {
-                    be32enc(&endiandata[19], work->nonces[1]);
-                    cpu_hash(vhash, endiandata);
-                    if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
-                        bn_set_target_ratio(work, vhash, 1);
-                        work->valid_nonces++;
-                    }
-                }
-
-                return work->valid_nonces;
-
-            }
-            else if (vhash[7] > Htarg) {
+                    gpulog(LOG_DEBUG, thr_id, "found nonce %08x (vhash7 %08x)", nonce, vhash[7]);
+            } else {
                 gpu_increment_reject(thr_id);
                 if (!opt_quiet) {
-                    gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
+                    gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", nonce);
                     /* full input for offline replay of the mismatch (endiandata
                      * still holds the candidate nonce at word 19) */
                     char *hex = bin2hex((uchar*)endiandata, 80);
@@ -472,7 +598,14 @@ static int scanhash_argon2d( int thr_id, struct work *work, uint32_t max_nonce, 
                     }
                 }
             }
+        }
 
+        if (nvalid) {
+            /* the submit path reads nonces[0] */
+            work->nonces[0] = valid[0];
+            work->nonces[1] = nvalid > 1 ? valid[1] : UINT32_MAX;
+            work->valid_nonces = nvalid;
+            return nvalid;
         }
 
         if ((uint64_t)throughput + pdata[19] >= max_nonce) {
@@ -489,27 +622,27 @@ static int scanhash_argon2d( int thr_id, struct work *work, uint32_t max_nonce, 
 
 int scanhash_argon2d500( int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done )
 {
-    return scanhash_argon2d(thr_id, work, max_nonce, hashes_done, &v_argon2d500, argon2d500_hash);
+    return scanhash_argon2d(thr_id, work, max_nonce, hashes_done, "argon2d500", &v_argon2d500, argon2d500_hash);
 }
 
 int scanhash_argon2d1000( int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done )
 {
-    return scanhash_argon2d(thr_id, work, max_nonce, hashes_done, &v_argon2d1000, argon2d1000_0dync_hash);
+    return scanhash_argon2d(thr_id, work, max_nonce, hashes_done, "argon2d1000", &v_argon2d1000, argon2d1000_0dync_hash);
 }
 
 int scanhash_argon2d4096( int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done )
 {
-    return scanhash_argon2d(thr_id, work, max_nonce, hashes_done, &v_argon2d4096, argon2d4096_hash);
+    return scanhash_argon2d(thr_id, work, max_nonce, hashes_done, "argon2d4096", &v_argon2d4096, argon2d4096_hash);
 }
 
 int scanhash_argon2d16000( int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done )
 {
-    return scanhash_argon2d(thr_id, work, max_nonce, hashes_done, &v_argon2d16000, argon2d16000_hash);
+    return scanhash_argon2d(thr_id, work, max_nonce, hashes_done, "argon2d16000", &v_argon2d16000, argon2d16000_hash);
 }
 
 int scanhash_argon2id1024( int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done )
 {
-    return scanhash_argon2d(thr_id, work, max_nonce, hashes_done, &v_argon2id1024, argon2id1024_hash);
+    return scanhash_argon2d(thr_id, work, max_nonce, hashes_done, "argon2id1024", &v_argon2id1024, argon2id1024_hash);
 }
 
 static void free_argon2d(int thr_id)

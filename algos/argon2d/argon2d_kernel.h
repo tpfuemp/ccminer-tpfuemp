@@ -32,8 +32,8 @@ enum algo_constants {
     ARGON2_PREHASH_DIGEST_LENGTH = 64,
     ARGON2_PREHASH_SEED_LENGTH = 72,
     BLAKE_BLOCKBYTES = 128,
-    /* argon2_fill per-lane shared staging: slot 0 = last-column block for the
-     * final XOR, slots 0..5 double as a cache for ref columns 2..7. Sized
+    /* argon2_fill per-lane shared cache: slots 0..5 hold ref columns 2..7.
+     * The last-column block for the final XOR goes to global memory. Sized
      * lanes*6 blocks at launch (dynamic shared) so lanes=1 coins keep full
      * occupancy while lanes=8 coins keep the cache hits. */
     ARGON2_SHARED_BLOCKS_PER_LANE = 6

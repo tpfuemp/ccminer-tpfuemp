@@ -320,7 +320,8 @@ __device__ void compute_ref_pos(
 {
     uint32_t lane_blocks = ARGON2_SYNC_POINTS * segment_blocks;
 
-    *ref_lane = *ref_lane % lanes;
+    /* lanes is a power of two (argon2d.cu); avoids a runtime division */
+    *ref_lane = *ref_lane & (lanes - 1);
 
     uint32_t base;
     if (pass != 0) {
@@ -399,7 +400,7 @@ __device__ void argon2_core(
      * read); everything else, including the last column, goes to global.
      * The last column must NOT be staged into shared: its natural slot
      * aliases the column-2 cache entry, and other lanes may still legally
-     * ref column 2 within the final slice (no barrier until slice end) —
+     * ref column 2 within the final slice (no barrier until slice end) -
      * overwriting it early made those refs read the final block instead
      * (rare wrong hashes, caught by the host re-verify since the donor). */
     if(curr_index<8 && curr_index >1){

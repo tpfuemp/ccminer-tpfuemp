@@ -26,6 +26,7 @@
 __constant__ uint32_t d_data[20];
 
 #include "argon2d_blake2b_device.cuh"
+#include "cuda/candidate_report.cuh"
 
 __global__ void argon2_initialize(struct block* memory, uint32_t startNonce,
     uint32_t mcost, uint32_t lanes, uint32_t passes, uint32_t version,
@@ -75,11 +76,18 @@ __global__ void argon2_finalize(
     blake2b_compress_4w(&state, &input_64[96], 7, idx);
     blake2b_compress_4w(&state, &input_64[112], 8, idx);
 
+    /* The four threads of a job share this buffer; independent thread
+     * scheduling (sm_70+) needs explicit barriers between read and rewrite. */
+    const uint32_t tail = input[256];
+    __syncwarp();
     zero_buffer(&input[0], idx);
-    input[0]=input[256];
+    input[0] = tail;
+    __syncwarp();
 
     blake2b_compress_4w(&state, &input_64[0], 9, idx, true, 4);
 
+    /* the compress above read the words this store overwrites */
+    __syncwarp();
     input_64[idx] = state.a;
 
     if (digests != NULL)
@@ -88,10 +96,9 @@ __global__ void argon2_finalize(
     __syncthreads();
 
 
-    if (idx == 0 && input[7] <= target) {
-        resNonces[1] = resNonces[0];
-        resNonces[0] = nonce;
-    }
+    /* keeps the two lowest candidates; armed to UINT32_MAX per batch */
+    if (idx == 0 && input[7] <= target)
+        report_candidate_2(resNonces, nonce);
 
 }
 
