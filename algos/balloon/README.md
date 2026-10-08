@@ -1,81 +1,61 @@
 # balloon (`-a balloon`)
 
-Balloon memory-hard hashing (Boneh-Corrigan-Gibbs-Schechter), built on SHA-256,
-relocated from the repo root (`balloon/`).
+Balloon memory-hard hashing (Boneh, Corrigan-Gibbs, Schechter) over SHA-256, with
+`s_cost = 128` (a 128 KB buffer per hash) and 4 mix rounds.
 
-## Layout
+## Files
 
-Relocation only  -  every symbol (`scanhash_balloon`, the balloon core in
-`balloon.cpp`) is unchanged, so the dispatch wiring (`algos.h`, `miner.h`,
-`ccminer.cpp`) is untouched.
+- `balloon.cpp` / `balloon.h` - the CPU reference, used to re-verify every GPU result.
+- `sha256-ref.c` / `sha256.h` - the SHA-256 used by the CPU reference.
+- `balloon_scan.cpp` - the scan driver (`scanhash_balloon`).
+- `cuda_balloon.cu` - the GPU kernel.
+- `balloon_selftest.cpp` - the start-up self-test.
 
-- `balloon.cpp` / `balloon.h`  -  the Balloon hash core.
-- `balloon_scan.cpp`  -  the CUDA scan driver (`scanhash_balloon`).
-- `cuda_balloon.cu`  -  the GPU kernel.
-- `sha256-ref.c` / `sha256.h`  -  the reference SHA-256 used by Balloon.
-- `balloon_selftest.cpp`  -  the init-time consensus gate (see Validation).
+## Kernel
 
-## Shape
+One thread per nonce. Each thread keeps its 4096-block buffer in local memory and
+stores the blocks as SHA-256 state words, so every message is assembled in
+registers and the previous block never round-trips through memory. The block
+index stream depends only on the first 32 header bytes; it is computed on the host
+once per job and shared by all threads, so a warp always reads the same block.
 
-`s_cost = 128` gives a 128 KB buffer per hash, one thread per hash, held as a
-per-thread stack array: 131,264 B stack frame, 111 registers on sm_86 (128 on
-sm_61/75, where the project register cap binds), 0 spills. The `delta` index stream
-derives from the first 32 header bytes only, so it is nonce-independent and shared by
-every thread; local memory is interleaved per thread, so a warp reads the same block
-index in lockstep and the accesses coalesce.
+On sm_80 and newer the SHA-256 additions are issued as multiply-adds (`x * 1 + y`),
+which moves them from the busy integer ALU onto the otherwise idle IMAD pipe. Older
+architectures compile the plain additions.
 
-The index stream itself is AES-128-CTR (OpenSSL), which is why libcrypto is a link
-dependency; everything else is SHA-256.
+Every candidate a launch finds is reported (up to 7 per launch) and submitted, and
+the scan then continues after the whole batch.
 
-## Rates
+## Intensity
 
-| card | run | rate |
-|---|---|---|
-| RTX 3060, `-i 14` | live | ~35-41 kH/s, 160 W, 99-100% GPU utilisation |
-| RTX 3060, `-i 14` | `--benchmark` | ~38 kH/s cold, ~35 kH/s once hot (1727 MHz) |
+The default batch is one "wave": as many threads as the card can keep resident,
+queried from the CUDA occupancy API at start-up and printed as
+`intensity N, M nonces/launch`. A batch that is not a whole number of waves leaves
+part of the GPU idle; more waves add little throughput but lengthen every launch.
 
-Higher intensities add no throughput - the card is already saturated at the
-default - and they do add launch duration, because the kernel is not chunked.
-One launch runs `batch / hashrate` seconds: measured at 0.43 s for `-i 14` and
-0.87 s at `-i 15`, so about 1.7 s at `-i 16` and 3.5 s at `-i 17`. Those are
-cool-card figures, and sustained mining throttles the part by roughly 18%, which
-puts `-i 16` at ~2.0 s once hot.
+| card | default batch | live rate | launch |
+|---|--:|--:|--:|
+| GTX 1080 Ti | 21,504 | ~50-55 kH/s | ~0.37 s |
+| RTX 3060 | 17,920 | ~46 kH/s | ~0.39 s |
 
-That matters twice. Past about two seconds Windows resets a display-attached GPU,
-and because a launch cannot be interrupted the same figure is how long the miner
-keeps hashing a job the pool has already replaced. `scanhash_balloon` times its
-first launch and warns if it lands in that range. Note a short test does not prove
-an intensity is safe: the throttled figure is the one that counts.
+Live rates are 10-minute pool runs on a hot card (85-90 C); a cold card and
+`--benchmark` read higher.
 
-## Move fix
-
-`balloon_scan.cpp` used **parent-relative** includes (`"../miner.h"`,
-`"../cuda_helper.h"`) that resolved to the repo root from the old location.
-Those were changed to the include-path forms (`"miner.h"`, `"cuda_helper.h"`),
-matching the sibling files (`balloon.cpp`, `cuda_balloon.cu`) so the move is
-source-transparent. All other includes are own-folder-relative (`balloon.h`,
-`sha256.h`) or from the project include dirs, and no external file referenced
-the `balloon/` path.
+A launch cannot be interrupted and lasts `batch / hashrate` seconds (~0.4 s at the
+default). That is how long the miner keeps working on a job the pool has already
+replaced, and past about 2 s Windows resets a display-attached GPU. The first
+launch is timed and a warning is printed above 1.5 s; raise `-i` with care, and
+remember a hot card runs slower than a cold one.
 
 ## Validation
 
-`--benchmark` loosens `ptarget[7]` to `0x00ffff` (the usual `0x0000ff` yields ~0
-hits at a kH/s rate) and `balloon_cpu_hash` returns `UINT32_MAX` for "no candidate",
-so a nonce whose host re-hash disagrees is reported rather than silently skipped.
-`--debug` shows the validated hits (`found =>`); release builds print nothing when a
-candidate passes, so a silent run is ambiguous without it.
-
-`balloon_selftest.cpp` runs at init and **refuses to start on failure**. Four legs: a
-pinned known-answer vector for the CPU reference; the real launcher must return the
-lowest passing nonce over a span, as enumerated on the host; re-running with
-`max_nonce` below that winner must exclude it; and perturbing the device input by one
-bit must make the check fail. The screen threshold is taken from the enumerated data
-rather than fixed, so the test cannot go vacuous, and because the launcher returns a
-nonce rather than a digest the check can also detect a *missed* nonce.
-
-Live-verified: 53/53 accepted, 0 rejected, 12 blocks, at a share difficulty of 0.0001
-- far below 1, which is the regime that exercises the GPU-side target screen hardest.
-
-Dead code removal (`conv_onethread`, the `LOWMEM` branch and its `sbufs` argument,
-unused `__constant__`s and their uploads, debug scaffolding) left the kernel's SASS
-unchanged instruction-for-instruction, sm_61/75/86.
+- Every candidate is re-hashed on the CPU before it is submitted.
+- `balloon_selftest.cpp` runs at start-up and **refuses to start on failure**: a
+  pinned known-answer vector for the CPU reference, the GPU's lowest passing nonce
+  over a span compared with a CPU enumeration, a range-limit check, and a negative
+  test that must fail.
+- `--benchmark` loosens the target so candidates are found at a kH/s rate; add
+  `--debug` to see them (`found =>`).
+- Pool-tested on both cards above: every share accepted (63/63 on the RTX 3060,
+  62/62 on the GTX 1080 Ti), including batches that found two shares, at share
+  difficulties down to 0.0001.

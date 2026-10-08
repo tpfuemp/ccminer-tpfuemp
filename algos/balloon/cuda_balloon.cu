@@ -5,25 +5,26 @@
 #include "cuda_helper.h"
 #include "balloon.h"
 #include "sha256.h"
-// The mined header is always 80 bytes. Compile-time, so nvcc folds the copy
-// lengths and drops the length check (which otherwise emits a device printf).
+// The mined header is always 80 bytes; compile-time so the copies fold.
 #define BALLOON_INLEN 80
 
-// Mix pass count; 4 is consensus. A macro only so a timing build can compare
-// reduced-round arms. The default is unchanged and compiles SASS-identical.
+// Mix pass count (t_cost); 4 is consensus. Overridable for timing builds only.
 #ifndef BALLOON_MIXROUNDS
 #define BALLOON_MIXROUNDS 4
 #endif
 
-__global__ void balloon_gpu_hash(struct hash_state *hs, uint64_t *prebuf_le, const uint8_t *input, uint32_t max_nonce, uint32_t *resNonce, const uint32_t *device_target);
-__device__ void cuda_hash_state_mix(struct hash_state *s, int32_t mixrounds, uint64_t *prebuf_le);
-__device__ void device_sha256_osol(const __sha256_block_t blk, __sha256_hash_t ctx);
-__device__ void device_sha256_168byte(uint8_t *data, uint8_t *outhash);
-__device__ void cuda_hash_state_extract(const struct hash_state *s, uint8_t out[BLOCK_SIZE]);
-__device__ void cuda_compress(uint64_t *counter, uint8_t *out, const uint8_t *blocks[], size_t blocks_to_comp);
-__device__ void cuda_expand(uint64_t *counter, uint8_t *buf, size_t blocks_in_buf);
-__device__ void cuda_hash_state_fill(struct hash_state *s, const uint8_t *in, size_t inlen, int32_t t_cost, int64_t s_cost);
-__device__ void device_sha256_generic(uint8_t *data, uint8_t *outhash, uint32_t len);
+// Space cost in KB (4096 blocks of 32 bytes); consensus. Both costs seed the
+// index stream and block 0, so host and kernel must take them from here.
+#define BALLOON_SCOST 128
+
+// Candidates the kernel keeps per launch.
+#define BALLOON_SLOTS MAX_NONCES
+
+__global__ void balloon_gpu_hash(const uint64_t *prebuf_le, const uint8_t *input, uint32_t max_nonce, uint32_t *resNonce, const uint32_t *device_target);
+__device__ void device_sha256_osol(const uint32_t *w, uint32_t *ctx);
+__device__ void device_sha256_bytes(const uint8_t *data, uint32_t len, uint32_t *ctx);
+__device__ void balloon_fill(uint32_t *buf, const uint8_t *in, uint32_t *prev);
+__device__ void balloon_mix(uint32_t *buf, const uint64_t *prebuf_le, uint32_t *prev);
 void host_sha256_osol(const __sha256_block_t blk, __sha256_hash_t ctx);
 void update_device_data(int gpuid);
 
@@ -45,13 +46,17 @@ __constant__ const uint32_t __sha256_init[] = {
 };
 #define UINT2(x,y) make_uint2(x,y);
 #define PREBUF_LEN 409600
+// The mix reads 3 indices per block per round from this table.
+static_assert(3 * 4096 * BALLOON_MIXROUNDS <= PREBUF_LEN / 8,
+	"prebuf_le too small for BALLOON_MIXROUNDS");
+static_assert(BALLOON_SCOST * 1024 / 32 == 4096,
+	"the kernel's block count is fixed at 4096");
 uint64_t host_prebuf_le[20][PREBUF_LEN / 8];
 uint8_t host_prebuf_filled[20] = { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 };
 #define BLOCK_SIZE (32)
 
 uint64_t *device_prebuf_le[20];
 uint32_t *device_winning_nonce[20];
-struct hash_state *device_s[20];
 uint32_t *device_target[20];
 uint8_t *device_input[20];
 
@@ -73,65 +78,69 @@ void fill_prebuf(struct hash_state *s, int gpuid) {
 			buf += 8;
 		}
 		update_device_data(gpuid);
-		//printf("Filled prebuf for GPU %d\n", gpuid);
 	}
 }
 
-// Scans `threads` consecutive nonces from the one encoded in input[76..79]
-// (big-endian) and returns the LOWEST passing the on-device screen, or
-// UINT32_MAX. The caller re-verifies on the CPU.
+// Scans `threads` nonces from the one in input[76..79] (big-endian); returns the
+// lowest passing the device screen, or UINT32_MAX. The caller re-verifies.
 uint32_t balloon_cpu_hash(int thr_id, unsigned char *input, uint32_t threads, uint32_t max_nonce)
 {
 	struct balloon_options opts;
 	struct hash_state s;
-	// 'threads' is the total batch size chosen by the caller (scanhash_balloon).
-	// Each GPU thread owns a 128 KB working buffer, so total launch memory is
-	// 128 KB * threads; the caller sizes the batch to keep the GPU saturated
-	// without exhausting device memory. 64 threads/block keeps 2 warps/block.
+	// One nonce per thread, 64 threads per block.
 	uint32_t num_threads = 64;
 	uint32_t num_blocks = threads / num_threads;
 	if (num_blocks == 0) num_blocks = 1;
-	balloon_init(&opts, (int64_t)128, (int32_t)4);
+	balloon_init(&opts, (int64_t)BALLOON_SCOST, (int32_t)BALLOON_MIXROUNDS);
 	hash_state_init(&s, &opts, input);
 	fill_prebuf(&s, thr_id);
 
-	// hash_state_init() allocates host scratch for the CPU path. The kernel rebuilds
-	// its own local buffer before reading it, so nothing consumes the scratch here:
-	// free it instead of uploading 128 KB per launch that no one dereferences.
+	// Only the index stream is needed here; the kernel builds its own buffer.
 	free(s.buffer);
 	s.buffer = NULL;
 
-	CUDA_SAFE_CALL(cudaMemcpy((void**)device_s[thr_id], (void**)&s, sizeof(struct hash_state), cudaMemcpyHostToDevice));
-
 	CUDA_SAFE_CALL(cudaMemcpy((void**)device_input[thr_id], (void**)input, BALLOON_INLEN, cudaMemcpyHostToDevice));
 
-	// UINT32_MAX is the "no candidate" sentinel AND atomicMin's identity, so the
-	// kernel needs no separate found-flag. 0 would not do: 0 is a legal nonce.
+	// Result buffer: [0] lowest candidate, [1] count, then BALLOON_SLOTS candidates.
+	// UINT32_MAX means none (0 is a legal nonce). Armed in full: all are read back.
+	const uint32_t arm[2 + BALLOON_SLOTS] = { UINT32_MAX, 0 };
 	uint32_t host_winning_nonce = UINT32_MAX;
 
-	// device_target is uploaded per work unit by balloon_setBlock_80(); never source
-	// it from a device symbol (reads as garbage on the host).
-
-	CUDA_SAFE_CALL(cudaMemcpy((void**)device_winning_nonce[thr_id], (void**)&host_winning_nonce, sizeof(uint32_t), cudaMemcpyHostToDevice));
-	balloon_gpu_hash << <num_blocks, num_threads >> > (device_s[thr_id], device_prebuf_le[thr_id], device_input[thr_id], max_nonce, device_winning_nonce[thr_id], device_target[thr_id]);
+	CUDA_SAFE_CALL(cudaMemcpy((void**)device_winning_nonce[thr_id], (void**)arm, sizeof(arm), cudaMemcpyHostToDevice));
+	balloon_gpu_hash << <num_blocks, num_threads >> > (device_prebuf_le[thr_id], device_input[thr_id], max_nonce, device_winning_nonce[thr_id], device_target[thr_id]);
 
 	CUDA_SAFE_CALL(cudaPeekAtLastError());
 
-	//wait for cuda device
 	CUDA_SAFE_CALL(cudaDeviceSynchronize());
 	CUDA_SAFE_CALL(cudaMemcpy((void*)&host_winning_nonce, (void*)device_winning_nonce[thr_id], sizeof(uint32_t), cudaMemcpyDeviceToHost));
 
 	hash_state_free(&s);
 
-	// UINT32_MAX = no candidate (distinct from "found one that fails to re-verify")
 	return host_winning_nonce;
+}
+
+// Candidates of the last launch, ascending; returns how many the kernel found.
+// Above BALLOON_SLOTS out[] is a subset and only the lowest is guaranteed.
+uint32_t balloon_get_candidates(int thr_id, uint32_t *out, uint32_t max_out)
+{
+	uint32_t buf[1 + BALLOON_SLOTS];
+	CUDA_SAFE_CALL(cudaMemcpy(buf, device_winning_nonce[thr_id] + 1, sizeof(buf), cudaMemcpyDeviceToHost));
+	const uint32_t found = buf[0];
+	uint32_t n = found < BALLOON_SLOTS ? found : BALLOON_SLOTS;
+	if (n > max_out) n = max_out;
+	for (uint32_t i = 0; i < n; i++) {
+		uint32_t v = buf[1 + i], j = i;
+		for (; j > 0 && out[j - 1] > v; j--)
+			out[j] = out[j - 1];
+		out[j] = v;
+	}
+	return found;
 }
 
 
 
-// Invalidate the cached pre-buffer so the next balloon_cpu_hash() refills it.
-// The pre-buffer is derived from the first SALT_LEN (32) header bytes only, so
-// it is nonce-independent and must be reset whenever a new work unit arrives.
+// The index stream depends on the first SALT_LEN header bytes only; reset it
+// for every new work unit.
 extern "C" void reset_host_prebuf(int thr_id)
 {
 	host_prebuf_filled[thr_id] = 0;
@@ -140,17 +149,27 @@ extern "C" void reset_host_prebuf(int thr_id)
 void balloon_gpu_init(int thr_id)
 {
 	CUDA_SAFE_CALL(cudaMalloc((void**)&device_prebuf_le[thr_id], (PREBUF_LEN / 8) * sizeof(uint64_t)));
-	CUDA_SAFE_CALL(cudaMalloc((void**)&device_winning_nonce[thr_id], sizeof(uint32_t)));
-	CUDA_SAFE_CALL(cudaMalloc((void**)&device_s[thr_id], sizeof(struct hash_state)));
+	CUDA_SAFE_CALL(cudaMalloc((void**)&device_winning_nonce[thr_id], (2 + BALLOON_SLOTS) * sizeof(uint32_t)));
 	CUDA_SAFE_CALL(cudaMalloc((void**)&device_target[thr_id], 8 * sizeof(uint32_t)));
 	CUDA_SAFE_CALL(cudaMalloc((void**)&device_input[thr_id], BALLOON_INLEN));
+}
+
+// Threads the device keeps resident at once for this kernel (one "wave"), from
+// the occupancy API, so it follows the arch. 0 if the query fails.
+uint32_t balloon_wave_threads(int thr_id)
+{
+	int dev = device_map[thr_id];
+	int sms = 0, blocks = 0;
+	if (cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev) != cudaSuccess ||
+	    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocks, balloon_gpu_hash, 64, 0) != cudaSuccess)
+		return 0;
+	return (uint32_t)sms * (uint32_t)blocks * 64U;
 }
 
 __host__ void balloon_setBlock_80(int thr_id, void *pdata, const void *pTargetIn)
 {
 
-	// The kernel compares against the device_target buffer (not the __constant__
-	// pTarget symbol), so upload the real host target here.
+	// Upload the host target (a device symbol read on the host is garbage).
 	CUDA_SAFE_CALL(cudaMemcpy(device_target[thr_id], pTargetIn, 8 * sizeof(uint32_t), cudaMemcpyHostToDevice));
 
 	if (opt_debug)
@@ -160,256 +179,35 @@ __host__ void balloon_setBlock_80(int thr_id, void *pdata, const void *pTargetIn
 void update_device_data(int thr_id) {
 
 	CUDA_SAFE_CALL(cudaMemcpy(device_prebuf_le[thr_id], host_prebuf_le[thr_id], (PREBUF_LEN / 8) * sizeof(uint64_t), cudaMemcpyHostToDevice));
-	//checkCudaErrors(cudaMemcpyToSymbol(device_prebuf_le, host_prebuf_le, 409600/8 * sizeof(uint64_t), 0, cudaMemcpyHostToDevice));
 
 }
 
-__global__ void balloon_gpu_hash(struct hash_state *hs, uint64_t *prebuf_le, const uint8_t *input, uint32_t max_nonce, uint32_t *resNonce, const uint32_t *device_target) {
-
-	int64_t s_cost = (int64_t)128;
-	int32_t mixrounds = (int32_t)BALLOON_MIXROUNDS;
+__global__ void balloon_gpu_hash(const uint64_t *prebuf_le, const uint8_t *input, uint32_t max_nonce, uint32_t *resNonce, const uint32_t *device_target) {
 
 	uint32_t id = blockDim.x*blockIdx.x + threadIdx.x;
 	uint32_t nonce = ((input[76] << 24) | (input[77] << 16) | (input[78] << 8) | input[79]) + id;
-	// Range guard only, deliberately: a "has anyone won yet" poll would let blocks
-	// scheduled after a candidate exit without hashing while the host still advances
-	// its cursor over the whole batch, silently skipping nonces.
+	// Range guard only: no early exit once a candidate is found, or nonces the
+	// host counts as scanned would be skipped.
 	if (nonce > max_nonce)
 		return;
 
 	uint8_t local_input[BALLOON_INLEN];
-	struct hash_state local_s;
 	memcpy(local_input, input, BALLOON_INLEN);
-	memcpy(&local_s, hs, sizeof(struct hash_state));
-
-	uint8_t local_sbuf[4096 * BLOCK_SIZE];
-
-	// No need to seed local_sbuf from hs->buffer: cuda_hash_state_fill() below
-	// rewrites every block (block 0 via SHA-256, blocks 1..n via cuda_expand)
-	// before cuda_hash_state_mix() reads any of them. The old copy moved 128 KB
-	// per thread (~384 MB/launch of dead global<->local traffic).
-
-	local_s.buffer = local_sbuf;
 	((uint32_t*)local_input)[19] = cuda_swab32(nonce);
-	local_s.counter = 0;
-	cuda_hash_state_fill(&local_s, local_input, BALLOON_INLEN, mixrounds, s_cost);
-	cuda_hash_state_mix(&local_s, mixrounds, prebuf_le);
-	if (((uint32_t*)(local_sbuf + (4095 << 5)))[7] < device_target[7]) {
-		// Lowest candidate of the batch, atomically: a plain store lets two
-		// concurrent candidates race and loses one. With atomicMin the survivor
-		// is the lowest, and the host's "+1" resume re-finds any higher one.
+
+	// 4096 blocks of 8 state words, 128 KB per thread (local memory).
+	__align__(16) uint32_t buf[4096 * 8];
+	uint32_t prev[8];
+	balloon_fill(buf, local_input, prev);
+	balloon_mix(buf, prebuf_le, prev);
+
+	// prev = last block; compare digest bytes 28..31 as a little-endian word
+	if (cuda_swab32(prev[7]) < device_target[7]) {
+		// Lowest candidate atomically, plus up to BALLOON_SLOTS in arrival order.
 		atomicMin(resNonce, nonce);
-	}
-	}
-
-__device__ void cuda_expand(uint64_t *counter, uint8_t *buf, size_t blocks_in_buf) {
-	const uint8_t *blocks[1] = { buf };
-	uint8_t *cur = buf + BLOCK_SIZE;
-	for (size_t i = 1; i < blocks_in_buf; i++) {
-		cuda_compress(counter, cur, blocks, 1);
-		*blocks += BLOCK_SIZE;
-		cur += BLOCK_SIZE;
-	}
-}
-
-__device__ void cuda_compress(uint64_t *counter, uint8_t *out, const uint8_t *blocks[], size_t blocks_to_comp) {
-	uint8_t data[168];
-	uint8_t *dp = (uint8_t*)data;
-	uint8_t len = BLOCK_SIZE * blocks_to_comp + 8;
-	memcpy(dp, counter, 8);
-	dp += 8;
-	for (unsigned int i = 0; i < blocks_to_comp; i++) {
-		memcpy(dp, *(blocks + i), BLOCK_SIZE);
-		dp += BLOCK_SIZE;
-	}
-	device_sha256_generic(data, out, len);
-	*counter += 1;
-}
-
-__device__ void cuda_hash_state_fill(struct hash_state *s, const uint8_t *in, size_t inlen, int32_t t_cost, int64_t s_cost) {
-	uint8_t data[132];
-	//uint32_t shalen = 8+SALT_LEN+inlen+8+4;
-	uint8_t *dp = (uint8_t*)data;
-	// inlen is BALLOON_INLEN at every call site.
-	memcpy(dp, &s->counter, 8);
-	dp += 8;
-	memcpy(dp, in, SALT_LEN);
-	dp += SALT_LEN;
-	memcpy(dp, in, inlen);
-	dp += inlen;
-	memcpy(dp, &s_cost, 8);
-	dp += 8;
-	memcpy(dp, &t_cost, 4);
-
-	device_sha256_generic(data, s->buffer, 132);
-	s->counter++;
-	cuda_expand(&s->counter, s->buffer, s->n_blocks);
-}
-
-
-
-
-__device__ void cuda_hash_state_mix(struct hash_state *s, int32_t mixrounds, uint64_t *prebuf_le) {
-	uint64_t *buf = prebuf_le;
-	uint8_t *sbuf = s->buffer;
-
-	//int32_t n_blocks = s->n_blocks;
-	const int32_t n_blocks = 4096;
-	mixrounds = BALLOON_MIXROUNDS;
-	uint8_t *last_block = (sbuf + (BLOCK_SIZE*(n_blocks - 1)));
-	uint8_t *blocks[5];
-	unsigned char data[8 + BLOCK_SIZE * 5];
-	unsigned char *db1 = data + 8;
-	unsigned char *db2 = data + 40;
-	unsigned char *db3 = data + 72;
-	unsigned char *db4 = data + 104;
-	unsigned char *db5 = data + 136;
-	for (int32_t rounds = 0; rounds < mixrounds; rounds++) {
-		{ // i = 0
-			blocks[0] = last_block;
-			blocks[1] = sbuf;
-			/*blocks[2] = (sbuf + (BLOCK_SIZE * (*(buf++))));
-			blocks[3] = (sbuf + (BLOCK_SIZE * (*(buf++))));
-			blocks[4] = (sbuf + (BLOCK_SIZE * (*(buf++))));*/
-
-			blocks[2] = (sbuf + ((*(buf++))));
-			blocks[3] = (sbuf + ((*(buf++))));
-			blocks[4] = (sbuf + ((*(buf++))));
-
-			// New sha256
-			//block = (uint8_t**)blocks;
-			memcpy(data, &s->counter, 8);
-			memcpy(db1, blocks[0], BLOCK_SIZE);
-			memcpy(db2, blocks[1], BLOCK_SIZE);
-			memcpy(db3, blocks[2], BLOCK_SIZE);
-			memcpy(db4, blocks[3], BLOCK_SIZE);
-			memcpy(db5, blocks[4], BLOCK_SIZE);
-			device_sha256_168byte(data, (uint8_t*)blocks[1]);
-			s->counter++;
-		}
-		for (size_t i = 1; i < n_blocks; i++) {
-			blocks[0] = blocks[1];
-			blocks[1] += BLOCK_SIZE;
-			/*blocks[2] = (sbuf + (BLOCK_SIZE * (*(buf++))));
-			blocks[3] = (sbuf + (BLOCK_SIZE * (*(buf++))));
-			blocks[4] = (sbuf + (BLOCK_SIZE * (*(buf++))));*/
-
-			blocks[2] = (sbuf + ((*(buf++))));
-			blocks[3] = (sbuf + ((*(buf++))));
-			blocks[4] = (sbuf + ((*(buf++))));
-
-			// New sha256
-			memcpy(data, &s->counter, 8);
-			memcpy(db1, blocks[0], BLOCK_SIZE);
-			memcpy(db2, blocks[1], BLOCK_SIZE);
-			memcpy(db3, blocks[2], BLOCK_SIZE);
-			memcpy(db4, blocks[3], BLOCK_SIZE);
-			memcpy(db5, blocks[4], BLOCK_SIZE);
-			device_sha256_168byte(data, (uint8_t*)blocks[1]);
-			s->counter++;
-		}
-		//s->has_mixed = true;
-	}
-}
-
-__device__ void device_sha256_168byte(uint8_t *data, uint8_t *outhash) {
-	// outhash should be 32 byte
-	//
-	// l = 168byte => 1344bit (requires 3 blocks)
-	// (k + 1 + l) mod 512 = 448
-	// 512 * 3 = 1536 >= 1344:
-	// k = 3*512 - 65 - l = 1536 - 65 - 1344 = 127 bits of padding => 15.875 bytes
-
-	//__attribute__((aligned(16)))
-	__sha256_block_t block[3];
-	uint8_t *ptr = (uint8_t*)block;
-	// 168 bytes of data
-	memcpy(ptr, data, 168);
-	ptr += 168;
-
-	*ptr++ = 0x80; // End of string marker (and 7 bits padding)
-				   // Pad to (k+l+1 = 448 mod 512)
-				   // l = 168*8 = 1344bits
-				   // Blocks: 512bit | 512bit | 512bit
-				   // (512*3-65-l) = 1536-65-l = 1471 - l = 1471-1344 = 127bit = 15.875 bytes
-				   //memset(ptr, 0, 15);
-				   //ptr += 15;
-	memset(ptr, 0, 21);
-	ptr += 21;
-	// 8 bytes is length (in bits)
-	// 1344bit = 0x540
-	/**ptr++ = 0x0;
-	*ptr++ = 0;
-	*ptr++ = 0;
-	*ptr++ = 0;
-	*ptr++ = 0;
-	*ptr++ = 0;*/
-	*ptr++ = 0x5;
-	*ptr++ = 0x40;
-
-	__sha256_hash_t ohash;
-	memcpy(ohash, __sha256_init, 32);
-	device_sha256_osol(block[0], ohash);
-	device_sha256_osol(block[1], ohash);
-	device_sha256_osol(block[2], ohash);
-
-	uint8_t *h = (uint8_t*)ohash;
-	uint8_t *outp = outhash;
-	for (int i = 0; i < 32 / 4; i++) {
-		// Fix endianness at the same time
-		*outp++ = h[3];
-		*outp++ = h[2];
-		*outp++ = h[1];
-		*outp++ = h[0];
-		h += 4;
-	}
-}
-
-__device__ void device_sha256_generic(uint8_t *data, uint8_t *outhash, uint32_t len) {
-	// Invariant: len <= 184 (three SHA-256 blocks minus the length field). Both call
-	// sites are compile-time bounded (132 and 40), so no runtime clamp is needed.
-	uint8_t num_blocks = len / 64 + 1;
-	uint32_t tot_len = num_blocks * 512 - 65; // 64bit header
-	uint32_t num_padding = (tot_len - len * 8) / 8;
-
-	//__attribute__((aligned(16)))
-	__sha256_block_t block[3];
-	uint8_t *ptr = (uint8_t*)block;
-	memcpy(ptr, data, len);
-	ptr += len;
-
-	*ptr++ = 0x80; // End of string marker (and 7 bits padding)
-				   // Pad to (k+l+1 = 448 mod 512)
-				   // l = 168*8 = 1344bits
-				   // Blocks: 512bit | 512bit | 512bit
-				   // (512*3-65-l) = 1536-65-l = 1471 - l = 1471-1344 = 127bit = 15.875 bytes
-	memset(ptr, 0, num_padding);
-	ptr += num_padding;
-	// 8 bytes is length (in bits)
-	*ptr++ = 0;
-	*ptr++ = 0;
-	*ptr++ = 0;
-	*ptr++ = 0;
-	*ptr++ = 0;
-	*ptr++ = 0;
-	*ptr++ = ((len * 8) & 0xff00) >> 8;
-	*ptr++ = (len * 8) & 0xff;
-
-	__sha256_hash_t ohash;
-	memcpy(ohash, __sha256_init, 32);
-	for (int i = 0; i < num_blocks; i++) {
-		device_sha256_osol(block[i], ohash);
-	}
-
-	uint8_t *h = (uint8_t*)ohash;
-	uint8_t *outp = outhash;
-	for (int i = 0; i < 32 / 4; i++) {
-		// Fix endianness at the same time
-		*outp++ = h[3];
-		*outp++ = h[2];
-		*outp++ = h[1];
-		*outp++ = h[0];
-		h += 4;
+		const uint32_t k = atomicAdd(resNonce + 1, 1);
+		if (k < BALLOON_SLOTS)
+			resNonce[2 + k] = nonce;
 	}
 }
 
@@ -509,11 +307,30 @@ __device__ void device_sha256_generic(uint8_t *data, uint8_t *outhash, uint32_t 
 #define	SIGMA0_256(x)		(ROTR((x), 7) ^ ROTR((x), 18) ^ SHR((x), 3))
 #define	SIGMA1_256(x)		(ROTR((x), 17) ^ ROTR((x), 19) ^ SHR((x), 10))
 
+// sm_80+: issue adds as x * 1 + y on the idle IMAD pipe instead of the busy ALU;
+// the 1 is in constant memory so ptxas cannot fold it back to an ALU add.
+__constant__ uint32_t c_balloon_one = 1;
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+__device__ __forceinline__ uint32_t madd(uint32_t x, uint32_t y)
+{
+	uint32_t r;
+	asm("mad.lo.u32 %0, %1, %2, %3;" : "=r"(r) : "r"(x), "r"(c_balloon_one), "r"(y));
+	return r;
+}
+#define	T1_SUM(e, f, g, h, i, w)	madd(madd(h, SHA256_CONST(i)), madd(madd(BIGSIGMA1_256(e), Ch(e, f, g)), w))
+#define	ADD2(x, y)		madd(x, y)
+#define	W_NEXT(s1, a, s0, b)	madd(madd(SIGMA1_256(s1), a), madd(SIGMA0_256(s0), b))
+#else
+#define	T1_SUM(e, f, g, h, i, w)	(h + BIGSIGMA1_256(e) + Ch(e, f, g) + SHA256_CONST(i) + w)
+#define	ADD2(x, y)		((x) + (y))
+#define	W_NEXT(s1, a, s0, b)	(SIGMA1_256(s1) + a + SIGMA0_256(s0) + b)
+#endif
+
 #define	SHA256ROUND(a, b, c, d, e, f, g, h, i, w)			\
-T1 = h + BIGSIGMA1_256(e) + Ch(e, f, g) + SHA256_CONST(i) + w;	\
+T1 = T1_SUM(e, f, g, h, i, w);					\
 d += T1;							\
 T2 = BIGSIGMA0_256(a) + Maj(a, b, c);				\
-h = T1 + T2
+h = ADD2(T1, T2)
 
 
 /*
@@ -714,11 +531,8 @@ void host_sha256_osol(const __sha256_block_t blk, __sha256_hash_t ctx) {
 	w15 = SIGMA1_256(w13) + w8 + SIGMA0_256(w0) + w15;
 	SHA256ROUND(b, c, d, e, f, g, h, a, 63, w15);
 
-	//printf("%s last d: %08x\n", __func__, d);
 
-	//printf("%s a: %08x %08x\n", __func__, a, ctx[0]);
 	ctx[0] += a;
-	//printf("%s a: %08x\n", __func__, ctx[0]);
 	ctx[1] += b;
 	ctx[2] += c;
 	ctx[3] += d;
@@ -729,7 +543,7 @@ void host_sha256_osol(const __sha256_block_t blk, __sha256_hash_t ctx) {
 
 }
 
-__device__ void device_sha256_osol(const __sha256_block_t blk, __sha256_hash_t ctx) {
+__device__ void device_sha256_osol(const uint32_t *w, uint32_t *ctx) {
 	uint32_t a = ctx[0];
 	uint32_t b = ctx[1];
 	uint32_t c = ctx[2];
@@ -744,161 +558,158 @@ __device__ void device_sha256_osol(const __sha256_block_t blk, __sha256_hash_t c
 	uint32_t T1, T2;
 
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w0 = LOAD_BIG_32(blk + 4 * 0);
+	w0 = w[0];
 	dumpstate();
 	SHA256ROUND(a, b, c, d, e, f, g, h, 0, w0);
 	dumpstate();
 
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w1 = LOAD_BIG_32(blk + 4 * 1);
+	w1 = w[1];
 	SHA256ROUND(h, a, b, c, d, e, f, g, 1, w1);
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w2 = LOAD_BIG_32(blk + 4 * 2);
+	w2 = w[2];
 	SHA256ROUND(g, h, a, b, c, d, e, f, 2, w2);
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w3 = LOAD_BIG_32(blk + 4 * 3);
+	w3 = w[3];
 	SHA256ROUND(f, g, h, a, b, c, d, e, 3, w3);
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w4 = LOAD_BIG_32(blk + 4 * 4);
+	w4 = w[4];
 	SHA256ROUND(e, f, g, h, a, b, c, d, 4, w4);
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w5 = LOAD_BIG_32(blk + 4 * 5);
+	w5 = w[5];
 	SHA256ROUND(d, e, f, g, h, a, b, c, 5, w5);
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w6 = LOAD_BIG_32(blk + 4 * 6);
+	w6 = w[6];
 	SHA256ROUND(c, d, e, f, g, h, a, b, 6, w6);
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w7 = LOAD_BIG_32(blk + 4 * 7);
+	w7 = w[7];
 	SHA256ROUND(b, c, d, e, f, g, h, a, 7, w7);
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w8 = LOAD_BIG_32(blk + 4 * 8);
+	w8 = w[8];
 	SHA256ROUND(a, b, c, d, e, f, g, h, 8, w8);
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w9 = LOAD_BIG_32(blk + 4 * 9);
+	w9 = w[9];
 	SHA256ROUND(h, a, b, c, d, e, f, g, 9, w9);
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w10 = LOAD_BIG_32(blk + 4 * 10);
+	w10 = w[10];
 	SHA256ROUND(g, h, a, b, c, d, e, f, 10, w10);
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w11 = LOAD_BIG_32(blk + 4 * 11);
+	w11 = w[11];
 	SHA256ROUND(f, g, h, a, b, c, d, e, 11, w11);
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w12 = LOAD_BIG_32(blk + 4 * 12);
+	w12 = w[12];
 	SHA256ROUND(e, f, g, h, a, b, c, d, 12, w12);
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w13 = LOAD_BIG_32(blk + 4 * 13);
+	w13 = w[13];
 	SHA256ROUND(d, e, f, g, h, a, b, c, 13, w13);
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w14 = LOAD_BIG_32(blk + 4 * 14);
+	w14 = w[14];
 	SHA256ROUND(c, d, e, f, g, h, a, b, 14, w14);
 	/* LINTED E_BAD_PTR_CAST_ALIGN */
-	w15 = LOAD_BIG_32(blk + 4 * 15);
+	w15 = w[15];
 	SHA256ROUND(b, c, d, e, f, g, h, a, 15, w15);
 
-	w0 = SIGMA1_256(w14) + w9 + SIGMA0_256(w1) + w0;
+	w0 = W_NEXT(w14, w9, w1, w0);
 	SHA256ROUND(a, b, c, d, e, f, g, h, 16, w0);
-	w1 = SIGMA1_256(w15) + w10 + SIGMA0_256(w2) + w1;
+	w1 = W_NEXT(w15, w10, w2, w1);
 	SHA256ROUND(h, a, b, c, d, e, f, g, 17, w1);
-	w2 = SIGMA1_256(w0) + w11 + SIGMA0_256(w3) + w2;
+	w2 = W_NEXT(w0, w11, w3, w2);
 	SHA256ROUND(g, h, a, b, c, d, e, f, 18, w2);
-	w3 = SIGMA1_256(w1) + w12 + SIGMA0_256(w4) + w3;
+	w3 = W_NEXT(w1, w12, w4, w3);
 	SHA256ROUND(f, g, h, a, b, c, d, e, 19, w3);
-	w4 = SIGMA1_256(w2) + w13 + SIGMA0_256(w5) + w4;
+	w4 = W_NEXT(w2, w13, w5, w4);
 	SHA256ROUND(e, f, g, h, a, b, c, d, 20, w4);
-	w5 = SIGMA1_256(w3) + w14 + SIGMA0_256(w6) + w5;
+	w5 = W_NEXT(w3, w14, w6, w5);
 	SHA256ROUND(d, e, f, g, h, a, b, c, 21, w5);
-	w6 = SIGMA1_256(w4) + w15 + SIGMA0_256(w7) + w6;
+	w6 = W_NEXT(w4, w15, w7, w6);
 	SHA256ROUND(c, d, e, f, g, h, a, b, 22, w6);
-	w7 = SIGMA1_256(w5) + w0 + SIGMA0_256(w8) + w7;
+	w7 = W_NEXT(w5, w0, w8, w7);
 	SHA256ROUND(b, c, d, e, f, g, h, a, 23, w7);
-	w8 = SIGMA1_256(w6) + w1 + SIGMA0_256(w9) + w8;
+	w8 = W_NEXT(w6, w1, w9, w8);
 	SHA256ROUND(a, b, c, d, e, f, g, h, 24, w8);
-	w9 = SIGMA1_256(w7) + w2 + SIGMA0_256(w10) + w9;
+	w9 = W_NEXT(w7, w2, w10, w9);
 	SHA256ROUND(h, a, b, c, d, e, f, g, 25, w9);
-	w10 = SIGMA1_256(w8) + w3 + SIGMA0_256(w11) + w10;
+	w10 = W_NEXT(w8, w3, w11, w10);
 	SHA256ROUND(g, h, a, b, c, d, e, f, 26, w10);
-	w11 = SIGMA1_256(w9) + w4 + SIGMA0_256(w12) + w11;
+	w11 = W_NEXT(w9, w4, w12, w11);
 	SHA256ROUND(f, g, h, a, b, c, d, e, 27, w11);
-	w12 = SIGMA1_256(w10) + w5 + SIGMA0_256(w13) + w12;
+	w12 = W_NEXT(w10, w5, w13, w12);
 	SHA256ROUND(e, f, g, h, a, b, c, d, 28, w12);
-	w13 = SIGMA1_256(w11) + w6 + SIGMA0_256(w14) + w13;
+	w13 = W_NEXT(w11, w6, w14, w13);
 	SHA256ROUND(d, e, f, g, h, a, b, c, 29, w13);
-	w14 = SIGMA1_256(w12) + w7 + SIGMA0_256(w15) + w14;
+	w14 = W_NEXT(w12, w7, w15, w14);
 	SHA256ROUND(c, d, e, f, g, h, a, b, 30, w14);
-	w15 = SIGMA1_256(w13) + w8 + SIGMA0_256(w0) + w15;
+	w15 = W_NEXT(w13, w8, w0, w15);
 	SHA256ROUND(b, c, d, e, f, g, h, a, 31, w15);
 
-	w0 = SIGMA1_256(w14) + w9 + SIGMA0_256(w1) + w0;
+	w0 = W_NEXT(w14, w9, w1, w0);
 	SHA256ROUND(a, b, c, d, e, f, g, h, 32, w0);
-	w1 = SIGMA1_256(w15) + w10 + SIGMA0_256(w2) + w1;
+	w1 = W_NEXT(w15, w10, w2, w1);
 	SHA256ROUND(h, a, b, c, d, e, f, g, 33, w1);
-	w2 = SIGMA1_256(w0) + w11 + SIGMA0_256(w3) + w2;
+	w2 = W_NEXT(w0, w11, w3, w2);
 	SHA256ROUND(g, h, a, b, c, d, e, f, 34, w2);
-	w3 = SIGMA1_256(w1) + w12 + SIGMA0_256(w4) + w3;
+	w3 = W_NEXT(w1, w12, w4, w3);
 	SHA256ROUND(f, g, h, a, b, c, d, e, 35, w3);
-	w4 = SIGMA1_256(w2) + w13 + SIGMA0_256(w5) + w4;
+	w4 = W_NEXT(w2, w13, w5, w4);
 	SHA256ROUND(e, f, g, h, a, b, c, d, 36, w4);
-	w5 = SIGMA1_256(w3) + w14 + SIGMA0_256(w6) + w5;
+	w5 = W_NEXT(w3, w14, w6, w5);
 	SHA256ROUND(d, e, f, g, h, a, b, c, 37, w5);
-	w6 = SIGMA1_256(w4) + w15 + SIGMA0_256(w7) + w6;
+	w6 = W_NEXT(w4, w15, w7, w6);
 	SHA256ROUND(c, d, e, f, g, h, a, b, 38, w6);
-	w7 = SIGMA1_256(w5) + w0 + SIGMA0_256(w8) + w7;
+	w7 = W_NEXT(w5, w0, w8, w7);
 	SHA256ROUND(b, c, d, e, f, g, h, a, 39, w7);
-	w8 = SIGMA1_256(w6) + w1 + SIGMA0_256(w9) + w8;
+	w8 = W_NEXT(w6, w1, w9, w8);
 	SHA256ROUND(a, b, c, d, e, f, g, h, 40, w8);
-	w9 = SIGMA1_256(w7) + w2 + SIGMA0_256(w10) + w9;
+	w9 = W_NEXT(w7, w2, w10, w9);
 	SHA256ROUND(h, a, b, c, d, e, f, g, 41, w9);
-	w10 = SIGMA1_256(w8) + w3 + SIGMA0_256(w11) + w10;
+	w10 = W_NEXT(w8, w3, w11, w10);
 	SHA256ROUND(g, h, a, b, c, d, e, f, 42, w10);
-	w11 = SIGMA1_256(w9) + w4 + SIGMA0_256(w12) + w11;
+	w11 = W_NEXT(w9, w4, w12, w11);
 	SHA256ROUND(f, g, h, a, b, c, d, e, 43, w11);
-	w12 = SIGMA1_256(w10) + w5 + SIGMA0_256(w13) + w12;
+	w12 = W_NEXT(w10, w5, w13, w12);
 	SHA256ROUND(e, f, g, h, a, b, c, d, 44, w12);
-	w13 = SIGMA1_256(w11) + w6 + SIGMA0_256(w14) + w13;
+	w13 = W_NEXT(w11, w6, w14, w13);
 	SHA256ROUND(d, e, f, g, h, a, b, c, 45, w13);
-	w14 = SIGMA1_256(w12) + w7 + SIGMA0_256(w15) + w14;
+	w14 = W_NEXT(w12, w7, w15, w14);
 	SHA256ROUND(c, d, e, f, g, h, a, b, 46, w14);
-	w15 = SIGMA1_256(w13) + w8 + SIGMA0_256(w0) + w15;
+	w15 = W_NEXT(w13, w8, w0, w15);
 	SHA256ROUND(b, c, d, e, f, g, h, a, 47, w15);
 
-	w0 = SIGMA1_256(w14) + w9 + SIGMA0_256(w1) + w0;
+	w0 = W_NEXT(w14, w9, w1, w0);
 	SHA256ROUND(a, b, c, d, e, f, g, h, 48, w0);
-	w1 = SIGMA1_256(w15) + w10 + SIGMA0_256(w2) + w1;
+	w1 = W_NEXT(w15, w10, w2, w1);
 	SHA256ROUND(h, a, b, c, d, e, f, g, 49, w1);
-	w2 = SIGMA1_256(w0) + w11 + SIGMA0_256(w3) + w2;
+	w2 = W_NEXT(w0, w11, w3, w2);
 	SHA256ROUND(g, h, a, b, c, d, e, f, 50, w2);
-	w3 = SIGMA1_256(w1) + w12 + SIGMA0_256(w4) + w3;
+	w3 = W_NEXT(w1, w12, w4, w3);
 	SHA256ROUND(f, g, h, a, b, c, d, e, 51, w3);
-	w4 = SIGMA1_256(w2) + w13 + SIGMA0_256(w5) + w4;
+	w4 = W_NEXT(w2, w13, w5, w4);
 	SHA256ROUND(e, f, g, h, a, b, c, d, 52, w4);
-	w5 = SIGMA1_256(w3) + w14 + SIGMA0_256(w6) + w5;
+	w5 = W_NEXT(w3, w14, w6, w5);
 	SHA256ROUND(d, e, f, g, h, a, b, c, 53, w5);
-	w6 = SIGMA1_256(w4) + w15 + SIGMA0_256(w7) + w6;
+	w6 = W_NEXT(w4, w15, w7, w6);
 	SHA256ROUND(c, d, e, f, g, h, a, b, 54, w6);
-	w7 = SIGMA1_256(w5) + w0 + SIGMA0_256(w8) + w7;
+	w7 = W_NEXT(w5, w0, w8, w7);
 	SHA256ROUND(b, c, d, e, f, g, h, a, 55, w7);
-	w8 = SIGMA1_256(w6) + w1 + SIGMA0_256(w9) + w8;
+	w8 = W_NEXT(w6, w1, w9, w8);
 	SHA256ROUND(a, b, c, d, e, f, g, h, 56, w8);
-	w9 = SIGMA1_256(w7) + w2 + SIGMA0_256(w10) + w9;
+	w9 = W_NEXT(w7, w2, w10, w9);
 	SHA256ROUND(h, a, b, c, d, e, f, g, 57, w9);
-	w10 = SIGMA1_256(w8) + w3 + SIGMA0_256(w11) + w10;
+	w10 = W_NEXT(w8, w3, w11, w10);
 	SHA256ROUND(g, h, a, b, c, d, e, f, 58, w10);
-	w11 = SIGMA1_256(w9) + w4 + SIGMA0_256(w12) + w11;
+	w11 = W_NEXT(w9, w4, w12, w11);
 	SHA256ROUND(f, g, h, a, b, c, d, e, 59, w11);
-	w12 = SIGMA1_256(w10) + w5 + SIGMA0_256(w13) + w12;
+	w12 = W_NEXT(w10, w5, w13, w12);
 	SHA256ROUND(e, f, g, h, a, b, c, d, 60, w12);
-	w13 = SIGMA1_256(w11) + w6 + SIGMA0_256(w14) + w13;
+	w13 = W_NEXT(w11, w6, w14, w13);
 	SHA256ROUND(d, e, f, g, h, a, b, c, 61, w13);
-	w14 = SIGMA1_256(w12) + w7 + SIGMA0_256(w15) + w14;
+	w14 = W_NEXT(w12, w7, w15, w14);
 	SHA256ROUND(c, d, e, f, g, h, a, b, 62, w14);
-	w15 = SIGMA1_256(w13) + w8 + SIGMA0_256(w0) + w15;
+	w15 = W_NEXT(w13, w8, w0, w15);
 	SHA256ROUND(b, c, d, e, f, g, h, a, 63, w15);
 
-	//printf("%s last d: %08x\n", __func__, d);
 
-	//printf("%s a: %08x %08x\n", __func__, a, ctx[0]);
 	ctx[0] += a;
-	//printf("%s a: %08x\n", __func__, ctx[0]);
 	ctx[1] += b;
 	ctx[2] += c;
 	ctx[3] += d;
@@ -907,4 +718,125 @@ __device__ void device_sha256_osol(const __sha256_block_t blk, __sha256_hash_t c
 	ctx[6] += g;
 	ctx[7] += h;
 
+}
+
+// SHA-256 of a short byte message (len <= 183), result as native state words.
+__device__ void device_sha256_bytes(const uint8_t *data, uint32_t len, uint32_t *ctx)
+{
+	uint8_t block[3 * 64];
+	const uint32_t num_blocks = len / 64 + 1;
+	const uint32_t bits = len * 8;
+	memcpy(block, data, len);
+	block[len] = 0x80;
+	memset(block + len + 1, 0, num_blocks * 64 - 8 - (len + 1));
+	uint8_t *lp = block + num_blocks * 64 - 8;
+	lp[0] = 0; lp[1] = 0; lp[2] = 0; lp[3] = 0;
+	lp[4] = 0; lp[5] = 0; lp[6] = (bits >> 8) & 0xff; lp[7] = bits & 0xff;
+
+	for (int k = 0; k < 8; k++) ctx[k] = __sha256_init[k];
+	for (uint32_t b = 0; b < num_blocks; b++) {
+		uint32_t w[16];
+		const uint8_t *bp = block + 64 * b;
+		#pragma unroll
+		for (int k = 0; k < 16; k++)
+			w[k] = LOAD_BIG_32(bp + 4 * k);
+		device_sha256_osol(w, ctx);
+	}
+}
+
+__device__ __forceinline__ void sha256_iv(uint32_t *st)
+{
+	st[0] = 0x6a09e667; st[1] = 0xbb67ae85; st[2] = 0x3c6ef372; st[3] = 0xa54ff53a;
+	st[4] = 0x510e527f; st[5] = 0x9b05688c; st[6] = 0x1f83d9ab; st[7] = 0x5be0cd19;
+}
+
+__device__ __forceinline__ void load_block(const uint32_t *buf, uint32_t off, uint32_t *v)
+{
+	const uint4 a = *(const uint4 *)(buf + off), b = *(const uint4 *)(buf + off + 4);
+	v[0] = a.x; v[1] = a.y; v[2] = a.z; v[3] = a.w;
+	v[4] = b.x; v[5] = b.y; v[6] = b.z; v[7] = b.w;
+}
+
+__device__ __forceinline__ void store_block(uint32_t *buf, uint32_t off, const uint32_t *v)
+{
+	*(uint4 *)(buf + off) = make_uint4(v[0], v[1], v[2], v[3]);
+	*(uint4 *)(buf + off + 4) = make_uint4(v[4], v[5], v[6], v[7]);
+}
+
+// Blocks are stored as SHA-256 state words (a digest read big-endian), so each
+// message is built in registers and the previous block stays in registers. The
+// 64-bit little-endian counter stays below 2^15, so its high word is zero.
+//
+// Fill: block 0 = H(counter=0 || salt || input || s_cost || t_cost),
+// block i = H(counter=i || block i-1). Returns the last block in prev[].
+__device__ void balloon_fill(uint32_t *buf, const uint8_t *in, uint32_t *prev)
+{
+	const int64_t s_cost = BALLOON_SCOST;
+	const int32_t t_cost = BALLOON_MIXROUNDS;
+	uint8_t data[132];
+	memset(data, 0, 8);
+	memcpy(data + 8, in, SALT_LEN);
+	memcpy(data + 8 + SALT_LEN, in, BALLOON_INLEN);
+	memcpy(data + 8 + SALT_LEN + BALLOON_INLEN, &s_cost, 8);
+	memcpy(data + 16 + SALT_LEN + BALLOON_INLEN, &t_cost, 4);
+	device_sha256_bytes(data, 132, prev);
+	store_block(buf, 0, prev);
+
+	for (uint32_t i = 1; i < 4096; i++) {
+		uint32_t m[16];
+		m[0] = cuda_swab32(i); m[1] = 0;
+		#pragma unroll
+		for (int k = 0; k < 8; k++) m[2 + k] = prev[k];
+		m[10] = 0x80000000U; m[11] = 0; m[12] = 0; m[13] = 0; m[14] = 0;
+		m[15] = 40 * 8;
+		sha256_iv(prev);
+		device_sha256_osol(m, prev);
+		store_block(buf, i * 8, prev);
+	}
+}
+
+// Mix: block i = H(counter || block i-1 || block i || 3 indexed blocks), 168 bytes
+// = 3 transforms. prebuf_le holds byte offsets, hence >> 2 to word offsets.
+__device__ void balloon_mix(uint32_t *buf, const uint64_t *prebuf_le, uint32_t *prev)
+{
+	const uint64_t *idx = prebuf_le;
+	uint32_t counter = 4096;
+	for (int32_t r = 0; r < BALLOON_MIXROUNDS; r++) {
+		for (uint32_t i = 0; i < 4096; i++) {
+			uint32_t cur[8], b2[8], b3[8], b4[8], m[16];
+			const uint32_t o2 = (uint32_t)idx[0] >> 2;
+			const uint32_t o3 = (uint32_t)idx[1] >> 2;
+			const uint32_t o4 = (uint32_t)idx[2] >> 2;
+			idx += 3;
+			load_block(buf, i * 8, cur);
+			load_block(buf, o2, b2);
+			load_block(buf, o3, b3);
+			load_block(buf, o4, b4);
+
+			m[0] = cuda_swab32(counter); m[1] = 0;
+			#pragma unroll
+			for (int k = 0; k < 8; k++) m[2 + k] = prev[k];
+			#pragma unroll
+			for (int k = 0; k < 6; k++) m[10 + k] = cur[k];
+			sha256_iv(prev);
+			device_sha256_osol(m, prev);
+
+			m[0] = cur[6]; m[1] = cur[7];
+			#pragma unroll
+			for (int k = 0; k < 8; k++) m[2 + k] = b2[k];
+			#pragma unroll
+			for (int k = 0; k < 6; k++) m[10 + k] = b3[k];
+			device_sha256_osol(m, prev);
+
+			m[0] = b3[6]; m[1] = b3[7];
+			#pragma unroll
+			for (int k = 0; k < 8; k++) m[2 + k] = b4[k];
+			m[10] = 0x80000000U; m[11] = 0; m[12] = 0; m[13] = 0; m[14] = 0;
+			m[15] = 168 * 8;
+			device_sha256_osol(m, prev);
+
+			store_block(buf, i * 8, prev);
+			counter++;
+		}
+	}
 }
