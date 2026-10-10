@@ -8,10 +8,10 @@
 #include <stdint.h>
 #include <miner.h>
 #include <cuda_helper.h>
+#include "cuda/selftest_gate.cuh"
 
 static uint32_t *d_hash[MAX_GPUS];
-static uint32_t* d_hash_br1[MAX_GPUS];
-static uint32_t* d_hash_br2[MAX_GPUS];
+static uint32_t* d_hash_br[MAX_GPUS]; // branch 1 at [0, n), branch 2 at [n, threads)
 
 extern void skein512_cpu_init(int thr_id, uint32_t threads);
 extern void skein512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order);
@@ -38,26 +38,150 @@ extern void echo512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash);
 extern void bastion_init(const int thr_id, const uint32_t threads);
 extern void bastion_free(const int thr_id);
 
-extern uint32_t bastion_filter2(const int thr_id, const uint32_t threads, const uint32_t *inpHashes, uint32_t* d_hash1, uint32_t* d_hash2);
-extern void bastion_merge2(const int thr_id, const uint32_t threads, uint32_t *outpHashes, uint32_t* d_hash1, uint32_t* d_hash2);
+extern uint32_t bastion_filter2(const int thr_id, const uint32_t threads, const uint32_t *inpHashes, uint32_t* d_branch);
+extern void bastion_merge2(const int thr_id, const uint32_t threads, uint32_t *outpHashes, const uint32_t* d_branch);
 
-extern void hefty_cpu_hash(int thr_id, uint32_t threads, int startNounce);
+extern void hefty_cpu_hash_64(int thr_id, uint32_t threads, int startNounce, uint32_t *d_outputHash);
 extern void hefty_cpu_setBlock(int thr_id, uint32_t threads, void *data, int len);
-extern void hefty_cpu_init(int thr_id, uint32_t threads);
-extern void hefty_cpu_free(int thr_id);
-extern void hefty_copy_hashes(int thr_id, uint32_t threads, uint32_t* d_outputhash);
-
-#define TRACE(algo) {}
+extern void hefty_cpu_init_tables(int thr_id);
 
 static bool init[MAX_GPUS] = { 0 };
+
+// Full chain for one batch; the PoW hash is the first 32 bytes of each d_hash record.
+static void bastion_hash_batch(int thr_id, uint32_t threads, uint32_t startNonce)
+{
+	uint32_t branchNonces;
+	// MyStreamSynchronize sleep slots: 0 belongs to hefty_cpu_hash_64, so start at 1
+	int order = 1;
+
+	// hefty
+	hefty_cpu_hash_64(thr_id, threads, startNonce, d_hash[thr_id]);
+
+	luffa512_cpu_hash_64(thr_id, threads, startNonce, NULL, d_hash[thr_id], order++);
+
+	// fugue or skein
+	branchNonces = bastion_filter2(thr_id, threads, d_hash[thr_id], d_hash_br[thr_id]);
+	fugue512_cpu_hash_64(thr_id, branchNonces, startNonce, NULL, d_hash_br[thr_id], order++);
+	skein512_cpu_hash_64(thr_id, threads-branchNonces, startNonce, NULL, &d_hash_br[thr_id][(size_t) branchNonces * 16], order++);
+	bastion_merge2(thr_id, threads, d_hash[thr_id], d_hash_br[thr_id]);
+
+	whirlpool512_cpu_hash_64(thr_id, threads, startNonce, NULL, d_hash[thr_id], order++);
+	fugue512_cpu_hash_64(thr_id, threads, startNonce, NULL, d_hash[thr_id], order++);
+
+	// echo or luffa
+	branchNonces = bastion_filter2(thr_id, threads, d_hash[thr_id], d_hash_br[thr_id]);
+	echo512_cpu_hash_64(thr_id, branchNonces, d_hash_br[thr_id]); order++;
+	luffa512_cpu_hash_64(thr_id, threads-branchNonces, startNonce, NULL, &d_hash_br[thr_id][(size_t) branchNonces * 16], order++);
+	bastion_merge2(thr_id, threads, d_hash[thr_id], d_hash_br[thr_id]);
+
+	shabal512_cpu_hash_64(thr_id, threads, startNonce, NULL, d_hash[thr_id], order++);
+	skein512_cpu_hash_64(thr_id, threads, startNonce, NULL, d_hash[thr_id], order++);
+
+	// shabal or whirlpool
+	branchNonces = bastion_filter2(thr_id, threads, d_hash[thr_id], d_hash_br[thr_id]);
+	shabal512_cpu_hash_64(thr_id, branchNonces, startNonce, NULL, d_hash_br[thr_id], order++);
+	whirlpool512_cpu_hash_64(thr_id, threads-branchNonces, startNonce, NULL, &d_hash_br[thr_id][(size_t) branchNonces * 16], order++);
+	bastion_merge2(thr_id, threads, d_hash[thr_id], d_hash_br[thr_id]);
+
+	shabal512_cpu_hash_64(thr_id, threads, startNonce, NULL, d_hash[thr_id], order++);
+
+	// hamsi or luffa
+	branchNonces = bastion_filter2(thr_id, threads, d_hash[thr_id], d_hash_br[thr_id]);
+	hamsi512_cpu_hash_64(thr_id, branchNonces, startNonce, NULL, d_hash_br[thr_id], order++);
+	luffa512_cpu_hash_64(thr_id, threads-branchNonces, startNonce, NULL, &d_hash_br[thr_id][(size_t) branchNonces * 16], order++);
+	bastion_merge2(thr_id, threads, d_hash[thr_id], d_hash_br[thr_id]);
+}
+
+// Mismatches between d_hash records [offset, offset+span) of the batch hashed from `start`
+// and bastionhash(endiandata); UINT32_MAX if the readback failed.
+static uint32_t bastion_compare_slice(int thr_id, uint32_t *endiandata, uint32_t start, uint32_t offset, uint32_t span)
+{
+	uint32_t vhash[8], bad = 0;
+	uint32_t *h_hash = (uint32_t*) malloc((size_t) 64 * span);
+	if (!h_hash)
+		return UINT32_MAX;
+	if (cudaMemcpy(h_hash, &d_hash[thr_id][(size_t) offset * 16], (size_t) 64 * span, cudaMemcpyDeviceToHost) != cudaSuccess) {
+		free(h_hash);
+		return UINT32_MAX;
+	}
+	const uint32_t saved = endiandata[19];
+	for (uint32_t i = 0; i < span; i++) {
+		endiandata[19] = start + offset + i;
+		bastionhash(vhash, (uchar*) endiandata);
+		bad += memcmp(vhash, &h_hash[i * 16], 32) != 0;
+	}
+	endiandata[19] = saved;
+	free(h_hash);
+	return bad;
+}
+
+// Init self-test: 256 nonces across a byte carry (both sides of every branch occur),
+// plus a flipped-header negative.
+static bool bastion_device_selftest(int thr_id, uint32_t threads)
+{
+	const uint32_t span = min(threads, 256U);
+	const uint32_t start = 0x0001ff80U;
+	uint32_t endiandata[20];
+
+	for (int k = 0; k < 20; k++)
+		endiandata[k] = 0x9e3779b9U * (k + 1);
+	hefty_cpu_setBlock(thr_id, span, endiandata, 80);
+	bastion_hash_batch(thr_id, span, start);
+	const uint32_t bad = bastion_compare_slice(thr_id, endiandata, start, 0, span);
+	endiandata[1] ^= 1; // the GPU hashed the unflipped header: every digest must differ
+	const uint32_t neg_bad = bastion_compare_slice(thr_id, endiandata, start, 0, span);
+	if (bad == UINT32_MAX || neg_bad == UINT32_MAX)
+		return selftest_gate(thr_id, "bastion", selftest_cuda_fault());
+
+	const bool passed = bad == 0 && neg_bad == span;
+	if (!passed)
+		gpulog(LOG_ERR, thr_id, "bastion self-test FAILED (%u of %u digests wrong, negative leg %u of %u)",
+			bad, span, neg_bad, span);
+	else
+		gpulog(LOG_DEBUG, thr_id, "bastion self-test passed (%u nonces)", span);
+	return selftest_gate(thr_id, "bastion", passed);
+}
+
+// -D only, once per job: a full-size batch of the real header, first and last
+// BASTION_DIFF_SPAN digests checked against bastionhash().
+#define BASTION_DIFF_SPAN 515U
+#define BASTION_DIFF_SKEW 0x51U
+static uint32_t diff_sig[MAX_GPUS];
+static bool diff_seen[MAX_GPUS];
+
+static void bastion_debug_differential(int thr_id, const uint32_t *pdata, uint32_t *endiandata, uint32_t threads)
+{
+	uint32_t sig = 0x811c9dc5u;
+	for (int i = 0; i < 19; i++)
+		sig = (sig ^ pdata[i]) * 0x01000193u;
+	if (diff_seen[thr_id] && diff_sig[thr_id] == sig)
+		return;
+	diff_sig[thr_id] = sig;
+	diff_seen[thr_id] = true;
+
+	const uint32_t span = min(threads, BASTION_DIFF_SPAN);
+	const uint32_t start = pdata[19] + BASTION_DIFF_SKEW;
+	bastion_hash_batch(thr_id, threads, start);
+	const uint32_t head = bastion_compare_slice(thr_id, endiandata, start, 0, span);
+	const uint32_t tail = bastion_compare_slice(thr_id, endiandata, start, threads - span, span);
+	if (head == UINT32_MAX || tail == UINT32_MAX)
+		gpulog(LOG_WARNING, thr_id, "differential could not run (CUDA resource failure)");
+	else if (head || tail)
+		gpulog(LOG_ERR, thr_id, "DIFFERENTIAL MISMATCH in a %u-nonce batch from %08x: head %u/%u, tail %u/%u digests differ from the CPU",
+			threads, start, head, span, tail, span);
+	else
+		gpulog(LOG_DEBUG, thr_id, "differential OK: head+tail %u+%u of a %u-nonce batch from %08x, job %08x",
+			span, span, threads, start, sig);
+}
+
 
 int scanhash_bastion(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done)
 {
 	uint32_t *pdata = work->data;
 	uint32_t *ptarget = work->target;
 	const uint32_t first_nonce = pdata[19];
-	// CUDA will process thousands of threads.
-	uint32_t throughput = cuda_default_throughput(thr_id, 1U << 20);
+	// 2^22 measured on GTX 1080 Ti (sm_61) and RTX 3060 (sm_86); sm_75 not measured
+	uint32_t throughput = cuda_default_throughput(thr_id, 1U << 22);
 	if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
 	if (opt_benchmark)
@@ -76,11 +200,10 @@ int scanhash_bastion(int thr_id, struct work *work, uint32_t max_nonce, unsigned
 
 
 		CUDA_SAFE_CALL(cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput));
-		CUDA_SAFE_CALL(cudaMalloc(&d_hash_br1[thr_id], (size_t) 64 * throughput));
-		CUDA_SAFE_CALL(cudaMalloc(&d_hash_br2[thr_id], (size_t) 64 * throughput));
+		CUDA_SAFE_CALL(cudaMalloc(&d_hash_br[thr_id], (size_t) 64 * throughput));
 
 		bastion_init(thr_id, throughput);
-		hefty_cpu_init(thr_id, throughput);
+		hefty_cpu_init_tables(thr_id);
 		luffa512_cpu_init(thr_id, throughput);
 
 		skein512_cpu_init(thr_id, throughput);
@@ -90,6 +213,7 @@ int scanhash_bastion(int thr_id, struct work *work, uint32_t max_nonce, unsigned
 		whirlpool512_cpu_init(thr_id, throughput, 0);
 
 		cuda_check_cpu_init(thr_id, throughput);
+		bastion_device_selftest(thr_id, throughput);
 
 		init[thr_id] = true;
 	}
@@ -102,91 +226,50 @@ int scanhash_bastion(int thr_id, struct work *work, uint32_t max_nonce, unsigned
 
 	cuda_check_cpu_setTarget(ptarget);
 
+	if (opt_debug)
+		bastion_debug_differential(thr_id, pdata, endiandata, throughput);
+
 	do {
-		uint32_t branchNonces;
-		int order = 0;
-
-		// hefty
-		hefty_cpu_hash(thr_id, throughput, pdata[19]);
-		hefty_copy_hashes(thr_id, throughput, d_hash[thr_id]);
-		TRACE("hefty  :");
-
-		luffa512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		TRACE("luffa  :");
-
-		// fugue or skein
-		branchNonces = bastion_filter2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
-		fugue512_cpu_hash_64(thr_id, branchNonces, pdata[19], NULL, d_hash_br1[thr_id], order++);
-		skein512_cpu_hash_64(thr_id, throughput-branchNonces, pdata[19], NULL, d_hash_br2[thr_id], order++);
-		bastion_merge2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
-		TRACE("perm1  :");
-
-		whirlpool512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		TRACE("whirl  :");
-		fugue512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-
-		// echo or luffa
-		branchNonces = bastion_filter2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
-		echo512_cpu_hash_64(thr_id, branchNonces, d_hash_br1[thr_id]); order++;
-		luffa512_cpu_hash_64(thr_id, throughput-branchNonces, pdata[19], NULL, d_hash_br2[thr_id], order++);
-		bastion_merge2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
-		TRACE("perm2  :");
-
-		shabal512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-		skein512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-
-		// shabal or whirlpool
-		branchNonces = bastion_filter2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
-		shabal512_cpu_hash_64(thr_id, branchNonces, pdata[19], NULL, d_hash_br1[thr_id], order++);
-		whirlpool512_cpu_hash_64(thr_id, throughput-branchNonces, pdata[19], NULL, d_hash_br2[thr_id], order++);
-		bastion_merge2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
-		TRACE("perm3  :");
-
-		shabal512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
-
-		// hamsi or luffa
-		branchNonces = bastion_filter2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
-		hamsi512_cpu_hash_64(thr_id, branchNonces, pdata[19], NULL, d_hash_br1[thr_id], order++);
-		luffa512_cpu_hash_64(thr_id, throughput-branchNonces, pdata[19], NULL, d_hash_br2[thr_id], order++);
-		bastion_merge2(thr_id, throughput, d_hash[thr_id], d_hash_br1[thr_id], d_hash_br2[thr_id]);
-		TRACE("perm4  :");
+		bastion_hash_batch(thr_id, throughput, pdata[19]);
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
 
 		CUDA_LOG_ERROR();
 
-		work->nonces[0] = cuda_check_hash(thr_id, throughput, pdata[19], d_hash[thr_id]);
-		if (work->nonces[0] != UINT32_MAX)
+		// the kernels scan n = pdata[19] + thread and hash it byte-swapped: n is the cursor,
+		// swab32(n) the submitted nonce
+		const uint32_t n0 = cuda_check_hash(thr_id, throughput, pdata[19], d_hash[thr_id]);
+		if (n0 != UINT32_MAX)
 		{
 			uint32_t _ALIGN(64) vhash[8];
 			const uint32_t Htarg = ptarget[7];
-			endiandata[19] = work->nonces[0];
+			endiandata[19] = n0;
 			bastionhash(vhash, (uchar*) endiandata);
 
 			if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
+				uint32_t last = n0;
 				work->valid_nonces = 1;
 				work_set_target_ratio(work, vhash);
-				work->nonces[0] = swab32(work->nonces[0]);
-				work->nonces[1] = cuda_check_hash_suppl(thr_id, throughput, pdata[19], d_hash[thr_id], 1);
-				if (work->nonces[1] != UINT32_MAX) {
-					endiandata[19] = work->nonces[1];
+				work->nonces[0] = swab32(n0);
+				const uint32_t n1 = cuda_check_hash_suppl(thr_id, throughput, pdata[19], d_hash[thr_id], 1);
+				if (n1 != UINT32_MAX) {
+					endiandata[19] = n1;
 					bastionhash(vhash, (uchar*) endiandata);
-					bn_set_target_ratio(work, vhash, 1);
-					work->valid_nonces++;
-					work->nonces[1] = swab32(work->nonces[1]);
-					pdata[19] = max(work->nonces[0], work->nonces[1])+1;
-				} else {
-					pdata[19] = work->nonces[0]+1; // cursor
+					if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
+						bn_set_target_ratio(work, vhash, 1);
+						work->nonces[1] = swab32(n1);
+						work->valid_nonces++;
+						last = n1;
+					}
 				}
+				pdata[19] = last + 1;
 				return work->valid_nonces;
 			}
-			else if (vhash[7] > Htarg) {
-				gpu_increment_reject(thr_id);
-				if (!opt_quiet) gpulog(LOG_WARNING, thr_id,
-					"result for %08x does not validate on CPU!", work->nonces[0]);
-				pdata[19] = swab32(work->nonces[0]) + 1;
-				continue;
-			}
+			gpu_increment_reject(thr_id);
+			if (!opt_quiet) gpulog(LOG_WARNING, thr_id,
+				"result for %08x does not validate on CPU!", swab32(n0));
+			pdata[19] = n0 + 1;
+			continue;
 		}
 
 		if ((uint64_t)throughput + pdata[19] >= max_nonce) {
@@ -213,10 +296,8 @@ extern "C" void free_bastion(int thr_id)
 	cudaDeviceSynchronize();
 
 	cudaFree(d_hash[thr_id]);
-	cudaFree(d_hash_br1[thr_id]);
-	cudaFree(d_hash_br2[thr_id]);
+	cudaFree(d_hash_br[thr_id]);
 
-	hefty_cpu_free(thr_id);
 	fugue512_cpu_free(thr_id);
 	whirlpool512_cpu_free(thr_id);
 

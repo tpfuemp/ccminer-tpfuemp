@@ -5,18 +5,15 @@
 
 #include "cuda_helper.h"
 
-#define USE_SHARED 1
 
 // globaler Speicher für alle HeftyHashes aller Threads
 uint32_t *heavy_heftyHashes[MAX_GPUS];
 
 /* Hash-Tabellen */
 __constant__ uint32_t hefty_gpu_constantTable[64];
-#if USE_SHARED
+// K, staged per block in shared memory by the kernel
+#define HEFTY_SHARED_BYTES (64 * sizeof(uint32_t))
 #define heftyLookUp(x) (*((uint32_t*)heftytab + (x)))
-#else
-#define heftyLookUp(x) hefty_gpu_constantTable[x]
-#endif
 
 // muss expandiert werden
 __constant__ uint32_t hefty_gpu_blockHeader[16]; // 2x512 Bit Message
@@ -53,15 +50,11 @@ uint32_t hefty_cpu_constantTable[] = {
     0x90befffaUL, 0xa4506cebUL, 0xbef9a3f7UL, 0xc67178f2UL
 };
 
-#if 0
-#define S(x, n)          (((x) >> (n)) | ((x) << (32 - (n))))
-#else
 __host__ __device__
 static uint32_t S(uint32_t x, int n)
 {
     return (((x) >> (n)) | ((x) << (32 - (n))));
 }
-#endif
 
 #define R(x, n)          ((x) >> (n))
 #define Ch(x, y, z)      ((x & (y ^ z)) ^ z)
@@ -87,9 +80,70 @@ uint8_t smoosh2(uint32_t x)
 #define smoosh4Quad(x)   ( (((x)>>4) ^ (x)) & 0x0F0F0F0F )
 #define getByte(x,y)     ( ((x) >> (y)) & 0xFF )
 
+// sm_80+: adds issued as x * 1 + y on the IMAD pipe (the ALU pipe is the busy one);
+// the 1 lives in constant memory so ptxas cannot fold it back into an add.
+__constant__ uint32_t c_hefty_one = 1;
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+__device__ __forceinline__ uint32_t hefty_madd(uint32_t x, uint32_t y)
+{
+    uint32_t r;
+    asm("mad.lo.u32 %0, %1, %2, %3;" : "=r"(r) : "r"(x), "r"(c_hefty_one), "r"(y));
+    return r;
+}
+#endif
+
+// kernel-body sums: IMAD on sm_80+, the original expression elsewhere
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+#define HEFTY_ADD2(a, b)       hefty_madd(a, b)
+#define HEFTY_ADD4(a, b, c, d) hefty_madd(hefty_madd(a, b), hefty_madd(c, d))
+#else
+#define HEFTY_ADD2(a, b)       ((a) + (b))
+#define HEFTY_ADD4(a, b, c, d) ((a) + (b) + (c) + (d))
+#endif
+
+#ifdef __CUDA_ARCH__
+// Device form of one Mangle half, same function as the host code below. With k the XOR
+// of the 2-bit groups of `from`, sel = k ^ 3 selects both the case and the rotate byte of r:
+// sel 2 add, sel 1 and-not, otherwise xor.
+__device__ __forceinline__
+uint32_t hefty_mangle_half(uint32_t s0, uint32_t target, uint32_t from, uint32_t r)
+{
+    uint32_t f = from ^ (from >> 16);
+    f ^= f >> 8;
+    f ^= f >> 4;
+    const uint32_t sel = ~(f ^ (f >> 2)) & 3;
+    const uint32_t rot = __funnelshift_r(s0, s0, __byte_perm(r, 0, sel));
+    // computed and selected, not branched: the case differs per nonce
+#if __CUDA_ARCH__ >= 800
+    const uint32_t add = hefty_madd(~rot, target); // target + ~rot
+    const uint32_t andn = target & ~rot;
+    const uint32_t x = target ^ rot;
+    return sel == 2 ? add : (sel == 1 ? andn : x);
+#else
+    const uint32_t add = target - rot - 1; // target + ~rot
+    const uint32_t andn = target & ~rot;
+    const uint32_t x = target ^ rot;
+    return sel == 2 ? add : (sel == 1 ? andn : x);
+#endif
+}
+#endif
+
 __host__ __forceinline__ __device__
 void Mangle(uint32_t *inp)
 {
+#ifdef __CUDA_ARCH__
+    const uint32_t r = smoosh4Quad(inp[0]);
+    inp[1] ^= __funnelshift_r(inp[0], inp[0], r >> 24);
+#if __CUDA_ARCH__ >= 800
+    inp[2] = hefty_mangle_half(inp[0], inp[2], inp[1], hefty_madd(r, 0x01010101));
+    inp[3] = hefty_mangle_half(inp[0], inp[3], inp[1] ^ inp[2], hefty_madd(r, 0x02020202));
+    inp[0] ^= hefty_madd(inp[1] ^ inp[2], inp[3]);
+#else
+    inp[2] = hefty_mangle_half(inp[0], inp[2], inp[1], r + 0x01010101);
+    inp[3] = hefty_mangle_half(inp[0], inp[3], inp[1] ^ inp[2], r + 0x02020202);
+    inp[0] ^= (inp[1] ^ inp[2]) + inp[3];
+#endif
+#else
     uint32_t r = smoosh4Quad(inp[0]);
     uint32_t inp0org;
     uint32_t tmp0Mask, tmp1Mask;
@@ -128,6 +182,7 @@ void Mangle(uint32_t *inp)
     inp[3] = isAddition ? in2 : in1;
 
     inp[0] ^= (inp[1] ^ inp[2]) + inp[3];
+#endif
 }
 
 __host__ __forceinline__ __device__
@@ -150,6 +205,11 @@ uint32_t Br(uint32_t *sponge, uint32_t x)
 {
     uint32_t r = Squeeze(sponge);
     uint32_t t = ((r >> 8) & 0x1F);
+#ifdef __CUDA_ARCH__
+    // bit t of x kept (r&3 == 0), cleared (1), set (2) or flipped (3)
+    const uint32_t b0 = (r & 1) << t, b1 = ((r >> 1) & 1) << t;
+    return (x & ~b0 & ~b1) | (b1 & ~b0) | (~x & b0 & b1);
+#else
     uint32_t y = 1 << t;
 
     uint32_t a = (((r>>1) & 0x01) << t) & y;
@@ -158,6 +218,7 @@ uint32_t Br(uint32_t *sponge, uint32_t x)
 
     uint32_t retVal = (x & ~y) | (~b & c) | (a & ~c);
     return retVal;
+#endif
 }
 
 __device__ __forceinline__
@@ -167,21 +228,38 @@ void hefty_gpu_round(uint32_t *regs, uint32_t W, uint32_t K, uint32_t *sponge)
 
     uint32_t brG = Br(sponge, regs[6]);
     uint32_t brF = Br(sponge, regs[5]);
+#if __CUDA_ARCH__ >= 800
+    uint32_t tmp1 = hefty_madd(hefty_madd(Ch(regs[4], brF, brG), regs[7]), hefty_madd(W, K));
+#else
     uint32_t tmp1 = Ch(regs[4], brF, brG) + regs[7] + W + K;
+#endif
     uint32_t brE = Br(sponge, regs[4]);
+#if __CUDA_ARCH__ >= 800
+    uint32_t tmp2 = hefty_madd(tmp1, S1(brE));
+#else
     uint32_t tmp2 = tmp1 + S1(brE);
+#endif
     uint32_t brC = Br(sponge, regs[2]);
     uint32_t brB = Br(sponge, regs[1]);
     uint32_t brA = Br(sponge, regs[0]);
     uint32_t tmp3 = Maj(brA, brB, brC);
     tmpBr = Br(sponge, regs[0]);
+#if __CUDA_ARCH__ >= 800
+    uint32_t tmp4 = hefty_madd(tmp3, S0(tmpBr));
+#else
     uint32_t tmp4 = tmp3 + S0(tmpBr);
+#endif
     tmpBr = Br(sponge, tmp2);
 
     #pragma unroll 7
     for (int k=6; k >= 0; k--) regs[k+1] = regs[k];
+#if __CUDA_ARCH__ >= 800
+    regs[0] = hefty_madd(tmp2, tmp4);
+    regs[4] = hefty_madd(regs[4], tmpBr);
+#else
     regs[0] = tmp2 + tmp4;
     regs[4] += tmpBr;
+#endif
 }
 
 __host__
@@ -207,10 +285,11 @@ void hefty_cpu_round(uint32_t *regs, uint32_t W, uint32_t K, uint32_t *sponge)
     regs[4] += tmpBr;
 }
 
-__global__
-void hefty_gpu_hash(uint32_t threads, uint32_t startNounce, uint32_t *outputHash)
+// One HEFTY1 per thread. OUT_WORDS: 8 = 32-byte digests, 16 = digest zero-padded to 64 bytes.
+template <int OUT_WORDS>
+__device__ __forceinline__
+void hefty_hash_body(uint32_t threads, uint32_t startNounce, uint32_t *outputHash)
 {
-#if USE_SHARED
     extern __shared__ unsigned char heftytab[];
     if(threadIdx.x < 64)
     {
@@ -218,7 +297,6 @@ void hefty_gpu_hash(uint32_t threads, uint32_t startNounce, uint32_t *outputHash
     }
 
     __syncthreads();
-#endif
 
     uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
     if (thread < threads)
@@ -252,7 +330,7 @@ void hefty_gpu_hash(uint32_t threads, uint32_t startNounce, uint32_t *outputHash
 #pragma unroll 16
         for(int k=0;k<16;k++)
             W1[k] = hefty_gpu_blockHeader[k];
-        W1[3] = SWAB32(nounce);
+        W1[3] = cuda_swab32(nounce);
 
         // 2. Runde
 #pragma unroll 16
@@ -274,21 +352,21 @@ void hefty_gpu_hash(uint32_t threads, uint32_t startNounce, uint32_t *outputHash
         {
 
             for(int j=0;j<2;j++)
-                W2[j] = s1(W1[14+j]) + W1[9+j] + s0(W1[1+j]) + W1[j];
+                W2[j] = HEFTY_ADD4(s1(W1[14+j]), W1[9+j], s0(W1[1+j]), W1[j]);
 
             for(int j=2;j<7;j++)
-                W2[j] = s1(W2[j-2]) + W1[9+j] + s0(W1[1+j]) + W1[j];
+                W2[j] = HEFTY_ADD4(s1(W2[j-2]), W1[9+j], s0(W1[1+j]), W1[j]);
 
 
             for(int j=7;j<15;j++)
-                W2[j] = s1(W2[j-2]) + W2[j-7] + s0(W1[1+j]) + W1[j];
+                W2[j] = HEFTY_ADD4(s1(W2[j-2]), W2[j-7], s0(W1[1+j]), W1[j]);
 
-            W2[15] = s1(W2[13]) + W2[8] + s0(W2[0]) + W1[15];
+            W2[15] = HEFTY_ADD4(s1(W2[13]), W2[8], s0(W2[0]), W1[15]);
 
 
             for(int j=0;j<16;j++)
             {
-                Absorb(sponge, regs[3] + regs[7]);
+                Absorb(sponge, HEFTY_ADD2(regs[3], regs[7]));
                 hefty_gpu_round(regs, W2[j], heftyLookUp(j + ((k+1)<<4)), sponge);
             }
 
@@ -300,14 +378,35 @@ void hefty_gpu_hash(uint32_t threads, uint32_t startNounce, uint32_t *outputHash
         for(int k=0;k<8;k++)
             hash[k] += regs[k];
 
+        if (OUT_WORDS == 8) {
 #pragma unroll 8
-        for(int k=0;k<8;k++)
-            ((uint32_t*)outputHash)[(thread<<3)+k] = SWAB32(hash[k]);
+            for(int k=0;k<8;k++)
+                ((uint32_t*)outputHash)[(thread<<3)+k] = cuda_swab32(hash[k]);
+        } else {
+            uint4 *pdst = (uint4*) &outputHash[(size_t) thread * OUT_WORDS];
+            pdst[0] = make_uint4(cuda_swab32(hash[0]), cuda_swab32(hash[1]), cuda_swab32(hash[2]), cuda_swab32(hash[3]));
+            pdst[1] = make_uint4(cuda_swab32(hash[4]), cuda_swab32(hash[5]), cuda_swab32(hash[6]), cuda_swab32(hash[7]));
+            pdst[2] = make_uint4(0, 0, 0, 0);
+            pdst[3] = make_uint4(0, 0, 0, 0);
+        }
     }
 }
 
+__global__
+void hefty_gpu_hash(uint32_t threads, uint32_t startNounce, uint32_t *outputHash)
+{
+    hefty_hash_body<8>(threads, startNounce, outputHash);
+}
+
+__global__
+void hefty_gpu_hash_64(uint32_t threads, uint32_t startNounce, uint32_t *outputHash)
+{
+    hefty_hash_body<16>(threads, startNounce, outputHash);
+}
+
+// constant tables only (hefty_cpu_hash_64 writes into the caller's buffer)
 __host__
-void hefty_cpu_init(int thr_id, uint32_t threads)
+void hefty_cpu_init_tables(int thr_id)
 {
     cudaSetDevice(device_map[thr_id]);
 
@@ -315,6 +414,12 @@ void hefty_cpu_init(int thr_id, uint32_t threads)
     cudaMemcpyToSymbol( hefty_gpu_constantTable,
                         hefty_cpu_constantTable,
                         sizeof(uint32_t) * 64 );
+}
+
+__host__
+void hefty_cpu_init(int thr_id, uint32_t threads)
+{
+    hefty_cpu_init_tables(thr_id);
 
     // Speicher für alle Hefty1 hashes belegen
     CUDA_SAFE_CALL(cudaMalloc(&heavy_heftyHashes[thr_id], (size_t) 32 * threads));
@@ -406,11 +511,7 @@ void hefty_cpu_hash(int thr_id, uint32_t threads, int startNounce)
     dim3 block(threadsperblock);
 
     // Größe des dynamischen Shared Memory Bereichs
-#if USE_SHARED
-    int shared_size = 8 * 64 * sizeof(uint32_t);
-#else
-    int shared_size = 0;
-#endif
+    const int shared_size = HEFTY_SHARED_BYTES;
 
     hefty_gpu_hash <<< grid, block, shared_size >>> (threads, startNounce, heavy_heftyHashes[thr_id]);
 
@@ -418,30 +519,15 @@ void hefty_cpu_hash(int thr_id, uint32_t threads, int startNounce)
     MyStreamSynchronize(NULL, 0, thr_id);
 }
 
-__global__
-__launch_bounds__(128, 8)
-void hefty_gpu_copy(const uint32_t threads, uint32_t* d_heftyhash, uint64_t* d_hash)
-{
-    const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
-    if (thread < threads)
-    {
-        const uint32_t offset = thread * 8U; // 32 / sizeof(uint32_t);
-        uint4 *psrc = (uint4*) (&d_heftyhash[offset]);
-        uint4 *pdst = (uint4*) (&d_hash[offset]);
-        pdst[0] = psrc[0];
-        pdst[1] = psrc[1];
-        pdst[2] = make_uint4(0,0,0,0);
-        pdst[3] = make_uint4(0,0,0,0);
-    }
-}
-
+// digests written as 64-byte records (upper half zero) straight into the caller's buffer
 __host__
-void hefty_copy_hashes(int thr_id, uint32_t threads, uint32_t* d_outputhash)
+void hefty_cpu_hash_64(int thr_id, uint32_t threads, int startNounce, uint32_t *d_outputHash)
 {
-    const uint32_t threadsperblock = 128;
-    dim3 grid((threads + threadsperblock - 1) / threadsperblock);
+    const uint32_t threadsperblock = 256;
+    dim3 grid((threads + threadsperblock-1)/threadsperblock);
     dim3 block(threadsperblock);
-    hefty_gpu_copy <<< grid, block >>> (threads, heavy_heftyHashes[thr_id], (uint64_t*) d_outputhash);
-    cudaStreamSynchronize(NULL);
+    const int shared_size = HEFTY_SHARED_BYTES;
+    hefty_gpu_hash_64 <<< grid, block, shared_size >>> (threads, startNounce, d_outputHash);
+    MyStreamSynchronize(NULL, 0, thr_id);
 }
 

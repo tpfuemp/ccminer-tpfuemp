@@ -3382,7 +3382,6 @@ static void *miner_thread(void *userdata)
 
 		switch (opt_algo) {
 			// algos to migrate to replace pdata[21] by work.nonces[]
-			case ALGO_HEAVY:
 			case ALGO_SCRYPT:
 			case ALGO_SCRYPT_JANE:
 			//case ALGO_WHIRLPOOLX:

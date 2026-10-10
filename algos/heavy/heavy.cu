@@ -289,6 +289,9 @@ int scanhash_heavy(int thr_id, struct work *work, uint32_t max_nonce, unsigned l
 							gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", nonce);
 					} else {
 						work_set_target_ratio(work, vhash);
+						work->nonces[0] = nonce;
+						work->valid_nonces = 1;
+						pdata[19] = nonce + 1; // cursor: resume past the share, not on it
 						rc = 1;
 						goto exit;
 					}
