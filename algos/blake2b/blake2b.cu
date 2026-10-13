@@ -15,6 +15,8 @@
 #include <cuda_helper.h>
 #include <cuda_vector_uint2x4.h>
 
+#include "cuda/candidate_report.cuh"
+
 #define TPB 512
 #define NBN 2
 
@@ -299,12 +301,11 @@ void blake2b_gpu_hash(const uint32_t threads, const uint32_t startNonce, uint32_
 		 * rejected a valid share whose high word was below the target but whose low
 		 * word was above it, i.e. any share once the pool sets a non-zero high
 		 * word (share difficulty below 1). */
-		if (blake2b_h3(nonce) <= target) {
-			/* Atomic: the old read-modify-write lost a candidate when two threads
-			 * reported at once, silently. */
-			if (atomicCAS(&resNonce[0], UINT32_MAX, nonce) != UINT32_MAX)
-				atomicExch(&resNonce[1], nonce);
-		}
+		/* The two LOWEST candidates, resNonce[0] < resNonce[1]: the host resumes
+		 * at resNonce[1] + 1, so any third one is rescanned rather than skipped.
+		 * First/last-arriving slots lost every candidate between them. */
+		if (blake2b_h3(nonce) <= target)
+			report_candidate_2(resNonce, nonce);
 	}
 }
 
@@ -491,13 +492,15 @@ int scanhash_blake2b(int thr_id, struct work *work, uint32_t max_nonce, unsigned
 		{
 			const uint32_t Htarg = ptarget[7];
 			uint32_t _ALIGN(A) vhash[8];
+			/* The kernel reports the two lowest candidates, so everything up to the
+			 * higher one has been screened, whichever of them validates. */
+			const uint32_t scanned = (work->nonces[1] != UINT32_MAX) ? work->nonces[1] : work->nonces[0];
 			work->valid_nonces = 0;
 			endiandata[19] = work->nonces[0];
 			blake2b_hash(vhash, endiandata);
 			if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
 				work_set_target_ratio(work, vhash);
 				work->valid_nonces++;
-				pdata[19] = work->nonces[0] + 1;
 			} else {
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
@@ -508,7 +511,13 @@ int scanhash_blake2b(int thr_id, struct work *work, uint32_t max_nonce, unsigned
 				endiandata[19] = work->nonces[1];
 				blake2b_hash(vhash, endiandata);
 				if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
-					if (bn_hash_target_ratio(vhash, ptarget) > work->shareratio[0]) {
+					if (!work->valid_nonces) {
+						/* The first failed: this one is the share, and the submit
+						 * loop starts at slot 0. Comparing against shareratio[0]
+						 * here would read a value never set for this work. */
+						work->nonces[0] = work->nonces[1];
+						work_set_target_ratio(work, vhash);
+					} else if (bn_hash_target_ratio(vhash, ptarget) > work->shareratio[0]) {
 						work->sharediff[1] = work->sharediff[0];
 						work->shareratio[1] = work->shareratio[0];
 						xchg(work->nonces[1], work->nonces[0]);
@@ -517,7 +526,6 @@ int scanhash_blake2b(int thr_id, struct work *work, uint32_t max_nonce, unsigned
 						bn_set_target_ratio(work, vhash, 1);
 					}
 					work->valid_nonces++;
-					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1; // next scan start
 				} else {
 					gpu_increment_reject(thr_id);
 					if (!opt_quiet)
@@ -526,6 +534,7 @@ int scanhash_blake2b(int thr_id, struct work *work, uint32_t max_nonce, unsigned
 			}
 
 			if (work->valid_nonces) {
+				pdata[19] = scanned + 1; // next scan start
 				work->nonces[0] = cuda_swab32(work->nonces[0]);
 				work->nonces[1] = cuda_swab32(work->nonces[1]);
 				return work->valid_nonces;

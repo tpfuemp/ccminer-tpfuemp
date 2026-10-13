@@ -147,16 +147,39 @@ extern "C" void blake2s_hash(void *output, const void *input)
 #define maxResults 16
 
 __constant__ uint32_t _ALIGN(32) midstate[20];
+__constant__ uint32_t c_one = 1;
 
 static uint32_t *d_resNonce[MAX_GPUS];
 static uint32_t *h_resNonce[MAX_GPUS];
 
+/* sm_80+ issues LOP3/SHF/PRMT/IADD3 on the integer ALU pipe and IMAD on the FMA
+ * pipe, concurrently, and this kernel is bound by the ALU pipe. ptxas already
+ * turns the two-input adds into IMAD; the three-input a + b + m stays one IADD3,
+ * so it is split into two multiply-adds by a constant-bank 1, which ptxas
+ * cannot fold back into an add. Older arches keep the original expression. */
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+__device__ __forceinline__ uint32_t imad_add(const uint32_t x, const uint32_t y)
+{
+	uint32_t r;
+	asm("mad.lo.u32 %0, %1, %2, %3;" : "=r"(r) : "r"(x), "r"(c_one), "r"(y));
+	return r;
+}
+/* the literal-0 message words of the padding select the two-input form */
+__device__ __forceinline__ uint32_t add3(const uint32_t a, const uint32_t b, const int) { return b + a; }
+__device__ __forceinline__ uint32_t add3(const uint32_t a, const uint32_t b, const uint32_t e) {
+	return imad_add(e, imad_add(b, a));
+}
+#define ADD3(a,b,e) a = add3(a, b, e)
+#else
+#define ADD3(a,b,e) a += b + e
+#endif
+
 #define GS4(a,b,c,d,e,f,a1,b1,c1,d1,e1,f1,a2,b2,c2,d2,e2,f2,a3,b3,c3,d3,e3,f3){ \
-	a += b + e;		a1+= b1 + e1;	 	a2+= b2 + e2;		a3+= b3 + e3; \
+	ADD3(a,b,e);		ADD3(a1,b1,e1);		ADD3(a2,b2,e2);		ADD3(a3,b3,e3); \
 	d  = ROL16( d ^ a);	d1 = ROL16(d1 ^ a1);	d2 = ROL16(d2 ^ a2);	d3 = ROL16(d3 ^ a3); \
 	c +=d; 			c1+=d1;			c2+=d2;			c3+=d3;\
 	b  = ROTR32(b ^ c, 12); b1 = ROTR32(b1^c1, 12);	b2 = ROTR32(b2^c2, 12);	b3 = ROTR32(b3^c3, 12); \
-	a += b + f;		a1+= b1 + f1;		a2+= b2 + f2;		a3+= b3 + f3; \
+	ADD3(a,b,f);		ADD3(a1,b1,f1);		ADD3(a2,b2,f2);		ADD3(a3,b3,f3); \
 	d  = ROR8(d ^ a);	d1 = ROR8(d1^a1);	d2 = ROR8(d2^a2);	d3 = ROR8(d3^a3); \
 	c  += d;		c1 += d1;		c2 += d2;		c3 += d3;\
 	b  = ROTR32(b ^ c, 7);	b1 = ROTR32(b1^c1, 7);	b2 = ROTR32(b2^c2, 7);	b3 = ROTR32(b3^c3, 7); \
@@ -219,7 +242,7 @@ uint32_t blake2s_word7(const uint32_t nonce, const uint32_t m0, const uint32_t m
 
 //		GS(9,4,v[ 0],v[ 5],v[10],v[15]);
 	v[ 0] += v[ 5];
-	v[ 2] += v[ 7] + nonce;
+	ADD3(v[ 2], v[ 7], nonce);
 	v[15] = ROL16(v[15] ^ v[ 0]);
 	v[13] = ROL16(v[13] ^ v[ 2]);
 	v[10] += v[15];

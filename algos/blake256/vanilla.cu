@@ -22,6 +22,7 @@ extern "C" {
 }
 
 #include "cuda_helper.h"
+#include "cuda/candidate_report.cuh"
 
 #ifdef __INTELLISENSE__
 #define __byte_perm(x, y, b) x
@@ -30,10 +31,9 @@ extern "C" {
 /* threads per block and nonces per thread */
 #define TPB 768
 #define NPT 384
+/* Result buffer: the two LOWEST candidates of a launch, res[0] < res[1],
+ * UINT32_MAX when absent (report_candidate_2). */
 #define NBN 2
-/* slot 0 = atomicInc count, slots 1.. = nonces (the blake2s.cu shape). Sized
- * above the 2 the host submits so the flood warning stays meaningful. */
-#define MAX_RESULTS 8
 
 __constant__ uint32_t _ALIGN(16) d_data[21];
 
@@ -55,11 +55,30 @@ extern "C" void vanillahash(void *output, const void *input, int8_t blakerounds)
 
 	memcpy(output, hash, 32);
 }
+__constant__ uint32_t c_one = 1;
+
+/* sm_80+ issues LOP3/SHF/PRMT/IADD3 on the integer ALU pipe and IMAD on the FMA
+ * pipe, concurrently, and this kernel is bound by the ALU pipe. ptxas already
+ * turns the two-input adds into IMAD; the three-input a + (m ^ c) + b stays one
+ * IADD3, so it is split into two multiply-adds by a constant-bank 1, which
+ * ptxas cannot fold back into an add. Older arches keep the original expression. */
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+__device__ __forceinline__ uint32_t imad_add(const uint32_t x, const uint32_t y)
+{
+	uint32_t r;
+	asm("mad.lo.u32 %0, %1, %2, %3;" : "=r"(r) : "r"(x), "r"(c_one), "r"(y));
+	return r;
+}
+#define ADD3(a,b,e) a = imad_add(e, imad_add(b, a))
+#else
+#define ADD3(a,b,e) a += e + b
+#endif
+
 #define GS4(a,b,c,d,x,y,a1,b1,c1,d1,x1,y1,a2,b2,c2,d2,x2,y2,a3,b3,c3,d3,x3,y3) { \
-	v[ a]+= (m[ x] ^ z[ y]) + v[ b]; \
-	v[a1]+= (m[x1] ^ z[y1]) + v[b1]; \
-	v[a2]+= (m[x2] ^ z[y2]) + v[b2]; \
-	v[a3]+= (m[x3] ^ z[y3]) + v[b3]; \
+	ADD3(v[ a], v[ b], (m[ x] ^ z[ y])); \
+	ADD3(v[a1], v[b1], (m[x1] ^ z[y1])); \
+	ADD3(v[a2], v[b2], (m[x2] ^ z[y2])); \
+	ADD3(v[a3], v[b3], (m[x3] ^ z[y3])); \
 	\
 	v[ d] = __byte_perm(v[ d] ^ v[ a], 0, 0x1032); \
 	v[d1] = __byte_perm(v[d1] ^ v[a1], 0, 0x1032); \
@@ -76,10 +95,10 @@ extern "C" void vanillahash(void *output, const void *input, int8_t blakerounds)
 	v[b2] = ROTR32(v[b2] ^ v[c2], 12); \
 	v[b3] = ROTR32(v[b3] ^ v[c3], 12); \
 	\
-	v[ a]+= (m[ y] ^ z[ x]) + v[ b]; \
-	v[a1]+= (m[y1] ^ z[x1]) + v[b1]; \
-	v[a2]+= (m[y2] ^ z[x2]) + v[b2]; \
-	v[a3]+= (m[y3] ^ z[x3]) + v[b3]; \
+	ADD3(v[ a], v[ b], (m[ y] ^ z[ x])); \
+	ADD3(v[a1], v[b1], (m[y1] ^ z[x1])); \
+	ADD3(v[a2], v[b2], (m[y2] ^ z[x2])); \
+	ADD3(v[a3], v[b3], (m[y3] ^ z[x3])); \
 	\
 	v[ d] = __byte_perm(v[ d] ^ v[ a], 0, 0x0321); \
 	v[d1] = __byte_perm(v[d1] ^ v[a1], 0, 0x0321); \
@@ -98,9 +117,9 @@ extern "C" void vanillahash(void *output, const void *input, int8_t blakerounds)
 }
 
 #define GS3(a,b,c,d,x,y,a1,b1,c1,d1,x1,y1,a2,b2,c2,d2,x2,y2) { \
-	v[ a]+= (m[ x] ^ z[ y]) + v[ b]; \
-	v[a1]+= (m[x1] ^ z[y1]) + v[b1]; \
-	v[a2]+= (m[x2] ^ z[y2]) + v[b2]; \
+	ADD3(v[ a], v[ b], (m[ x] ^ z[ y])); \
+	ADD3(v[a1], v[b1], (m[x1] ^ z[y1])); \
+	ADD3(v[a2], v[b2], (m[x2] ^ z[y2])); \
 	\
 	v[ d] = __byte_perm(v[ d] ^ v[ a], 0, 0x1032); \
 	v[d1] = __byte_perm(v[d1] ^ v[a1], 0, 0x1032); \
@@ -114,9 +133,9 @@ extern "C" void vanillahash(void *output, const void *input, int8_t blakerounds)
 	v[b1] = ROTR32(v[b1] ^ v[c1], 12); \
 	v[b2] = ROTR32(v[b2] ^ v[c2], 12); \
 	\
-	v[ a]+= (m[ y] ^ z[ x]) + v[ b]; \
-	v[a1]+= (m[y1] ^ z[x1]) + v[b1]; \
-	v[a2]+= (m[y2] ^ z[x2]) + v[b2]; \
+	ADD3(v[ a], v[ b], (m[ y] ^ z[ x])); \
+	ADD3(v[a1], v[b1], (m[y1] ^ z[x1])); \
+	ADD3(v[a2], v[b2], (m[y2] ^ z[x2])); \
 	\
 	v[ d] = __byte_perm(v[ d] ^ v[ a], 0, 0x0321); \
 	v[d1] = __byte_perm(v[d1] ^ v[a1], 0, 0x0321); \
@@ -132,8 +151,8 @@ extern "C" void vanillahash(void *output, const void *input, int8_t blakerounds)
 }
 
 #define GS2(a,b,c,d,x,y,a1,b1,c1,d1,x1,y1) { \
-	v[ a]+= (m[ x] ^ z[ y]) + v[ b]; \
-	v[a1]+= (m[x1] ^ z[y1]) + v[b1]; \
+	ADD3(v[ a], v[ b], (m[ x] ^ z[ y])); \
+	ADD3(v[a1], v[b1], (m[x1] ^ z[y1])); \
 	\
 	v[ d] = __byte_perm(v[ d] ^ v[ a], 0, 0x1032); \
 	v[d1] = __byte_perm(v[d1] ^ v[a1], 0, 0x1032); \
@@ -144,8 +163,8 @@ extern "C" void vanillahash(void *output, const void *input, int8_t blakerounds)
 	v[ b] = ROTR32(v[ b] ^ v[ c], 12); \
 	v[b1] = ROTR32(v[b1] ^ v[c1], 12); \
 	\
-	v[ a]+= (m[ y] ^ z[ x]) + v[ b]; \
-	v[a1]+= (m[y1] ^ z[x1]) + v[b1]; \
+	ADD3(v[ a], v[ b], (m[ y] ^ z[ x])); \
+	ADD3(v[a1], v[b1], (m[y1] ^ z[x1])); \
 	\
 	v[ d] = __byte_perm(v[ d] ^ v[ a], 0, 0x0321); \
 	v[d1] = __byte_perm(v[d1] ^ v[a1], 0, 0x0321); \
@@ -158,14 +177,91 @@ extern "C" void vanillahash(void *output, const void *input, int8_t blakerounds)
 }
 
 #define GS(a,b,c,d,x,y) { \
-	v[a] += (m[x] ^ z[y]) + v[b]; \
+	ADD3(v[a], v[b], (m[x] ^ z[y])); \
 	v[d] = __byte_perm(v[d] ^ v[a],0, 0x1032); \
 	v[c] += v[d]; \
 	v[b] = ROTR32(v[b] ^ v[c], 12); \
-	v[a] += (m[y] ^ z[x]) + v[b]; \
+	ADD3(v[a], v[b], (m[y] ^ z[x])); \
 	v[d] = __byte_perm(v[d] ^ v[a],0, 0x0321); \
 	v[c] += v[d]; \
 	v[b] = ROTR32(v[b] ^ v[c], 7); \
+}
+
+/* One nonce of the kernel loop, split where it tests h7: vanilla_8_head()
+ * runs the 8 rounds up to the h7 word, vanilla_8_tail() the remaining G steps,
+ * which only feed h6. tmp[] is the host-advanced state (vanilla_cpu_setBlock_16),
+ * m[3] the nonce. The mining kernel keeps the tail behind its early-out,
+ * vanilla_gpu_checksum() runs both, so the two inline the same arithmetic. */
+__device__ __forceinline__
+void vanilla_8_head(uint32_t *v, const uint32_t *tmp, const uint32_t *m, const uint32_t *z,
+	const int8_t (*r)[16])
+{
+	#pragma unroll
+	for(int i=0;i<16;i++)
+		v[ i] = tmp[ i];
+
+	v[ 1]+= m[3] ^ z[2];
+	v[13] = __byte_perm(v[13] ^ v[1],0, 0x0321);
+	v[ 9]+= v[13];
+	v[ 5] = ROTR32(v[5] ^ v[9], 7);
+	v[ 0]+= v[5];
+	v[15] = __byte_perm(v[15] ^ v[0],0, 0x1032);
+
+	v[10]+= v[15];
+	v[ 5] = ROTR32(v[5] ^ v[10], 12);
+	ADD3(v[ 0], v[5], z[8]);
+	v[15] = __byte_perm(v[15] ^ v[0],0, 0x0321);
+	v[10]+= v[15];
+	v[ 5] = ROTR32(v[5] ^ v[10], 7);
+
+	GS3( 1, 6,11,12,10,11, 2, 7, 8,13,12,13, 3, 4, 9,14,14,15);
+
+	#pragma unroll
+	for(int i=0;i<6;i++){
+		GS4(0, 4, 8,12,r[i][ 0],r[i][ 1], 1, 5, 9,13,r[i][ 2],r[i][ 3], 2, 6,10,14,r[i][ 4],r[i][ 5], 3, 7,11,15,r[i][ 6],r[i][ 7]);
+		GS4(0, 5,10,15,r[i][ 8],r[i][ 9], 1, 6,11,12,r[i][10],r[i][11], 2, 7, 8,13,r[i][12],r[i][13], 3, 4, 9,14,r[i][14],r[i][15]);
+	}
+	GS4(0, 4, 8,12,r[6][ 0],r[6][ 1], 1, 5, 9,13,r[6][ 2],r[6][ 3], 2, 6,10,14,r[6][ 4],r[6][ 5], 3, 7,11,15,r[6][ 6],r[6][ 7]);
+
+	ADD3(v[ 0], v[5], (m[ 5] ^ z[0]));
+	ADD3(v[ 2], v[7], (m[ 8] ^ z[6]));
+	v[13] = __byte_perm(v[13] ^ v[2],0, 0x1032);
+	v[15] = __byte_perm(v[15] ^ v[0],0, 0x1032);
+
+	v[ 8] += v[13];
+	v[10] += v[15];
+
+	v[ 5] = ROTR32(v[ 5] ^ v[10], 12);
+	v[ 7] = ROTR32(v[ 7] ^ v[ 8], 12);
+
+	ADD3(v[ 0], v[5], (m[ 0] ^ z[5]));
+	ADD3(v[ 2], v[7], (m[ 6] ^ z[8]));
+
+	v[15] = __byte_perm(v[15] ^ v[ 0],0, 0x0321);
+	v[13] = __byte_perm(v[13] ^ v[ 2],0, 0x0321);
+
+	v[8] += v[13];
+	v[7]  = ROTR32(v[7] ^ v[8], 7);
+}
+
+__device__ __forceinline__
+void vanilla_8_tail(uint32_t *v, const uint32_t *m, const uint32_t *z)
+{
+	ADD3(v[ 1], v[6], (m[15] ^ z[ 4]));
+	ADD3(v[ 3], v[4], (m[2] ^ z[10]));
+	v[12]  = __byte_perm(v[12] ^ v[ 1],0, 0x1032);
+	v[14]  = __byte_perm(v[14] ^ v[3],0, 0x1032);
+	v[11] += v[12];
+	v[ 9] += v[14];
+	v[ 6]  = ROTR32(v[ 6] ^ v[11], 12);
+
+	ADD3(v[ 1], v[ 6], (m[ 4] ^ z[15]));
+	ADD3(v[ 3], ROTR32(v[ 4] ^ v[ 9],12), (m[10] ^ z[ 2]));
+	v[12]  = __byte_perm(v[12] ^ v[ 1],0, 0x0321);
+	v[14]  = __byte_perm(v[14] ^ v[ 3],0, 0x0321);
+
+	v[11] += v[12];
+	v[ 6] = ROTR32(v[ 6] ^ v[11], 7);
 }
 
 __global__ __launch_bounds__(TPB,1)
@@ -209,87 +305,69 @@ loopstart:
 		if(m3>=maxNonce)return;
 		m[3]  = m3;
 
-		#pragma unroll
-		for(int i=0;i<16;i++)
-			v[ i] = tmp[ i];
-
-		v[ 1]+= m[3] ^ z[2];
-		v[13] = __byte_perm(v[13] ^ v[1],0, 0x0321);
-		v[ 9]+= v[13];
-		v[ 5] = ROTR32(v[5] ^ v[9], 7);
-		v[ 0]+= v[5];
-		v[15] = __byte_perm(v[15] ^ v[0],0, 0x1032);
-
-		v[10]+= v[15];
-		v[ 5] = ROTR32(v[5] ^ v[10], 12);
-		v[ 0]+= z[8] + v[5];
-		v[15] = __byte_perm(v[15] ^ v[0],0, 0x0321);
-		v[10]+= v[15];
-		v[ 5] = ROTR32(v[5] ^ v[10], 7);
-
-		GS3( 1, 6,11,12,10,11, 2, 7, 8,13,12,13, 3, 4, 9,14,14,15);
-
-		#pragma unroll
-		for(int i=0;i<6;i++){
-			GS4(0, 4, 8,12,r[i][ 0],r[i][ 1], 1, 5, 9,13,r[i][ 2],r[i][ 3], 2, 6,10,14,r[i][ 4],r[i][ 5], 3, 7,11,15,r[i][ 6],r[i][ 7]);
-			GS4(0, 5,10,15,r[i][ 8],r[i][ 9], 1, 6,11,12,r[i][10],r[i][11], 2, 7, 8,13,r[i][12],r[i][13], 3, 4, 9,14,r[i][14],r[i][15]);
-		}
-		GS4(0, 4, 8,12,r[6][ 0],r[6][ 1], 1, 5, 9,13,r[6][ 2],r[6][ 3], 2, 6,10,14,r[6][ 4],r[6][ 5], 3, 7,11,15,r[6][ 6],r[6][ 7]);
-
-		v[ 0] += (m[ 5] ^ z[0]) + v[5];
-		v[ 2] += (m[ 8] ^ z[6]) + v[7];
-		v[13] = __byte_perm(v[13] ^ v[2],0, 0x1032);
-		v[15] = __byte_perm(v[15] ^ v[0],0, 0x1032);
-
-		v[ 8] += v[13];
-		v[10] += v[15];
-
-		v[ 5] = ROTR32(v[ 5] ^ v[10], 12);
-		v[ 7] = ROTR32(v[ 7] ^ v[ 8], 12);
-
-		v[ 0] += (m[ 0] ^ z[5]) + v[5];
-		v[ 2] += (m[ 6] ^ z[8]) + v[7];
-
-		v[15] = __byte_perm(v[15] ^ v[ 0],0, 0x0321);
-		v[13] = __byte_perm(v[13] ^ v[ 2],0, 0x0321);
-
-		v[8] += v[13];
-		v[7]  = ROTR32(v[7] ^ v[8], 7);
+		vanilla_8_head(v, tmp, m, z, r);
 
 		// only compute h6 & 7
 		/* h6 is only needed if h7 already passes, so keep the tail behind a test
 		 * on h7 alone. Derived from the target, not hard-coded to zero. */
 		const uint32_t hh7 = cuda_swab32(h7^v[7]^v[15]);
 		if (hh7 <= (uint32_t) (highTarget >> 32)) {
-			v[ 1] += (m[15] ^ z[ 4]) + v[6];
-			v[ 3] += (m[2] ^ z[10]) + v[4];
-			v[12]  = __byte_perm(v[12] ^ v[ 1],0, 0x1032);
-			v[14]  = __byte_perm(v[14] ^ v[3],0, 0x1032);
-			v[11] += v[12];
-			v[ 9] += v[14];
-			v[ 6]  = ROTR32(v[ 6] ^ v[11], 12);
-
-			v[ 1] += (m[ 4] ^ z[15]) + v[ 6];
-			v[ 3] += (m[10] ^ z[ 2]) + ROTR32(v[ 4] ^ v[ 9],12);
-			v[12]  = __byte_perm(v[12] ^ v[ 1],0, 0x0321);
-			v[14]  = __byte_perm(v[14] ^ v[ 3],0, 0x0321);
-
-			v[11] += v[12];
-			v[ 6] = ROTR32(v[ 6] ^ v[11], 7);
+			vanilla_8_tail(v, m, z);
 
 			const uint64_t high = ((uint64_t) hh7 << 32) | cuda_swab32(h6^v[6]^v[14]);
-			if (high <= highTarget) {
-				/* slot 0 is the count; the slot write must stay bounded. Order does
-				 * not matter, the host picks the better nonce by target ratio. */
-				const uint32_t pos = atomicInc(&resNonce[0], UINT32_MAX) + 1;
-				if (pos < MAX_RESULTS)
-					resNonce[pos] = (uint32_t) m[3];
-				/* No return: keep scanning this thread's remaining strided nonces,
-				 * or a better one later in the stride is never examined. */
-			}
+			/* No return after a hit: keep scanning this thread's remaining strided
+			 * nonces, or a lower one later in the stride is never examined. */
+			if (high <= highTarget)
+				report_candidate_2(resNonce, (uint32_t) m[3]);
 		}
 	m3+=step;
 	goto loopstart;
+}
+
+/* Diagnostic checksum over a nonce range, one nonce per thread: the two
+ * order-independent accumulators blake256.cu uses, over the raw (h7,h6) state
+ * words, through the same head and tail the mining kernel inlines. */
+__global__
+void vanilla_gpu_checksum(const uint32_t threads, const uint32_t startNonce, uint64_t *acc)
+{
+	const uint32_t thread = blockDim.x * blockIdx.x + threadIdx.x;
+	if (thread >= threads)
+		return;
+
+	const int8_t r[][16] = {
+		{ 14, 10,  4,  8,  9, 15, 13,  6,  1, 12,  0,  2, 11,  7,  5,  3 },{ 11,  8, 12,  0,  5,  2, 15, 13, 10, 14,  3,  6,  7,  1,  9,  4 },
+		{  7,  9,  3,  1, 13, 12, 11, 14,  2,  6,  5, 10,  4,  0, 15,  8 },{  9,  0,  5,  7,  2,  4, 10, 15, 14,  1, 11, 12,  6,  8,  3, 13 },
+		{  2, 12,  6, 10,  0, 11,  8,  3,  4, 13,  7,  5, 15, 14,  1,  9 },{ 12,  5,  1, 15, 14, 13,  4, 10,  0,  7,  6,  3,  9,  2,  8, 11 },
+		{ 13, 11,  7, 14, 12,  1,  3,  9,  5,  0, 15,  4,  8,  6,  2, 10 }
+	};
+	const uint32_t z[16] = {
+		0x243F6A88, 0x85A308D3, 0x13198A2E, 0x03707344, 0xA4093822, 0x299F31D0, 0x082EFA98, 0xEC4E6C89,
+		0x452821E6, 0x38D01377, 0xBE5466CF, 0x34E90C6C, 0xC0AC29B7, 0xC97C50DD, 0x3F84D5B5, 0xB5470917
+	};
+	uint32_t _ALIGN(16) v[16];
+	uint32_t _ALIGN(16) tmp[16];
+
+	#pragma unroll
+	for (int i = 0; i < 16; i++)
+		tmp[i] = d_data[i];
+
+	const uint32_t nonce = startNonce + thread;
+	const uint32_t m[16] = {
+		d_data[16], d_data[17], d_data[18], nonce,
+		0x80000000UL, 0, 0, 0,
+		0, 0, 0, 0,
+		0, 1, 0, 640
+	};
+
+	vanilla_8_head(v, tmp, m, z, r);
+	vanilla_8_tail(v, m, z);
+
+	const uint64_t w = ((uint64_t) (d_data[19] ^ v[7] ^ v[15]) << 32) | (d_data[20] ^ v[6] ^ v[14]);
+	/* unsigned long long, not uint64_t: on Linux uint64_t is unsigned long and
+	 * would not match the CUDA atomic overload. */
+	atomicXor((unsigned long long*) &acc[0], (unsigned long long) w);
+	atomicXor((unsigned long long*) &acc[1],
+		(unsigned long long) (w * (2ULL * (uint64_t) nonce + 1ULL)));
 }
 
 __host__
@@ -370,6 +448,64 @@ void vanilla_cpu_setBlock_16(const int thr_id,const uint32_t* endiandata, uint32
 	cudaMemcpyToSymbolAsync(d_data, h, 21*sizeof(uint32_t), 0, cudaMemcpyHostToDevice, streams[thr_id]);
 }
 
+/* Host side of the differential: uploads the job from pdata (so it can run
+ * before scanhash and from the self-test), then checksums `count` nonces from
+ * `startNonce` on the GPU. acc stays {0,0} if the GPU part could not run. */
+__host__
+void vanilla_differential(int thr_id, const uint32_t *pdata, uint32_t count, uint32_t startNonce, uint64_t *acc)
+{
+	uint32_t _ALIGN(64) endiandata[16];
+	uint64_t *d_acc = NULL;
+	acc[0] = acc[1] = 0;
+
+	for (int k = 0; k < 16; k++)
+		be32enc(&endiandata[k], pdata[k]);
+	vanilla_cpu_setBlock_16(thr_id, endiandata, (uint32_t*) &pdata[16]);
+
+	if (cudaMalloc(&d_acc, 2 * sizeof(uint64_t)) != cudaSuccess)
+		return;
+	if (cudaMemsetAsync(d_acc, 0, 2 * sizeof(uint64_t), streams[thr_id]) == cudaSuccess) {
+		vanilla_gpu_checksum <<<(count + TPB - 1) / TPB, TPB, 0, streams[thr_id]>>> (count, startNonce, d_acc);
+		if (cudaStreamSynchronize(streams[thr_id]) == cudaSuccess)
+			cudaMemcpy(acc, d_acc, 2 * sizeof(uint64_t), cudaMemcpyDeviceToHost);
+	}
+	cudaFree(d_acc);
+}
+
+/* Permanent -D consistency check, once per job: GPU checksum against the
+ * host reference over `count` nonces. */
+static void vanilla_check_range(int thr_id, const uint32_t *pdata, uint32_t startNonce, uint32_t count)
+{
+	uint32_t _ALIGN(64) ed[20], vhash[8];
+	uint64_t gpu[2], cpu[2] = { 0, 0 };
+
+	vanilla_differential(thr_id, pdata, count, startNonce, gpu);
+
+	for (int k = 0; k < 19; k++)
+		be32enc(&ed[k], pdata[k]);
+	for (uint32_t i = 0; i < count; i++) {
+		const uint32_t nonce = startNonce + i;
+		be32enc(&ed[19], nonce);
+		vanillahash(vhash, ed, 8);
+		/* sph writes the digest big-endian: un-swap to the state words. */
+		const uint64_t w = ((uint64_t) swab32(vhash[7]) << 32) | swab32(vhash[6]);
+		cpu[0] ^= w;
+		cpu[1] ^= w * (2ull * (uint64_t) nonce + 1ull);
+	}
+
+	if (gpu[0] != cpu[0] || gpu[1] != cpu[1]) {
+		gpulog(LOG_ERR, thr_id, "differential MISMATCH over %u nonces from %08x", count, startNonce);
+		gpulog(LOG_ERR, thr_id, "  gpu %016llx / %016llx  cpu %016llx / %016llx",
+			(unsigned long long) gpu[0], (unsigned long long) gpu[1],
+			(unsigned long long) cpu[0], (unsigned long long) cpu[1]);
+	} else {
+		gpulog(LOG_DEBUG, thr_id, "differential OK: %u nonces from %08x (xor %016llx)",
+			count, startNonce, (unsigned long long) gpu[0]);
+	}
+}
+
+extern bool vanilla_device_selftest(int thr_id);
+
 static bool init[MAX_GPUS] = { 0 };
 
 extern "C" int scanhash_vanilla(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done, const int8_t blakerounds)
@@ -390,8 +526,11 @@ extern "C" int scanhash_vanilla(int thr_id, struct work* work, uint32_t max_nonc
 
 	/* NPT*TPB is large, so a low intensity leaves too few blocks to fill the
 	 * device and per-launch cost dominates. 27 is the smallest size on the
-	 * throughput plateau; going higher only lengthens the batch. */
-	int intensity = (device_sm[dev_id] > 500 && !is_windows()) ? 30 : 27;
+	 * throughput plateau on sm_86; going higher only lengthens the batch.
+	 * Pascal is not on it at 27 (GTX 1080 Ti: -10.9% per MHz against 30),
+	 * so it takes 30 on Windows as well. */
+	const bool sm6x = device_sm[dev_id] >= 600 && device_sm[dev_id] < 700;
+	int intensity = (device_sm[dev_id] > 500 && (!is_windows() || sm6x)) ? 30 : 27;
 	if (device_sm[dev_id] < 350) intensity = 22;
 	uint32_t throughput = cuda_default_throughput(thr_id, 1U << intensity);
 	if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
@@ -409,10 +548,10 @@ extern "C" int scanhash_vanilla(int thr_id, struct work* work, uint32_t max_nonc
 
 		cuda_get_arch(thr_id);
 
-		CUDA_CALL_OR_RET_X(cudaMalloc(&d_resNonce[thr_id], MAX_RESULTS * sizeof(uint32_t)), -1);
-		CUDA_CALL_OR_RET_X(cudaMallocHost(&h_resNonce[thr_id], MAX_RESULTS * sizeof(uint32_t)), -1);
-		CUDA_CALL_OR_RET_X(cudaMemset(d_resNonce[thr_id], 0x00, MAX_RESULTS * sizeof(uint32_t)), -1);
+		CUDA_CALL_OR_RET_X(cudaMalloc(&d_resNonce[thr_id], NBN * sizeof(uint32_t)), -1);
+		CUDA_CALL_OR_RET_X(cudaMallocHost(&h_resNonce[thr_id], NBN * sizeof(uint32_t)), -1);
 		cudaStreamCreate(&streams[thr_id]);
+		vanilla_device_selftest(thr_id); // fail-closed, exits on mismatch
 		init[thr_id] = true;
 	}
 
@@ -421,6 +560,10 @@ extern "C" int scanhash_vanilla(int thr_id, struct work* work, uint32_t max_nonc
 	for (int k = 0; k < 16; k++)
 		be32enc(&endiandata[k], pdata[k]);
 
+	/* Before the job upload: the differential uploads the same words itself. */
+	if (opt_debug)
+		vanilla_check_range(thr_id, pdata, pdata[19], 2048);
+
 	vanilla_cpu_setBlock_16(thr_id,endiandata,&pdata[16]);
 
 	const dim3 grid((throughput + (NPT*TPB)-1)/(NPT*TPB));
@@ -428,65 +571,71 @@ extern "C" int scanhash_vanilla(int thr_id, struct work* work, uint32_t max_nonc
 	int rc = 0;
 
 	do {
-		/* Only the count needs clearing; the slots are armed once at init. */
-		cudaMemsetAsync(d_resNonce[thr_id], 0x00, sizeof(uint32_t),streams[thr_id]);
+		/* Both slots armed before every launch, same stream as the kernel. */
+		cudaMemsetAsync(d_resNonce[thr_id], 0xff, NBN*sizeof(uint32_t), streams[thr_id]);
 		vanilla_gpu_hash_16_8<<<grid,block, 0, streams[thr_id]>>>(throughput, pdata[19], d_resNonce[thr_id], targetHigh);
-		cudaMemcpyAsync(h_resNonce[thr_id], d_resNonce[thr_id], MAX_RESULTS*sizeof(uint32_t), cudaMemcpyDeviceToHost,streams[thr_id]);
+		cudaMemcpyAsync(h_resNonce[thr_id], d_resNonce[thr_id], NBN*sizeof(uint32_t), cudaMemcpyDeviceToHost,streams[thr_id]);
 		*hashes_done = pdata[19] - first_nonce + throughput;
 		cudaStreamSynchronize(streams[thr_id]);
 
-		uint32_t count = h_resNonce[thr_id][0];	/* slot 0 is the atomicInc count */
-		if (count >= MAX_RESULTS) {
-			gpulog(LOG_WARNING, thr_id, "candidates flood: %u", count);
-			count = MAX_RESULTS - 1;
-		}
-		if (count > 0){
+		work->nonces[0] = h_resNonce[thr_id][0];
+		work->nonces[1] = h_resNonce[thr_id][1];
+		if (work->nonces[0] != UINT32_MAX) {
 			uint32_t vhashcpu[8];
+			/* The kernel reports the two lowest candidates, so everything up to the
+			 * higher one has been screened, whichever of them validates. */
+			const uint32_t scanned = (work->nonces[1] != UINT32_MAX) ? work->nonces[1] : work->nonces[0];
 
 			for (int k=0; k < 19; k++)
 				be32enc(&endiandata[k], pdata[k]);
 
-			be32enc(&endiandata[19], h_resNonce[thr_id][1]);
-			vanillahash(vhashcpu, endiandata, blakerounds);
-
 			/* fulltest() alone is authoritative; the old vhashcpu[6] <= Htarg
 			 * prefix repeated the device's narrowing and dropped the same shares. */
+			work->valid_nonces = 0;
+			be32enc(&endiandata[19], work->nonces[0]);
+			vanillahash(vhashcpu, endiandata, blakerounds);
 			if (fulltest(vhashcpu, ptarget)) {
-				work->valid_nonces = 1;
-				work->nonces[0] = h_resNonce[thr_id][1];
 				work_set_target_ratio(work, vhashcpu);
-#if NBN > 1
-				if (count > 1) {
-					work->nonces[1] = h_resNonce[thr_id][2];
-					be32enc(&endiandata[19], h_resNonce[thr_id][2]);
-					vanillahash(vhashcpu, endiandata, blakerounds);
-					/* The second nonce needs the same re-verify as the first, or a
-					 * kernel fault here becomes a bad share instead of a reject. */
-					if (fulltest(vhashcpu, ptarget)) {
-						if (bn_hash_target_ratio(vhashcpu, ptarget) > work->shareratio[0]) {
-							work_set_target_ratio(work, vhashcpu);
-							xchg(work->nonces[0], work->nonces[1]);
-						} else {
-							bn_set_target_ratio(work, vhashcpu, 1);
-						}
-						work->valid_nonces = 2;
-					}
-					/* Cursor stays outside the guard: a rejected second nonce is still
-					 * ground the scan covered, and re-scanning it would stall. */
-					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
-				} else {
-					pdata[19] = work->nonces[0] + 1; // cursor
-				}
-#endif
-				return work->valid_nonces;
-			}
-			else { /* terminal: never drop a candidate silently */
+				work->valid_nonces++;
+			} else {
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
-					gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", h_resNonce[thr_id][1]);
-				pdata[19] = work->nonces[0] + 1;
-				continue;
+					gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
 			}
+#if NBN > 1
+			if (work->nonces[1] != UINT32_MAX) {
+				/* The second nonce needs the same re-verify as the first, or a
+				 * kernel fault here becomes a bad share instead of a reject. */
+				be32enc(&endiandata[19], work->nonces[1]);
+				vanillahash(vhashcpu, endiandata, blakerounds);
+				if (fulltest(vhashcpu, ptarget)) {
+					if (!work->valid_nonces) {
+						/* The first failed: this one is the share, and the submit
+						 * loop starts at slot 0. */
+						work->nonces[0] = work->nonces[1];
+						work_set_target_ratio(work, vhashcpu);
+					} else if (bn_hash_target_ratio(vhashcpu, ptarget) > work->shareratio[0]) {
+						work->sharediff[1] = work->sharediff[0];
+						work->shareratio[1] = work->shareratio[0];
+						xchg(work->nonces[1], work->nonces[0]);
+						work_set_target_ratio(work, vhashcpu);
+					} else {
+						bn_set_target_ratio(work, vhashcpu, 1);
+					}
+					work->valid_nonces++;
+				} else {
+					gpu_increment_reject(thr_id);
+					if (!opt_quiet)
+						gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[1]);
+				}
+			}
+#endif
+			/* Resume after the higher reported candidate either way: a third one
+			 * lies above it, so a full-throughput step could skip it. */
+			pdata[19] = scanned + 1;
+			if (work->valid_nonces)
+				return work->valid_nonces;
+			continue;
 		}
 
 		if ((uint64_t) throughput + pdata[19] >= max_nonce) {
