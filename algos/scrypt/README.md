@@ -4,14 +4,10 @@ Scrypt and scrypt-jane, relocated from the repo root (`scrypt/` folder plus the
 `scrypt.cpp` / `scrypt-jane.cpp` dispatchers) into a single self-contained
 `algos/scrypt/`.
 
-> **Status: dead-dispatched in this fork.** `ALGO_SCRYPT` / `ALGO_SCRYPT_JANE`
-> and their names still exist in `algos.h`, and `scanhash_scrypt` /
-> `scanhash_scrypt_jane` are still defined here, but `ccminer.cpp` has no
-> `case ALGO_SCRYPT: rc = scanhash_scrypt(...)` in its main dispatch switch
-> (only the auxiliary nonce/min-max/n-factor switches reference the enums). So
-> the algo cannot currently mine — re-enabling it would mean restoring the
-> dispatch case (compare with how equihash was re-enabled). This relocation is
-> housekeeping and changes no behaviour.
+> **Status: live.** Both algos were dead-dispatched for a while (the main
+> scanhash switch in `ccminer.cpp` had no case for them, so `-a scrypt` could
+> not mine). The dispatch cases were restored in `2dd88e1`; `ccminer.cpp`
+> now calls `scanhash_scrypt` / `scanhash_scrypt_jane` like any other algo.
 
 ## Layout
 
@@ -47,5 +43,6 @@ unaffected.
 
 ## Validation
 
-Rebuild owed. Because the algo is dead-dispatched, a `--benchmark`/live run is
-not possible without first restoring the `ccminer.cpp` dispatch case.
+Run `--benchmark` and a short pool run after any change, as for every algo
+(`docs/coding-guideline.md` §7). Every GPU candidate is re-hashed on the CPU
+before submit.

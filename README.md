@@ -207,13 +207,17 @@ Monitoring and control
 
 Two APIs are available and can run at the same time:
 
-- **Binary/telnet API** (`--api-bind`), the upstream protocol, unchanged.
-- **HTTP/JSON REST API** (`--api-http-bind`), added in 2026.09. Read-only status,
+- **Binary/telnet API** on `--api-bind` (default `127.0.0.1:4068`), the upstream
+  protocol, unchanged.
+- **HTTP/JSON REST API**, added in 2026.09 and enabled with `--api-mode http` or
+  `--api-mode both` (both protocols on the `--api-bind` port, or HTTP on a
+  separate port with `--api-http-port`). Read-only status,
   plus optional **runtime control**: switch pool or algorithm, pause and resume
   mining, and apply per-algo parameters without restarting. It also exposes
   **Prometheus** metrics and a `/health` endpoint for container probes.
 
-Control endpoints are refused unless explicitly enabled, and `--api-remote`
+Control endpoints are refused unless enabled with `--api-control`;
+`--api-token` requires a bearer token on every HTTP route, and `--api-remote`
 separates "may read" from "may change" so a dashboard can be given status access
 without the ability to redirect hashrate.
 

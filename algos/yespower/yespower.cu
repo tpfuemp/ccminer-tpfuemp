@@ -5,10 +5,11 @@
  * shape.  The reference stays compiled in as the host-side re-verify for every
  * GPU candidate, so a kernel bug can only cost a local reject, never a bad share.
  *
- * ARCH GATE: S is 96 KiB of shared memory per instance, so this needs a device
- * that can opt in to >= 98304 B per block -- sm_80/sm_86 only.  Turing caps at
- * 64 KiB and Pascal at 48 KiB, and the global-memory alternative is slower per
- * access.  Checked at init.
+ * S-BOX PLACEMENT: S is 96 KiB per instance.  It normally lives in a global
+ * arena, which runs on every supported arch (sm_61+) and fits far more
+ * instances per SM.  Keeping S in shared memory needs a block opt-in of
+ * >= 98304 B (sm_80/sm_86; Turing caps at 64 KiB, Pascal at 48 KiB) and is only
+ * a last resort when the global arena does not fit in VRAM.  Chosen at init.
  *
  * Version selection: yespower 1.0 only.  yespower 0.5 is bit-identical to the
  * yescrypt 0.5 this miner already ships in algos/yescrypt/, so a 0.5 request

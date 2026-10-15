@@ -1,26 +1,29 @@
 # bmw family (`-a bmw`/`bmw256`, `-a bmw512`)
 
-Standalone Blue Midnight Wish coins (tpruvot lineage, GPLv3), relocated from
-`Algo256/`.
+Standalone Blue Midnight Wish coins (tpruvot lineage, GPLv3).
 
-- `bmw.cu` — `scanhash_bmw`: BMW-256 (a.k.a. `bmw256`). Uses the BMW-256 stage
-  kernels in `algos/stages/`: `cuda_bmw.cu` (80-byte head: `bmw256_cpu_hash_80`,
-  `bmw256_setBlock_80`, `bmw256_midstate_*`, built `--maxrregcount=76`) and
-  `cuda_bmw256.cu` (`bmw256_cpu_hash_32`/`_init`/`_setTarget`, shared with the
-  lyra2 family).
-- `bmw512.cu` — `scanhash_bmw512`: BMW-512. Rides the shared quark BMW-512
-  launcher (`quark_bmw512_cpu_*` forwarders → `algos/stages/cuda_bmw512.cu`); no
-  dedicated primitive of its own.
+- `bmw.cu` - `scanhash_bmw`: BMW-256 of the 80-byte header. Kernel in
+  `algos/stages/cuda_bmw.cu`: the host hashes block 1 and precomputes the
+  nonce-free part of block 2 once per job (`bmw256_setBlock_80`); the kernel
+  `bmw256_gpu_hash_80_final` finishes the hash and screens it against the
+  target. On sm_80+ part of the additions run on the IMAD pipe. Default
+  intensity 27. `cuda_bmw256.cu` (the 32-byte stage used by `lyra2v2`) is a
+  separate body.
+- `bmw512.cu` - `scanhash_bmw512`: BMW-512 of the 80-byte header. Kernel
+  `bmw512_gpu_hash_80_final` in `algos/stages/cuda_bmw512.cu`, with the
+  nonce-free part of the first compression precomputed once per job
+  (`bmw512_final_setBlock_80`). The 64-byte stage and `bmw512_gpu_hash_80`
+  in the same file serve the x-family and are separate.
 
-## Layout
-
-Relocation only (layout B). The `bmw256` primitives keep their names because
-`cuda_bmw256.cu` is co-owned with the lyra2 family (`lyra2REv2`), which has since
-migrated as well (`algos/lyra2/`). Renaming is therefore a family-wide 256-bit
-naming pass touching both owners rather than a bmw-local change, so it remains a
-separate follow-up — it is no longer waiting on a migration. Consumers reach the
-primitives via `extern` declarations (unchanged by the move).
+Both kernels report the two lowest candidates; the host re-verifies every one
+with `fulltest` before submitting.
 
 ## Validation
 
-Pure `git mv` + build-system repoint. Rebuild + benchmark re-validation owed.
+- Start-up self-test per algo, fails closed: known-answer test against an
+  independent implementation of the spec, a negative test, a GPU-vs-CPU check
+  over a nonce range through the mining arithmetic, and a check of the
+  candidate report.
+- `-D` repeats the GPU-vs-CPU check over 2048 nonces of every new job.
+- `BMW_SELFTEST_FAULT=<check>` (kat, neg, diff, negd, report, cuda, jobdiff)
+  breaks one check on purpose; for testing the self-test only.

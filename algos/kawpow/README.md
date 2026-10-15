@@ -66,5 +66,7 @@ submit** — a kernel bug can only ever cause a local reject, never a bad share.
 | :-- | :-- | :-- | :-- |
 | RTX 3060 | sm_86 | ~19.5 MH/s | 2026-07-19, `--benchmark`, warp-cooperative 16-lane JIT search kernel (16 threads/nonce, `__shfl_sync`, coalesced `LDG.E.128` DAG reads, shared `c_dag`, `hack_false` load-scheduling barrier, compile-time-constant DAG modulo, 256-thread blocks). ~20.7× over the initial single-thread-per-nonce kernel (~0.94 MH/s); ~3% off CryptoDredge (20.16 MH/s, same card). DRAM-bandwidth-bound (~89% of the card's ~360 GB/s peak). |
 
-Requires the CUDA NVRTC runtime DLLs (`nvrtc64_112_0.dll`,
-`nvrtc-builtins64_118.dll`) on `PATH` — shipped with the CUDA 11.8 toolkit.
+NVRTC is linked statically on both platforms (`nvrtc_static.lib` and
+`nvrtc-builtins_static.lib` in the vcxproj; `-lnvrtc_static
+-lnvrtc-builtins_static -lnvptxcompiler_static` in `Makefile.am`), so the
+binary needs no NVRTC DLL or shared library at run time — only the driver.
