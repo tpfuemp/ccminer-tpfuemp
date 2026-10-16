@@ -1,5 +1,5 @@
 
-ccminer-tpfuemp 2026.09.2   "VerusHash 2.2, HomeScrypt, MinotaurX, yespowerSMT; bitsliced groestl and whirlpool, faster x-family"
+ccminer-tpfuemp 2026.10   "BC3Hash for Bitcoin III; faster blake256, balloon and bmw; GPU self-tests"
 ---------------------------------------------------------------
 
 Donation addresses and contributor credits are in CREDITS.txt.
@@ -37,6 +37,7 @@ its command line interface and options.
                           argon2id1024        Bitweb (BTW)
                           balloon             Balloon hash
                           bastion             Hefty bastion
+                          bc3hash / bc3       BC3Hash (Bitcoin III, from block 64360)
                           bitcore             Timetravel-10
                           blake               Blake-256 (SFR)
                           blake2b             Blake2-B 512 (BCX)
@@ -106,7 +107,7 @@ its command line interface and options.
                           sha256dv            SHA256d (Veil)
                           sha256t             SHA256 x3
                           sha3d               BSHA3 (Yilacoin, Kylacoin)
-                          sha3t               SHA3-256T (Fjarcode, Bitcoin III)
+                          sha3t               SHA3-256T (Fjarcode, Bitcoin III before block 64360)
                           sha512256d          Double SHA-512/256 (Radiant)
                           sia                 SIA (Blake2B)
                           sib                 Sibcoin (X11 + Streebog)
@@ -305,7 +306,9 @@ Default API feature is only enabled for localhost queries by default, on port 40
 You can test this api on linux with "telnet <miner-ip> 4068" and type "help" to list the commands.
 Default api format is delimited text. If required a php json wrapper is present in api/ folder.
 
-I plan to add a json format later, if requests are formatted in json too..
+An HTTP/JSON REST API is available as well: --api-mode http (or both) serves
+status, Prometheus metrics and /health, and with --api-control also pool,
+algorithm and pause/resume control. See docs/api-rest.md.
 
 
 >>> Additional Notes <<<
@@ -326,6 +329,43 @@ Toolkit, use the upstream project instead -- it retains that wider hardware and
 toolkit range: https://github.com/tpruvot/ccminer
 
 >>> RELEASE HISTORY <<<
+  Oct. 16th 2026 ccminer-tpfuemp 2026.10
+
+                  New algorithms
+                    bc3hash          BC3Hash (Bitcoin III, from block 64360):
+                                     about 360 kH/s on an RTX 3060, 127 kH/s
+                                     on a GTX 1080 Ti; curve tables use 3 GB
+                                     of GPU memory when available (256 MB
+                                     otherwise)
+
+                  Speed
+                    blake256   3-input adds on the IMAD pipe (sm_80+): blake,
+                               blakecoin, vanilla +18-20% (RTX 3060); blake2s
+                               +5%; GTX 10-series now defaults to -i 30 on
+                               Windows too
+                    balloon    register-resident kernel: about 4x on a GTX
+                               1080 Ti; default batch sized to the GPU
+                    bmw        target screen inside the kernel, per-job
+                               precompute, default intensity 27
+                    bastion, heavy: reworked HEFTY1 core
+
+                  Fixes
+                    allium, lyra2, lyra2v2, lyra2z, lyra2z330: the first launch
+                    after a new job could scan past the requested range
+                    argon2d    race in the finalize step; both reported
+                               candidates are now checked separately
+                    blake, blakecoin, vanilla, blake2b: a valid second
+                    candidate in a launch is now submitted too
+                    bmw, bmw512: the second candidate is verified before it
+                    is submitted
+                    heavy, bastion, balloon: scan resume after a find
+                    bastion    two waits shared one sleep slot and overslept
+
+                  Verification
+                    fail-closed GPU self-tests at startup for argon2d (all five
+                    variants), blake256, vanilla, bmw, bmw512 and bastion;
+                    -D runs a GPU-vs-CPU check for them
+
   Oct. 2nd 2026  ccminer-tpfuemp 2026.09.2
 
                   New algorithms
