@@ -20,8 +20,9 @@ every candidate.
 
   The patched build matches the unpatched coin sources bit for bit, and the
   coin's test vectors pass.
-- **secp256k1:** the copy vendored for curvehash (`algos/curvehash/secp256k1`),
-  plus curvehash's device field/group code.
+- **secp256k1:** the copy vendored for curvehash (`algos/curvehash/secp256k1`)
+  on the host; on the device, curvehash's field/group code builds the curve
+  tables, and an own 8 x 32-bit field runs the scan.
 - `bc3hash_oracle.cpp` builds `ref/` as one C++17 translation unit.
 
 ## Consensus definition
@@ -61,21 +62,22 @@ The moduli are pseudo-Mersenne 2^(64L) - c:
 
 ## GPU implementation
 
-One thread per nonce, three kernels per batch, with the state in global memory
-(SoA, about 0.8 KB per nonce):
+One thread per nonce, with the state in global memory between kernels (SoA):
 
 | kernel | work |
 |---|---|
 | `bc3_k_front_ab` | the six front hashes, the schedule, phases A and B |
-| `bc3_k_c` | phase C |
+| `bc3_k_c_exp1`, `bc3_k_c_exp2`, `bc3_k_c_ec` | phase C, three launches per round (16 rounds) |
 | `bc3_k_d_final` | phase D, the final SHA3-256, the target compare and report |
 
 The device code lives in `cuda/`:
 
-- `bc3_uint_device.cuh`: 32-bit-limb integers and the modular multiply.
-- `bc3_exp_device.cuh`: fixed exponents, fixed-base powers, `inverse256`.
-- `bc3_ec_device.cuh`: 16-bit-window fixed-base curve multiplication, and the
-  table builder.
+- `bc3_uint_device.cuh`: 32-bit-limb integers and the modular multiply and
+  square (PTX carry chains).
+- `bc3_exp_device.cuh`: fixed exponents, fixed-base powers, and the modular
+  inverses (safegcd).
+- `bc3_ec_device.cuh`: fixed-base curve multiplication (8 x 32-bit field, four
+  points per round sharing one inversion), and the table builder.
 - `bc3_mix_device.cuh`: the four phases.
 - `bc3_hashes_device.cuh`: SHA3, SHA-512, RIPEMD-160 and BLAKE2s/b with
   personalization.
@@ -83,10 +85,13 @@ The device code lives in `cuda/`:
 
 Tables, per GPU:
 - pow tables, 336 KB, built by the oracle;
-- curve tables, 4 x 64 MB, built on the device at startup.
+- curve tables, built on the device at startup: 20-bit windows (4 x 772 MB,
+  about 3 GB) when the card has the memory, else 16-bit windows (4 x 64 MB).
+  `BC3HASH_EC_WINDOW=16` or `20` forces one.
 
 `bc3hash.cu` is built with a 255-register cap in both build systems; the
-project default is 128. The default batch is 65 536 nonces (`-i` to tune).
+project default is 128. The default batch is a whole number of GPU waves (for
+example 71 680 nonces on an RTX 3060, 64 512 on a GTX 1080 Ti; `-i` to tune).
 
 The kernel reports the two lowest candidates. The host re-hashes both with the
 oracle before submitting, so a kernel defect can only cause a local reject,
@@ -111,7 +116,11 @@ Default intensity, CUDA 11.8. The pool runs were 10 minutes each on zpool
 
 | date | card | driver | hashrate | notes |
 |------|------|--------|----------|-------|
-| 2026-10-16 | RTX 3060 (sm_86), Windows | 595.95 | 147-155 kH/s | `--benchmark`, first kernel |
+| 2026-10-16 | RTX 3060 (sm_86), Windows | 595.95 | 147-155 kH/s | `--benchmark`, first port |
 | 2026-10-16 | RTX 3060 (sm_86), Windows | 595.95 | ~142 kH/s | pool: accepted 262/262 |
 | 2026-10-16 | GTX 1080 Ti (sm_61), Linux | 580.173.02 | 37-38 kH/s | `--benchmark` |
 | 2026-10-16 | GTX 1080 Ti (sm_61), Linux | 580.173.02 | ~36 kH/s | pool: accepted 103/104, 1 stale |
+| 2026-10-16 | RTX 3060 (sm_86), Windows | 595.95 | ~308 kH/s | `--benchmark`, current kernels, 20-bit windows |
+| 2026-10-16 | RTX 3060 (sm_86), Windows | 595.95 | ~332 kH/s | pool: accepted 183/183 |
+| 2026-10-16 | GTX 1080 Ti (sm_61), Linux | 580.173.02 | ~108 kH/s | `--benchmark`, current kernels, 20-bit windows |
+| 2026-10-16 | GTX 1080 Ti (sm_61), Linux | 580.173.02 | ~105 kH/s | pool: accepted 133/134, 1 stale |

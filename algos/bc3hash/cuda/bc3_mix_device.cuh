@@ -1,6 +1,6 @@
 /*
  * bc3mix512 on device (mix.cpp mix512 with folded = 0, the only PoW path).
- * Split at the phase boundaries so each can run as its own kernel:
+ * Split at the phase boundaries:
  *   AB: schedule + phase A (32 rounds, 64-bit) + phase B (16 rounds, 128-bit)
  *       -> h1, h2 and the 16 words m256[48..63] that phase C reads
  *   C : 16 rounds, 256-bit: 2 exp256.pair + M256 mul + 4 EC mults per round
@@ -96,40 +96,81 @@ __device__ void bc3_mix_ab(bc3u256& h1, bc3u256& h2, bc3u256 m256_out[16],
 	h2 = {{f4.w[0], f4.w[1], f4.w[2], f4.w[3], f2.w[0], f2.w[1], f2.w[2], f2.w[3]}};
 }
 
+/* One round of phase C in three steps (the scan runs each as its own kernel):
+ *   exp1: (h1, h2)          -> j1, j2
+ *   exp2: (h1, h2, j1, j2)  -> j3, j4
+ *   ec  : (h1, h2, j1..j4)  -> next h1, h2 (four curve mults and the combine) */
+__device__ __forceinline__ void bc3_mix_c_exp1(bc3u256& j1, bc3u256& j2, const bc3u256& h1, const bc3u256& h2)
+{
+	bc3u256 p1, p2;
+	bc3_exp256_pair(p1, p2, bc3_rol<11>(h1) ^ h2, h1 ^ bc3_beta(~h2));
+	j1 = p1 + bc3_beta(h1 ^ h2);
+	j2 = p2 + bc3_gamma(h1, h2);
+}
+__device__ __forceinline__ void bc3_mix_c_exp2(bc3u256& j3, bc3u256& j4, const bc3u256& h2, const bc3u256& j1,
+                                               const bc3u256& j2, const bc3u256& m, int i)
+{
+	bc3u256 p1, p2;
+	bc3_exp256_pair(p1, p2, j1, j2);
+	j3 = bc3_gamma(j1, j2) + p1 + bc3_const<8>(BC3_ROUND256[i]);
+	j4 = bc3_gamma(j3, bc3_beta(h2)) + p2 + m + bc3_ch(j1, j2, j3);
+}
+template <int W = BC3_EC_WBITS>
+__device__ __forceinline__ void bc3_mix_c_ec(bc3u256& h1, bc3u256& h2, const bc3u256& j1, const bc3u256& j2,
+                                             const bc3u256& j3, const bc3u256& j4, const bc3_tables& t)
+{
+	bc3u256 pt[8];
+	bc3_curve_mul4<W>(pt, t.curve, h1, h2, j1, j3);
+	const bc3u256 &j5 = pt[0], &j6 = pt[1], &j7 = pt[2], &j8 = pt[3];
+	const bc3u256 &j9 = pt[4], &j10 = pt[5], &j11 = pt[6], &j12 = pt[7];
+	const bc3u256 n2 = h1 + bc3_gamma(j1, j3) + bc3_maj(j2, j3, j4) + j5 + j8 + bc3_ch(j1, j6, j7) + bc3_beta(j10) + j11;
+	h1 = bc3_beta(j2) + bc3_gamma(j3, j4) + bc3_Sig1(bc3_mod_mul<BC3_M256>(j1, j2)) +
+	     bc3_maj(j7, j6, j5) + bc3_Sig0(j9) + j12;
+	h2 = n2;
+}
+
 __device__ void bc3_mix_c(bc3u256& h1, bc3u256& h2, const bc3u256 m256[16], const bc3_tables& t)
 {
 	for (int i = 0; i < 16; i++) {
-		bc3u256 p1, p2;
-		bc3_exp256_pair(p1, p2, bc3_rol<11>(h1) ^ h2, h1 ^ bc3_beta(~h2));
-		const bc3u256 j1 = p1 + bc3_beta(h1 ^ h2);
-		const bc3u256 j2 = p2 + bc3_gamma(h1, h2);
-		bc3_exp256_pair(p1, p2, j1, j2);
-		const bc3u256 j3 = bc3_gamma(j1, j2) + p1 + bc3_const<8>(BC3_ROUND256[i]);
-		const bc3u256 j4 = bc3_gamma(j3, bc3_beta(h2)) + p2 + m256[i] + bc3_ch(j1, j2, j3);
-		bc3u256 j5, j6, j7, j8, j9, j10, j11, j12;
-		bc3_curve_mul(j5, j6, t.curve[0], h1);
-		bc3_curve_mul(j7, j8, t.curve[1], h2);
-		bc3_curve_mul(j9, j10, t.curve[2], j1);
-		bc3_curve_mul(j11, j12, t.curve[3], j3);
-		h2 = h1 + bc3_gamma(j1, j3) + bc3_maj(j2, j3, j4) + j5 + j8 + bc3_ch(j1, j6, j7) + bc3_beta(j10) + j11;
-		h1 = bc3_beta(j2) + bc3_gamma(j3, j4) + bc3_Sig1(bc3_mod_mul<BC3_M256>(j1, j2)) +
-		     bc3_maj(j7, j6, j5) + bc3_Sig0(j9) + j12;
+		bc3u256 j1, j2, j3, j4;
+		bc3_mix_c_exp1(j1, j2, h1, h2);
+		bc3_mix_c_exp2(j3, j4, h2, j1, j2, m256[i], i);
+		bc3_mix_c_ec(h1, h2, j1, j2, j3, j4, t);
 	}
+}
+
+/* One round of phase D in two steps:
+ *   pow: (u1, u2)          -> k1, k2 (the two table powers)
+ *   inv: (u1, u2, k1, k2)  -> next u1, u2 (inverse256 and the combine) */
+__device__ __forceinline__ void bc3_mix_d_pow(bc3u256& k1, bc3u256& k2, const bc3u256& u1, const bc3u256& u2,
+                                              const bc3_tables& t)
+{
+	bc3u256 p1, p2;
+	bc3_fixed_pow_pair<BC3_F256>(p1, p2, t.pow256, u1, u2);
+	k1 = p1 + bc3_beta(u2);
+	k2 = p2 + bc3_gamma(u1, u2) + bc3_ch(k1, u2, u1);
+}
+__device__ __forceinline__ void bc3_mix_d_inv(bc3u256& u1, bc3u256& u2, const bc3u256& k1, const bc3u256& k2, int i)
+{
+	const bc3u256 k3 = bc3_inverse256(k2) + bc3_beta(u1) + bc3_beta(u2 ^ k1 ^ bc3_const<8>(BC3_FINAL[i]));
+	u2 = (k1 ^ u1) + bc3_maj(k1, k2, u2) + bc3_beta(k3);
+	u1 = bc3_beta(k1) + k2;
+}
+/* the mix output from the last u1, u2 */
+__device__ __forceinline__ void bc3_mix_d_out(uint8_t* __restrict__ out32, const bc3u256& u1, const bc3u256& u2)
+{
+	bc3_store_be(out32, u1 + bc3_beta(u2));
 }
 
 __device__ void bc3_mix_d(uint8_t* __restrict__ out32, const bc3u256& h1, const bc3u256& h2, const bc3_tables& t)
 {
 	bc3u256 u1 = h1, u2 = h2; /* + U256(folded), folded = 0 */
 	for (int i = 0; i < 64; i++) {
-		bc3u256 p1, p2;
-		bc3_fixed_pow_pair<BC3_F256>(p1, p2, t.pow256, u1, u2);
-		const bc3u256 k1 = p1 + bc3_beta(u2);
-		const bc3u256 k2 = p2 + bc3_gamma(u1, u2) + bc3_ch(k1, u2, u1);
-		const bc3u256 k3 = bc3_inverse256(k2) + bc3_beta(u1) + bc3_beta(u2 ^ k1 ^ bc3_const<8>(BC3_FINAL[i]));
-		u2 = (k1 ^ u1) + bc3_maj(k1, k2, u2) + bc3_beta(k3);
-		u1 = bc3_beta(k1) + k2;
+		bc3u256 k1, k2;
+		bc3_mix_d_pow(k1, k2, u1, u2, t);
+		bc3_mix_d_inv(u1, u2, k1, k2, i);
 	}
-	bc3_store_be(out32, u1 + bc3_beta(u2));
+	bc3_mix_d_out(out32, u1, u2);
 }
 
 __device__ __forceinline__ void bc3_mix512(uint8_t* __restrict__ out32, const uint8_t* __restrict__ in64, const bc3_tables& t)

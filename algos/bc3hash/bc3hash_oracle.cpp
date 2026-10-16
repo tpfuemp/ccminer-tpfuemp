@@ -48,9 +48,10 @@ const void* bc3hash_pow_table(int which, size_t* bytes)
 	}
 }
 
-/* The 16 window bases 2^(16j) * P (j = 0..15) of curve point H/J/K/L (0..3) as
- * big-endian X||Y, 64 bytes each, by libsecp doublings. Returns 0 on failure. */
-int bc3hash_window_bases(int point, unsigned char* out1024)
+/* The window bases 2^(wbits*j) * P (j = 0..count-1, count <= 16) of curve point
+ * H/J/K/L (0..3) as big-endian X||Y, 64 bytes each, by libsecp doublings.
+ * Returns 0 on failure. */
+int bc3hash_window_bases(int point, int wbits, int count, unsigned char* out)
 {
 	secp256k1_context* ctx = secp256k1_context_create(SECP256K1_CONTEXT_NONE);
 	if (!ctx) return 0;
@@ -60,11 +61,11 @@ int bc3hash_window_bases(int point, unsigned char* out1024)
 	ys[point].store(enc + 33);
 	secp256k1_pubkey b;
 	int ok = secp256k1_ec_pubkey_parse(ctx, &b, enc, 65);
-	for (int j = 0; ok && j < 16; j++) {
+	for (int j = 0; ok && j < count; j++) {
 		size_t len = 65;
 		ok = secp256k1_ec_pubkey_serialize(ctx, enc, &len, &b, SECP256K1_EC_UNCOMPRESSED);
-		std::memcpy(out1024 + 64 * j, enc + 1, 64);
-		for (int d = 0; ok && d < 16; d++) {
+		std::memcpy(out + 64 * j, enc + 1, 64);
+		for (int d = 0; ok && d < wbits; d++) {
 			const secp256k1_pubkey* pts[2] = {&b, &b};
 			secp256k1_pubkey n;
 			ok = secp256k1_ec_pubkey_combine(ctx, &n, pts, 2);

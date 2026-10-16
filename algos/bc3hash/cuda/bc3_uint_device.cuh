@@ -236,6 +236,175 @@ __device__ __forceinline__ bc3u<N> bc3_mod_normalize(const bc3u<N>& a)
 	return c ? s : a;
 }
 
+#ifndef BC3_C_MODMUL
+/* PTX carry chains. One asm statement per instruction, all volatile so they keep
+ * their order: the carry flag lives between them. */
+#define BC3_MADLO_CC(d, a, b)  asm volatile("mad.lo.cc.u32 %0, %1, %2, %0;" : "+r"(d) : "r"(a), "r"(b))
+#define BC3_MADCLO_CC(d, a, b) asm volatile("madc.lo.cc.u32 %0, %1, %2, %0;" : "+r"(d) : "r"(a), "r"(b))
+#define BC3_MADCHI_CC(d, a, b) asm volatile("madc.hi.cc.u32 %0, %1, %2, %0;" : "+r"(d) : "r"(a), "r"(b))
+#define BC3_MADCHI(d, a, b)    asm volatile("madc.hi.u32 %0, %1, %2, %0;" : "+r"(d) : "r"(a), "r"(b))
+#define BC3_ADD_CC(d, a)       asm volatile("add.cc.u32 %0, %0, %1;" : "+r"(d) : "r"(a))
+#define BC3_ADDC_CC(d, a)      asm volatile("addc.cc.u32 %0, %0, %1;" : "+r"(d) : "r"(a))
+#define BC3_ADDC(d, a)         asm volatile("addc.u32 %0, %0, %1;" : "+r"(d) : "r"(a))
+
+/* Row i of a product into the two column accumulators: E takes a_i * b_j for
+ * even j (lo at column i+j, hi at i+j+1, so the row is one contiguous chain),
+ * O the odd j one column down. j starts at j0 (> i for the squaring's cross
+ * terms). Each row's chain ends one column higher than the last row's, on a
+ * word no row has written yet, so its final carry is never lost. */
+template <int N>
+__device__ __forceinline__ void bc3_mul_row(uint32_t (&E)[2 * N], uint32_t (&O)[2 * N], uint32_t ai,
+                                            const uint32_t* b, int i, int j0)
+{
+	const int je = j0 + (j0 & 1), jo = j0 | 1;
+	if (je < N) {
+		BC3_MADLO_CC(E[i + je], ai, b[je]);
+		BC3_MADCHI_CC(E[i + je + 1], ai, b[je]);
+#pragma unroll
+		for (int j = je + 2; j < N; j += 2) {
+			BC3_MADCLO_CC(E[i + j], ai, b[j]);
+			BC3_MADCHI_CC(E[i + j + 1], ai, b[j]);
+		}
+		BC3_ADDC(E[i + N], 0u); /* N even: the last even j is N-2 */
+	}
+	if (jo < N) {
+		BC3_MADLO_CC(O[i + jo - 1], ai, b[jo]);
+		if (jo + 2 < N || i + N < 2 * N - 1)
+			BC3_MADCHI_CC(O[i + jo], ai, b[jo]);
+		else
+			BC3_MADCHI(O[i + jo], ai, b[jo]);
+#pragma unroll
+		for (int j = jo + 2; j < N; j += 2) {
+			BC3_MADCLO_CC(O[i + j - 1], ai, b[j]);
+			if (j + 2 < N || i + N < 2 * N - 1)
+				BC3_MADCHI_CC(O[i + j], ai, b[j]);
+			else
+				BC3_MADCHI(O[i + j], ai, b[j]); /* top of the product: no carry out */
+		}
+		if (i + N < 2 * N - 1) BC3_ADDC(O[i + N], 0u);
+	}
+}
+
+/* t = E + O * 2^32 */
+template <int N>
+__device__ __forceinline__ void bc3_mul_join(uint32_t (&t)[2 * N], uint32_t (&E)[2 * N], const uint32_t (&O)[2 * N])
+{
+	t[0] = E[0];
+#pragma unroll
+	for (int k = 1; k < 2 * N; k++) t[k] = E[k];
+	BC3_ADD_CC(t[1], O[0]);
+#pragma unroll
+	for (int k = 2; k < 2 * N - 1; k++) BC3_ADDC_CC(t[k], O[k - 1]);
+	BC3_ADDC(t[2 * N - 1], O[2 * N - 2]);
+}
+
+template <int N>
+__device__ __forceinline__ void bc3_mul_full(uint32_t (&t)[2 * N], const uint32_t* a, const uint32_t* b)
+{
+	uint32_t E[2 * N], O[2 * N];
+#pragma unroll
+	for (int k = 0; k < 2 * N; k++) E[k] = O[k] = 0;
+#pragma unroll
+	for (int i = 0; i < N; i++) bc3_mul_row<N>(E, O, a[i], b, i, 0);
+	bc3_mul_join<N>(t, E, O);
+}
+
+/* a^2: the cross terms a_i a_j (j > i) once, doubled, plus the squares a_i^2. */
+template <int N>
+__device__ __forceinline__ void bc3_sqr_full(uint32_t (&t)[2 * N], const uint32_t* a)
+{
+	uint32_t E[2 * N], O[2 * N], x[2 * N];
+#pragma unroll
+	for (int k = 0; k < 2 * N; k++) E[k] = O[k] = 0;
+#pragma unroll
+	for (int i = 0; i < N - 1; i++) bc3_mul_row<N>(E, O, a[i], a, i, i + 1);
+	bc3_mul_join<N>(x, E, O);
+	/* cross sum < 2^(64N-1), so doubling fits */
+	t[0] = x[0] << 1;
+#pragma unroll
+	for (int k = 1; k < 2 * N; k++) t[k] = __funnelshift_l(x[k - 1], x[k], 1);
+	BC3_MADLO_CC(t[0], a[0], a[0]);
+	BC3_MADCHI_CC(t[1], a[0], a[0]);
+#pragma unroll
+	for (int i = 1; i < N - 1; i++) {
+		BC3_MADCLO_CC(t[2 * i], a[i], a[i]);
+		BC3_MADCHI_CC(t[2 * i + 1], a[i], a[i]);
+	}
+	BC3_MADCLO_CC(t[2 * N - 2], a[N - 1], a[N - 1]);
+	BC3_MADCHI(t[2 * N - 1], a[N - 1], a[N - 1]);
+}
+
+/* Mod::reduce of t mod 2^(32N) - C, C < 2^16, to N words but NOT canonical:
+ * r < 2^(32N), r == t (mod m). r = lo + hi*C (folded twice). */
+template <int N, uint32_t C>
+__device__ __forceinline__ bc3u<N> bc3_reduce_lazy(const uint32_t (&t)[2 * N])
+{
+	bc3u<N> r;
+#pragma unroll
+	for (int i = 0; i < N; i++) r.w[i] = t[i];
+	uint32_t w = 0;
+	BC3_MADLO_CC(r.w[0], t[N], C);
+#pragma unroll
+	for (int i = 1; i < N; i++) BC3_MADCLO_CC(r.w[i], t[N + i], C);
+	BC3_ADDC(w, 0u);
+	{
+		/* hi(t[N+i] * C) into column i+1; the top one into w */
+		uint32_t h[N];
+#pragma unroll
+		for (int i = 0; i < N; i++) h[i] = __umulhi(t[N + i], C);
+		BC3_ADD_CC(r.w[1], h[0]);
+#pragma unroll
+		for (int i = 2; i < N; i++) BC3_ADDC_CC(r.w[i], h[i - 1]);
+		BC3_ADDC(w, h[N - 1]);
+	}
+	/* second fold: w < 2^17, w*C < 2^33 */
+	const uint64_t f = (uint64_t)w * C;
+	uint32_t c = 0;
+	BC3_ADD_CC(r.w[0], (uint32_t)f);
+	BC3_ADDC_CC(r.w[1], (uint32_t)(f >> 32));
+#pragma unroll
+	for (int i = 2; i < N; i++) BC3_ADDC_CC(r.w[i], 0u);
+	BC3_ADDC(c, 0u);
+	if (c) { /* wrapped past 2^(32N): r is now tiny, adding C cannot wrap again */
+		BC3_ADD_CC(r.w[0], C);
+#pragma unroll
+		for (int i = 1; i < N - 1; i++) BC3_ADDC_CC(r.w[i], 0u);
+		BC3_ADDC(r.w[N - 1], 0u);
+	}
+	return r;
+}
+
+/* Lazy products: any inputs < 2^(32N), any output < 2^(32N) congruent mod m.
+ * A chain of them is made canonical once, by bc3_mod_normalize, at its end. */
+template <int N, uint32_t C>
+__device__ __forceinline__ bc3u<N> bc3_mod_mul_lazy(const bc3u<N>& a, const bc3u<N>& b)
+{
+	uint32_t t[2 * N];
+	bc3_mul_full<N>(t, a.w, b.w);
+	return bc3_reduce_lazy<N, C>(t);
+}
+template <int N, uint32_t C>
+__device__ __forceinline__ bc3u<N> bc3_mod_sqr_lazy(const bc3u<N>& a)
+{
+	uint32_t t[2 * N];
+	bc3_sqr_full<N>(t, a.w);
+	return bc3_reduce_lazy<N, C>(t);
+}
+
+/* Canonical (< m) results, bit for bit the coin's. */
+template <int N, uint32_t C>
+__device__ __forceinline__ bc3u<N> bc3_mod_mul(const bc3u<N>& a, const bc3u<N>& b)
+{
+	return bc3_mod_normalize<N, C>(bc3_mod_mul_lazy<N, C>(a, b));
+}
+template <int N, uint32_t C>
+__device__ __forceinline__ bc3u<N> bc3_mod_sqr(const bc3u<N>& a)
+{
+	return bc3_mod_normalize<N, C>(bc3_mod_sqr_lazy<N, C>(a));
+}
+
+#else /* BC3_C_MODMUL: the plain-C transcription, kept as a reference */
+
 /* Mod::reduce of a 2N-limb product: two carry folds by C, then normalize.
  * Accepts any a, b < 2^(32N); the result is canonical (< m), so it equals the
  * coin's bit for bit. */
@@ -286,6 +455,38 @@ __device__ __forceinline__ bc3u<N> bc3_mod_sqr(const bc3u<N>& a)
 {
 	return bc3_mod_mul<N, C>(a, a);
 }
+template <int N>
+__device__ __forceinline__ void bc3_mul_full(uint32_t (&t)[2 * N], const uint32_t* a, const uint32_t* b)
+{
+#pragma unroll
+	for (int i = 0; i < 2 * N; i++) t[i] = 0;
+#pragma unroll
+	for (int i = 0; i < N; i++) {
+		uint64_t c = 0;
+#pragma unroll
+		for (int j = 0; j < N; j++) {
+			c = (uint64_t)a[i] * b[j] + t[i + j] + (c >> 32);
+			t[i + j] = (uint32_t)c;
+		}
+		t[i + N] = (uint32_t)(c >> 32);
+	}
+}
+template <int N>
+__device__ __forceinline__ void bc3_sqr_full(uint32_t (&t)[2 * N], const uint32_t* a)
+{
+	bc3_mul_full<N>(t, a, a);
+}
+template <int N, uint32_t C>
+__device__ __forceinline__ bc3u<N> bc3_mod_mul_lazy(const bc3u<N>& a, const bc3u<N>& b)
+{
+	return bc3_mod_mul<N, C>(a, b);
+}
+template <int N, uint32_t C>
+__device__ __forceinline__ bc3u<N> bc3_mod_sqr_lazy(const bc3u<N>& a)
+{
+	return bc3_mod_mul<N, C>(a, a);
+}
+#endif /* BC3_C_MODMUL */
 
 /* The six moduli of mix512 (uint.hpp: M64/M128/M256 for the fixed exponents and
  * M*::mul, F64/F128/F256 for the fixed-base tables and inverse256). */

@@ -8,14 +8,14 @@
  * oracle (bc3hash_oracle.cpp, the coin's own code) re-verifies every candidate,
  * so a kernel defect can only cause a local reject, never a bad share.
  *
- * One thread per nonce, three kernels per batch with state in global memory:
- *   k_front_ab : front hashes + mix phases A/B  (writes h1, h2, m256[48..63], 228 B)
- *   k_c        : mix phase C (16 rounds, 4 EC mults each)
+ * One thread per nonce, state in global memory between kernels:
+ *   k_front_ab : front hashes + mix phases A/B
+ *   k_c_exp1, k_c_exp2, k_c_ec : mix phase C, three launches per round (16 rounds)
  *   k_d_final  : mix phase D + final SHA3-256 + target compare + report
- * The 1 KB schedule and the EC working set never share a kernel.
  *
- * Tables per device: pow64/128/256 (336 KB, built by the oracle) and four 64 MB
- * secp256k1 window tables for H, J, K, L (built on the device).
+ * Tables per device: pow64/128/256 (336 KB, built by the oracle) and four
+ * secp256k1 window tables for H, J, K, L (built on the device; 16- or 20-bit
+ * windows, 256 MB or 3 GB).
  */
 
 #include <algorithm>
@@ -29,20 +29,20 @@
 
 extern "C" void bc3hash_hash(void* output, const void* input80);
 extern "C" const void* bc3hash_pow_table(int which, size_t* bytes);
-extern "C" int bc3hash_window_bases(int point, unsigned char* out1024);
+extern "C" int bc3hash_window_bases(int point, int wbits, int count, unsigned char* out);
 extern "C" int bc3hash_curve_ref(int point, const uint32_t* k, uint32_t* x, uint32_t* y);
 
-/* The mix kernels use ~255 registers (built with --maxrregcount=255). */
 #define BC3_TPB 64
 
-/* Pipeline state per nonce, SoA by 32-bit word so every access is coalesced:
- * 18 U256 slots (h1, h2, m256[48..63]) and the 57 words of the front digests
- * the final hash needs (s384 | sh | r160 | bs | bb = 228 bytes). */
-#define BC3_ST_SLOTS 18
+/* Pipeline state per nonce, SoA by 32-bit word: U256 slots h1, h2, m256[48..63],
+ * j1..j4 of the current phase C round, and the 57 words of the front digests the
+ * final hash needs (s384 | sh | r160 | bs | bb). */
+#define BC3_ST_SLOTS 22
 #define BC3_FRONT_WORDS 57
 
 static bool init_done[MAX_GPUS] = { 0 };
 static uint8_t* d_curve[MAX_GPUS][4];
+static int ec_w[MAX_GPUS]; /* EC window width: 16 or 20 */
 static void* d_pow[MAX_GPUS][3];
 static uint32_t* d_state[MAX_GPUS];
 static uint32_t* d_front[MAX_GPUS];
@@ -100,13 +100,37 @@ __global__ void bc3_k_front_ab(bc3_tables tb, uint32_t threads, uint32_t startNo
 	for (int i = 0; i < 16; i++) bc3_st_put(st, threads, 2 + i, t, m[i]);
 }
 
-__global__ void bc3_k_c(bc3_tables tb, uint32_t threads, uint32_t* st)
+/* Phase C, one round in three kernels; slots 18..21 carry j1..j4 between them.
+ * The launch bounds keep each step's register count (and so occupancy) in check. */
+__global__ void __launch_bounds__(BC3_TPB, 10) bc3_k_c_exp1(uint32_t threads, uint32_t* st)
 {
 	const uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
 	if (t >= threads) return;
-	bc3u256 h1 = bc3_st_get(st, threads, 0, t), h2 = bc3_st_get(st, threads, 1, t), m[16];
-	for (int i = 0; i < 16; i++) m[i] = bc3_st_get(st, threads, 2 + i, t);
-	bc3_mix_c(h1, h2, m, tb);
+	bc3u256 j1, j2;
+	bc3_mix_c_exp1(j1, j2, bc3_st_get(st, threads, 0, t), bc3_st_get(st, threads, 1, t));
+	bc3_st_put(st, threads, 18, t, j1);
+	bc3_st_put(st, threads, 19, t, j2);
+}
+
+__global__ void __launch_bounds__(BC3_TPB, 10) bc3_k_c_exp2(uint32_t threads, uint32_t* st, int round)
+{
+	const uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
+	if (t >= threads) return;
+	bc3u256 j3, j4;
+	bc3_mix_c_exp2(j3, j4, bc3_st_get(st, threads, 1, t), bc3_st_get(st, threads, 18, t),
+	               bc3_st_get(st, threads, 19, t), bc3_st_get(st, threads, 2 + round, t), round);
+	bc3_st_put(st, threads, 20, t, j3);
+	bc3_st_put(st, threads, 21, t, j4);
+}
+
+template <int W>
+__global__ void __launch_bounds__(BC3_TPB, 5) bc3_k_c_ec(bc3_tables tb, uint32_t threads, uint32_t* st)
+{
+	const uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
+	if (t >= threads) return;
+	bc3u256 h1 = bc3_st_get(st, threads, 0, t), h2 = bc3_st_get(st, threads, 1, t);
+	bc3_mix_c_ec<W>(h1, h2, bc3_st_get(st, threads, 18, t), bc3_st_get(st, threads, 19, t),
+	             bc3_st_get(st, threads, 20, t), bc3_st_get(st, threads, 21, t), tb);
 	bc3_st_put(st, threads, 0, t, h1);
 	bc3_st_put(st, threads, 1, t, h2);
 }
@@ -157,15 +181,42 @@ static bc3_tables bc3_device_tables(int thr_id)
 	return tb;
 }
 
-/* One batch through the three kernels; leaves the two lowest candidates in d_res. */
+/* One batch through all kernels; leaves the two lowest candidates in d_res. */
 static void bc3_launch(int thr_id, uint32_t threads, uint32_t startNonce, uint8_t* d_digests)
 {
 	const bc3_tables tb = bc3_device_tables(thr_id);
 	const uint32_t grid = (threads + BC3_TPB - 1) / BC3_TPB;
 	bc3_k_front_ab <<< grid, BC3_TPB >>> (tb, threads, startNonce, d_state[thr_id], d_front[thr_id]);
-	bc3_k_c <<< grid, BC3_TPB >>> (tb, threads, d_state[thr_id]);
+	for (int r = 0; r < 16; r++) {
+		bc3_k_c_exp1 <<< grid, BC3_TPB >>> (threads, d_state[thr_id]);
+		bc3_k_c_exp2 <<< grid, BC3_TPB >>> (threads, d_state[thr_id], r);
+		if (ec_w[thr_id] == 20) bc3_k_c_ec<20> <<< grid, BC3_TPB >>> (tb, threads, d_state[thr_id]);
+		else bc3_k_c_ec<16> <<< grid, BC3_TPB >>> (tb, threads, d_state[thr_id]);
+	}
 	bc3_k_d_final <<< grid, BC3_TPB >>> (tb, threads, startNonce, d_state[thr_id], d_front[thr_id],
 	                                     d_res[thr_id], d_digests);
+}
+
+/* Default batch: a whole number of waves of the front and final kernels, 10 on
+ * sm_80+ and 7 below, which keeps every launch short (Windows TDR). */
+static uint32_t bc3_default_batch(int thr_id)
+{
+	const int dev = device_map[thr_id];
+	int sms = 0, bab = 0, bd = 0;
+	cudaSetDevice(dev);
+	if (cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev) != cudaSuccess ||
+	    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&bab, bc3_k_front_ab, BC3_TPB, 0) != cudaSuccess ||
+	    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&bd, bc3_k_d_final, BC3_TPB, 0) != cudaSuccess ||
+	    sms <= 0 || bab <= 0 || bd <= 0)
+		return 1U << 16;
+
+	/* k_front_ab waves; a multiple of `step` also ends k_d_final on whole waves */
+	const int want = device_sm[dev] >= 800 ? 10 : 7;
+	auto gcd = [](int a, int b) { while (b) { const int r = a % b; a = b; b = r; } return a; };
+	const int step = bd / gcd(bab, bd);
+	int waves = (want + step - 1) / step * step;
+	if (waves > want + want / 2) waves = want;
+	return (uint32_t)waves * bab * BC3_TPB * sms;
 }
 
 static void bc3_set_header(const uint8_t* header76, const uint32_t* target8)
@@ -231,7 +282,7 @@ static bool bc3_device_selftest(int thr_id)
 	bool ran = bc3_fault(thr_id, "cuda") ? selftest_cuda_fault() : true;
 
 	/* tbl: pow tables read back byte-exact; each EC table spot-checked against
-	 * the coin's curve_multiply at 64 entries spread over all 16 windows. */
+	 * the coin's curve_multiply at 64 entries spread over all windows. */
 	bool tbl_ok = true;
 	for (int w = 0; w < 3 && ran; w++) {
 		size_t bytes;
@@ -244,12 +295,16 @@ static bool bc3_device_selftest(int thr_id)
 	}
 	for (int p = 0; p < 4 && ran; p++)
 		for (int s = 0; s < 64 && ran; s++) {
-			const uint32_t j = s & 15, i = 1 + (uint32_t)(((uint64_t)s * 2654435761u) & 0xfffe);
+			const int W = ec_w[thr_id], nwin = (256 + W - 1) / W, j = s % nwin;
+			const int jbits = j == nwin - 1 ? 256 - W * (nwin - 1) : W;
+			const uint32_t i = 1 + (uint32_t)(((uint64_t)s * 2654435761u) & ((1u << jbits) - 2));
 			uint8_t ent[64];
-			ran = cudaMemcpy(ent, d_curve[thr_id][p] + ((size_t)j * BC3_EC_ENTRIES + i) * BC3_EC_ENTRY, 64,
+			ran = cudaMemcpy(ent, d_curve[thr_id][p] + (((size_t)j << W) + i) * BC3_EC_ENTRY, 64,
 			                 cudaMemcpyDeviceToHost) == cudaSuccess;
 			uint32_t k[8] = { 0 }, x[8], y[8];
-			k[j / 2] = i << (16 * (j & 1));
+			const uint64_t kv = (uint64_t)i << ((j * W) & 31); /* i * 2^(jW) */
+			k[(j * W) >> 5] = (uint32_t)kv;
+			if (((j * W) >> 5) + 1 < 8) k[((j * W) >> 5) + 1] = (uint32_t)(kv >> 32);
 			if (!bc3hash_curve_ref(p, k, x, y)) { tbl_ok = false; continue; }
 			for (int b = 0; b < 32; b++) {
 				const uint8_t xb = (uint8_t)(x[7 - b / 4] >> (24 - 8 * (b % 4)));
@@ -337,19 +392,38 @@ static void bc3hash_init(int thr_id, uint32_t throughput)
 		CUDA_SAFE_CALL(cudaMemcpy(d_pow[thr_id][w], h, bytes, cudaMemcpyHostToDevice));
 	}
 
+	/* EC window: 20 bits (3 GB of tables) when the card has the memory, else 16
+	 * (256 MB). BC3HASH_EC_WINDOW=16|20 forces it. */
+	{
+		size_t freeb = 0, totalb = 0;
+		cudaMemGetInfo(&freeb, &totalb);
+		const char* fw = getenv("BC3HASH_EC_WINDOW");
+		const size_t need20 = 4 * bc3_ecw<20>::bytes() + ((size_t)768 << 20);
+		ec_w[thr_id] = fw ? (atoi(fw) == 20 ? 20 : 16) : (freeb >= need20 ? 20 : 16);
+	}
+	const int W = ec_w[thr_id], nwin = (256 + W - 1) / W;
+	const size_t tbytes = W == 20 ? bc3_ecw<20>::bytes() : bc3_ecw<16>::bytes();
+	const size_t tentries = tbytes / BC3_EC_ENTRY;
 	uint8_t wb[16 * 64], *d_wb;
 	CUDA_SAFE_CALL(cudaMalloc(&d_wb, sizeof(wb)));
 	for (int p = 0; p < 4; p++) {
-		if (!bc3hash_window_bases(p, wb)) {
+		if (!bc3hash_window_bases(p, W, nwin, wb)) {
 			gpulog(LOG_ERR, thr_id, "bc3hash: libsecp256k1 could not derive the curve window bases");
 			proper_exit(EXIT_CODE_SW_INIT_ERROR);
 		}
-		CUDA_SAFE_CALL(cudaMalloc(&d_curve[thr_id][p], BC3_EC_TABLE_BYTES));
-		CUDA_SAFE_CALL(cudaMemcpy(d_wb, wb, sizeof(wb), cudaMemcpyHostToDevice));
-		bc3_ec_table_kernel <<< BC3_EC_WINDOWS * BC3_EC_ENTRIES / 128, 128 >>> (d_curve[thr_id][p], d_wb);
-		CUDA_SAFE_CALL(cudaGetLastError());
+		CUDA_SAFE_CALL(cudaMalloc(&d_curve[thr_id][p], tbytes));
+		CUDA_SAFE_CALL(cudaMemcpy(d_wb, wb, 64 * nwin, cudaMemcpyHostToDevice));
+		/* one window per launch keeps each launch short */
+		for (int j = 0; j < nwin; j++) {
+			const uint32_t first = (uint32_t)j << W;
+			const uint32_t end = (uint32_t)min((size_t)(j + 1) << W, tentries);
+			const uint32_t grid = (end - first + 127) / 128;
+			if (W == 20) bc3_ec_table_kernel<20> <<< grid, 128 >>> (d_curve[thr_id][p], d_wb, first, end);
+			else bc3_ec_table_kernel<16> <<< grid, 128 >>> (d_curve[thr_id][p], d_wb, first, end);
+			CUDA_SAFE_CALL(cudaGetLastError());
+			CUDA_SAFE_CALL(cudaDeviceSynchronize());
+		}
 	}
-	CUDA_SAFE_CALL(cudaDeviceSynchronize());
 	cudaFree(d_wb);
 
 	max_batch[thr_id] = throughput;
@@ -357,7 +431,8 @@ static void bc3hash_init(int thr_id, uint32_t throughput)
 	CUDA_SAFE_CALL(cudaMalloc(&d_front[thr_id], (size_t)BC3_FRONT_WORDS * 4 * throughput));
 	CUDA_SAFE_CALL(cudaMalloc(&d_res[thr_id], 2 * sizeof(uint32_t)));
 
-	gpulog(LOG_INFO, thr_id, "bc3hash: 256 MB curve tables built on the device, batch %u nonces", throughput);
+	gpulog(LOG_INFO, thr_id, "bc3hash: %d-bit curve windows, %u MB of tables built on the device, batch %u nonces",
+	       W, (unsigned)(4 * (tbytes >> 20)), throughput);
 
 	bc3_device_selftest(thr_id);
 	init_done[thr_id] = true;
@@ -453,7 +528,9 @@ extern "C" int scanhash_bc3hash(int thr_id, struct work* work, uint32_t max_nonc
 	uint32_t* pdata = work->data;
 	uint32_t* ptarget = work->target;
 	const uint32_t first_nonce = pdata[19];
-	uint32_t throughput = cuda_default_throughput(thr_id, 1U << 16);
+	static uint32_t def_batch[MAX_GPUS];
+	if (!def_batch[thr_id]) def_batch[thr_id] = bc3_default_batch(thr_id);
+	uint32_t throughput = cuda_default_throughput(thr_id, def_batch[thr_id]);
 	if (!init_done[thr_id]) bc3hash_init(thr_id, throughput);
 	throughput = min(throughput, max_batch[thr_id]);
 	throughput = min(throughput, max_nonce - first_nonce);
