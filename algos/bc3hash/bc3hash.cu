@@ -44,6 +44,8 @@ static bool init_done[MAX_GPUS] = { 0 };
 static uint8_t* d_curve[MAX_GPUS][4];
 static int ec_w[MAX_GPUS]; /* EC window width: 16 or 20 */
 static void* d_pow[MAX_GPUS][3];
+static bc3u256* d_pow_w[MAX_GPUS]; /* F256 powers with pow_rb-bit rows (NULL for 8) */
+static int pow_rb[MAX_GPUS];
 static uint32_t* d_state[MAX_GPUS];
 static uint32_t* d_front[MAX_GPUS];
 static uint32_t* d_res[MAX_GPUS];
@@ -67,7 +69,13 @@ __device__ __forceinline__ bc3u256 bc3_st_get(const uint32_t* st, uint32_t n, in
 	return v;
 }
 
-__global__ void bc3_k_front_ab(bc3_tables tb, uint32_t threads, uint32_t startNonce, uint32_t* st, uint32_t* front)
+/* launch bounds on sm_70+ only */
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
+#define BC3_AB_BOUNDS __launch_bounds__(BC3_TPB, 10)
+#else
+#define BC3_AB_BOUNDS
+#endif
+__global__ void BC3_AB_BOUNDS bc3_k_front_ab(bc3_tables tb, uint32_t threads, uint32_t startNonce, uint32_t* st, uint32_t* front)
 {
 	const uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
 	if (t >= threads) return;
@@ -136,13 +144,14 @@ __global__ void __launch_bounds__(BC3_TPB, 5) bc3_k_c_ec(bc3_tables tb, uint32_t
 }
 
 /* digests != NULL (self-test only): every digest is stored, as 32 bytes per nonce. */
+template <int RB>
 __global__ void bc3_k_d_final(bc3_tables tb, uint32_t threads, uint32_t startNonce, const uint32_t* st,
                               const uint32_t* front, uint32_t* resNonce, uint8_t* digests)
 {
 	const uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
 	if (t >= threads) return;
 	uint8_t mix[32];
-	bc3_mix_d(mix, bc3_st_get(st, threads, 0, t), bc3_st_get(st, threads, 1, t), tb);
+	bc3_mix_d<RB>(mix, bc3_st_get(st, threads, 0, t), bc3_st_get(st, threads, 1, t), tb);
 
 	bc3_front f;
 	uint8_t* keep = f.s384;
@@ -168,7 +177,10 @@ __global__ void bc3_k_d_final(bc3_tables tb, uint32_t threads, uint32_t startNon
 			break;
 		}
 	}
-	if (below) report_candidate_2(resNonce, startNonce + t);
+	if (below) {
+		report_candidate_2(resNonce, startNonce + t);
+		atomicAdd(&resNonce[2], 1u); /* candidate count */
+	}
 }
 
 static bc3_tables bc3_device_tables(int thr_id)
@@ -176,7 +188,7 @@ static bc3_tables bc3_device_tables(int thr_id)
 	bc3_tables tb;
 	tb.pow64 = (const bc3u64*)d_pow[thr_id][0];
 	tb.pow128 = (const bc3u128*)d_pow[thr_id][1];
-	tb.pow256 = (const bc3u256*)d_pow[thr_id][2];
+	tb.pow256 = pow_rb[thr_id] == 8 ? (const bc3u256*)d_pow[thr_id][2] : d_pow_w[thr_id];
 	for (int p = 0; p < 4; p++) tb.curve[p] = d_curve[thr_id][p];
 	return tb;
 }
@@ -193,12 +205,17 @@ static void bc3_launch(int thr_id, uint32_t threads, uint32_t startNonce, uint8_
 		if (ec_w[thr_id] == 20) bc3_k_c_ec<20> <<< grid, BC3_TPB >>> (tb, threads, d_state[thr_id]);
 		else bc3_k_c_ec<16> <<< grid, BC3_TPB >>> (tb, threads, d_state[thr_id]);
 	}
-	bc3_k_d_final <<< grid, BC3_TPB >>> (tb, threads, startNonce, d_state[thr_id], d_front[thr_id],
-	                                     d_res[thr_id], d_digests);
+	uint32_t* st = d_state[thr_id];
+	uint32_t* fr = d_front[thr_id];
+	switch (pow_rb[thr_id]) {
+	case 12: bc3_k_d_final<12> <<< grid, BC3_TPB >>> (tb, threads, startNonce, st, fr, d_res[thr_id], d_digests); break;
+	case 11: bc3_k_d_final<11> <<< grid, BC3_TPB >>> (tb, threads, startNonce, st, fr, d_res[thr_id], d_digests); break;
+	default: bc3_k_d_final<8> <<< grid, BC3_TPB >>> (tb, threads, startNonce, st, fr, d_res[thr_id], d_digests); break;
+	}
 }
 
-/* Default batch: a whole number of waves of the front and final kernels, 10 on
- * sm_80+ and 7 below, which keeps every launch short (Windows TDR). */
+/* Default batch: a whole number of waves of the final and front kernels, short
+ * enough per launch for the Windows TDR. */
 static uint32_t bc3_default_batch(int thr_id)
 {
 	const int dev = device_map[thr_id];
@@ -206,17 +223,17 @@ static uint32_t bc3_default_batch(int thr_id)
 	cudaSetDevice(dev);
 	if (cudaDeviceGetAttribute(&sms, cudaDevAttrMultiProcessorCount, dev) != cudaSuccess ||
 	    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&bab, bc3_k_front_ab, BC3_TPB, 0) != cudaSuccess ||
-	    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&bd, bc3_k_d_final, BC3_TPB, 0) != cudaSuccess ||
+	    cudaOccupancyMaxActiveBlocksPerMultiprocessor(&bd, bc3_k_d_final<8>, BC3_TPB, 0) != cudaSuccess ||
 	    sms <= 0 || bab <= 0 || bd <= 0)
 		return 1U << 16;
 
-	/* k_front_ab waves; a multiple of `step` also ends k_d_final on whole waves */
-	const int want = device_sm[dev] >= 800 ? 10 : 7;
+	/* k_d_final waves; a multiple of `step` also ends k_front_ab on whole waves */
+	const int want = device_sm[dev] >= 800 ? 5 : 6;
 	auto gcd = [](int a, int b) { while (b) { const int r = a % b; a = b; b = r; } return a; };
-	const int step = bd / gcd(bab, bd);
+	const int step = bab / gcd(bab, bd);
 	int waves = (want + step - 1) / step * step;
 	if (waves > want + want / 2) waves = want;
-	return (uint32_t)waves * bab * BC3_TPB * sms;
+	return (uint32_t)waves * bd * BC3_TPB * sms;
 }
 
 static void bc3_set_header(const uint8_t* header76, const uint32_t* target8)
@@ -267,8 +284,8 @@ static bool bc3_selftest_scan(int thr_id, const uint8_t* hdr76, const uint32_t* 
 	uint8_t* d_dig = NULL;
 	if (cudaMalloc(&d_dig, 32 * (size_t)count) != cudaSuccess) return selftest_cuda_fault();
 	bc3_set_header(hdr76, target8);
-	const uint32_t umax[2] = { UINT32_MAX, UINT32_MAX };
-	cudaMemcpy(d_res[thr_id], umax, sizeof(umax), cudaMemcpyHostToDevice);
+	const uint32_t arm[3] = { UINT32_MAX, UINT32_MAX, 0 };
+	cudaMemcpy(d_res[thr_id], arm, sizeof(arm), cudaMemcpyHostToDevice);
 	bc3_launch(thr_id, count, start, d_dig);
 	const bool ok = cudaMemcpy(digests, d_dig, 32 * (size_t)count, cudaMemcpyDeviceToHost) == cudaSuccess &&
 	                cudaMemcpy(res, d_res[thr_id], 8, cudaMemcpyDeviceToHost) == cudaSuccess;
@@ -392,6 +409,30 @@ static void bc3hash_init(int thr_id, uint32_t throughput)
 		CUDA_SAFE_CALL(cudaMemcpy(d_pow[thr_id][w], h, bytes, cudaMemcpyHostToDevice));
 	}
 
+	/* Phase D powers with 12-bit rows by default, built on the device from the
+	 * coin's 8-bit table; BC3HASH_POW_BITS=8|11|12 picks the width. */
+	{
+		const char* fb = getenv("BC3HASH_POW_BITS");
+		const int rb = fb ? atoi(fb) : 12;
+		pow_rb[thr_id] = rb == 8 || rb == 11 ? rb : 12;
+		d_pow_w[thr_id] = NULL;
+		if (pow_rb[thr_id] != 8) {
+			const size_t ent = pow_rb[thr_id] == 12 ? bc3_powrows<12>::entries() : bc3_powrows<11>::entries();
+			CUDA_SAFE_CALL(cudaMalloc(&d_pow_w[thr_id], ent * sizeof(bc3u256)));
+			const bc3u256* t8 = (const bc3u256*)d_pow[thr_id][2];
+			for (size_t first = 0; first < ent; first += 1u << 16) {
+				const uint32_t end = (uint32_t)min(first + (1u << 16), ent);
+				const uint32_t grid = (end - (uint32_t)first + 127) / 128;
+				if (pow_rb[thr_id] == 12)
+					bc3_pow_table_kernel<36113u, 12> <<< grid, 128 >>> (d_pow_w[thr_id], t8, (uint32_t)first, end);
+				else
+					bc3_pow_table_kernel<36113u, 11> <<< grid, 128 >>> (d_pow_w[thr_id], t8, (uint32_t)first, end);
+				CUDA_SAFE_CALL(cudaGetLastError());
+			}
+			CUDA_SAFE_CALL(cudaDeviceSynchronize());
+		}
+	}
+
 	/* EC window: 20 bits (3 GB of tables) when the card has the memory, else 16
 	 * (256 MB). BC3HASH_EC_WINDOW=16|20 forces it. */
 	{
@@ -413,13 +454,12 @@ static void bc3hash_init(int thr_id, uint32_t throughput)
 		}
 		CUDA_SAFE_CALL(cudaMalloc(&d_curve[thr_id][p], tbytes));
 		CUDA_SAFE_CALL(cudaMemcpy(d_wb, wb, 64 * nwin, cudaMemcpyHostToDevice));
-		/* one window per launch keeps each launch short */
-		for (int j = 0; j < nwin; j++) {
-			const uint32_t first = (uint32_t)j << W;
-			const uint32_t end = (uint32_t)min((size_t)(j + 1) << W, tentries);
-			const uint32_t grid = (end - first + 127) / 128;
-			if (W == 20) bc3_ec_table_kernel<20> <<< grid, 128 >>> (d_curve[thr_id][p], d_wb, first, end);
-			else bc3_ec_table_kernel<16> <<< grid, 128 >>> (d_curve[thr_id][p], d_wb, first, end);
+		/* fixed 65536-entry chunks keep each launch short whatever the SM count */
+		for (size_t first = 0; first < tentries; first += 1u << 16) {
+			const uint32_t end = (uint32_t)min(first + (1u << 16), tentries);
+			const uint32_t grid = (end - (uint32_t)first + 127) / 128;
+			if (W == 20) bc3_ec_table_kernel<20> <<< grid, 128 >>> (d_curve[thr_id][p], d_wb, (uint32_t)first, end);
+			else bc3_ec_table_kernel<16> <<< grid, 128 >>> (d_curve[thr_id][p], d_wb, (uint32_t)first, end);
 			CUDA_SAFE_CALL(cudaGetLastError());
 			CUDA_SAFE_CALL(cudaDeviceSynchronize());
 		}
@@ -429,10 +469,10 @@ static void bc3hash_init(int thr_id, uint32_t throughput)
 	max_batch[thr_id] = throughput;
 	CUDA_SAFE_CALL(cudaMalloc(&d_state[thr_id], (size_t)BC3_ST_SLOTS * 8 * 4 * throughput));
 	CUDA_SAFE_CALL(cudaMalloc(&d_front[thr_id], (size_t)BC3_FRONT_WORDS * 4 * throughput));
-	CUDA_SAFE_CALL(cudaMalloc(&d_res[thr_id], 2 * sizeof(uint32_t)));
+	CUDA_SAFE_CALL(cudaMalloc(&d_res[thr_id], 3 * sizeof(uint32_t)));
 
-	gpulog(LOG_INFO, thr_id, "bc3hash: %d-bit curve windows, %u MB of tables built on the device, batch %u nonces",
-	       W, (unsigned)(4 * (tbytes >> 20)), throughput);
+	gpulog(LOG_INFO, thr_id, "bc3hash: %d-bit curve windows (%u MB), %d-bit power rows, batch %u nonces",
+	       W, (unsigned)(4 * (tbytes >> 20)), pow_rb[thr_id], throughput);
 
 	bc3_device_selftest(thr_id);
 	init_done[thr_id] = true;
@@ -564,11 +604,12 @@ extern "C" int scanhash_bc3hash(int thr_id, struct work* work, uint32_t max_nonc
 	}
 	bc3_set_header((const uint8_t*)endiandata, ptarget);
 
-	const uint32_t umax[2] = { UINT32_MAX, UINT32_MAX };
+	/* d_res: the two lowest candidates and the candidate count */
+	const uint32_t arm[3] = { UINT32_MAX, UINT32_MAX, 0 };
 	do {
-		CUDA_SAFE_CALL(cudaMemcpy(d_res[thr_id], umax, sizeof(umax), cudaMemcpyHostToDevice));
+		CUDA_SAFE_CALL(cudaMemcpy(d_res[thr_id], arm, sizeof(arm), cudaMemcpyHostToDevice));
 		bc3_launch(thr_id, throughput, pdata[19], NULL);
-		uint32_t res[2];
+		uint32_t res[3];
 		CUDA_SAFE_CALL(cudaMemcpy(res, d_res[thr_id], sizeof(res), cudaMemcpyDeviceToHost));
 
 		if (res[0] != UINT32_MAX) {
@@ -591,10 +632,9 @@ extern "C" int scanhash_bc3hash(int thr_id, struct work* work, uint32_t max_nonc
 				}
 			}
 			if (work->valid_nonces) {
-				/* One candidate: the rest of the batch holds none, resume at its end.
-				 * Two: a third may lie above the higher one, resume past it. */
+				/* At most two candidates: resume at the batch end, else past the higher. */
 				const uint64_t end = min((uint64_t)pdata[19] + throughput, (uint64_t)max_nonce);
-				pdata[19] = res[1] != UINT32_MAX ? res[1] + 1 : (uint32_t)end;
+				pdata[19] = res[2] > 2 ? res[1] + 1 : (uint32_t)end;
 				*hashes_done = pdata[19] - first_nonce;
 				return work->valid_nonces;
 			}
@@ -617,6 +657,7 @@ extern "C" void free_bc3hash(int thr_id)
 	cudaSetDevice(device_map[thr_id]);
 	for (int p = 0; p < 4; p++) cudaFree(d_curve[thr_id][p]);
 	for (int w = 0; w < 3; w++) cudaFree(d_pow[thr_id][w]);
+	cudaFree(d_pow_w[thr_id]);
 	cudaFree(d_state[thr_id]);
 	cudaFree(d_front[thr_id]);
 	cudaFree(d_res[thr_id]);

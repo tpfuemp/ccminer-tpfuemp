@@ -103,6 +103,8 @@ __device__ __forceinline__ int32_t bc3_divsteps_30(int32_t zeta, uint32_t f, uin
                                                    int32_t& tu, int32_t& tv, int32_t& tq, int32_t& tr)
 {
 	uint32_t u = 1, v = 0, q = 0, r = 1;
+#if defined(BC3_DIVSTEPS_MASKS) || (defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700)
+	/* masks below sm_70 (no full-rate 32-bit multiply there) */
 	#pragma unroll 1
 	for (int i = 0; i < 30; i++) {
 		uint32_t c1 = (uint32_t)(zeta >> 31);
@@ -120,6 +122,28 @@ __device__ __forceinline__ int32_t bc3_divsteps_30(int32_t zeta, uint32_t f, uin
 		u <<= 1;
 		v <<= 1;
 	}
+#else
+	/* sm_70+: the same conditional (negated) adds as multiply-adds by m in
+	 * {-1, 0, 1} and by the swap's 0/1 */
+	#pragma unroll 1
+	for (int i = 0; i < 30; i++) {
+		const uint32_t c1 = (uint32_t)(zeta >> 31); /* -1: zeta < 0 */
+		const uint32_t c2 = 0u - (g & 1u);          /* -1: g odd */
+		const uint32_t m = c2 & (c1 | 1u);          /* g odd: -1 if zeta < 0 else 1 */
+		g += f * m;
+		q += u * m;
+		r += v * m;
+		const uint32_t sw = c1 & c2;                /* -1: swap */
+		zeta = (int32_t)(((uint32_t)zeta ^ sw) - 1u);
+		const uint32_t s1 = sw & 1u;
+		f += g * s1;
+		u += q * s1;
+		v += r * s1;
+		g >>= 1;
+		u <<= 1;
+		v <<= 1;
+	}
+#endif
 	tu = (int32_t)u; tv = (int32_t)v; tq = (int32_t)q; tr = (int32_t)r;
 	return zeta;
 }
@@ -276,6 +300,75 @@ __device__ void bc3_fixed_pow_pair(bc3u<N>& r, bc3u<N>& s, const bc3u<N>* __rest
 	}
 	r = bc3_mod_normalize<N, C>(r);
 	s = bc3_mod_normalize<N, C>(s);
+}
+
+/* ---- 256-bit FixedPower with RB-bit rows (RB = 8 is the coin's table) -------
+ * Row i holds g^(d * 2^(RB*i)) for every RB-bit digit d; ceil(256/RB) rows, the
+ * last one may be shorter. Wider rows: fewer products per power, bigger table. */
+template <int RB>
+struct bc3_powrows {
+	static const int rows = (256 + RB - 1) / RB;
+	__host__ __device__ static size_t entries() { return (size_t)rows << RB; }
+};
+
+/* digit i (bits [RB*i, RB*i + RB)) of a 256-bit exponent */
+template <int RB>
+__device__ __forceinline__ uint32_t bc3_digit(const bc3u256& e, int i)
+{
+	const int pos = RB * i, wd = pos >> 5;
+	uint64_t v = e.w[wd];
+	if (wd + 1 < 8) v |= (uint64_t)e.w[wd + 1] << 32;
+	return (uint32_t)(v >> (pos & 31)) & ((1u << RB) - 1);
+}
+
+template <uint32_t C, int RB>
+__device__ void bc3_fixed_pow256_pair(bc3u256& r, bc3u256& s, const bc3u256* __restrict__ table,
+                                      const bc3u256& a, const bc3u256& b)
+{
+#ifdef BC3_RT_DIGITS
+	r = bc3_ldg(table + bc3_digit<RB>(a, 0));
+	s = bc3_ldg(table + bc3_digit<RB>(b, 0));
+	for (int i = 1; i < bc3_powrows<RB>::rows; i++) {
+		r = bc3_mod_mul_lazy<8, C>(r, bc3_ldg(table + ((size_t)i << RB) + bc3_digit<RB>(a, i)));
+		s = bc3_mod_mul_lazy<8, C>(s, bc3_ldg(table + ((size_t)i << RB) + bc3_digit<RB>(b, i)));
+	}
+#else
+	/* digits from running shifted copies (keeps the exponents in registers) */
+	const uint32_t mask = (1u << RB) - 1;
+	bc3u256 ea = bc3_shr<RB>(a), eb = bc3_shr<RB>(b);
+	r = bc3_ldg(table + (a.w[0] & mask));
+	s = bc3_ldg(table + (b.w[0] & mask));
+	for (int i = 1; i < bc3_powrows<RB>::rows; i++) {
+		const bc3u256* row = table + ((size_t)i << RB);
+		const uint32_t da = ea.w[0] & mask, db = eb.w[0] & mask;
+		ea = bc3_shr<RB>(ea);
+		eb = bc3_shr<RB>(eb);
+		r = bc3_mod_mul_lazy<8, C>(r, bc3_ldg(row + da));
+		s = bc3_mod_mul_lazy<8, C>(s, bc3_ldg(row + db));
+	}
+#endif
+	r = bc3_mod_normalize<8, C>(r);
+	s = bc3_mod_normalize<8, C>(s);
+}
+
+/* RB-bit-row table from the coin's 8-bit one: entry (i, d) = g^(d * 2^(RB*i)) is
+ * the product of the 8-bit entries for the bytes of d * 2^(RB*i). One thread
+ * per entry; builds entries [first, end). */
+template <uint32_t C, int RB>
+__global__ void bc3_pow_table_kernel(bc3u256* __restrict__ out, const bc3u256* __restrict__ t8,
+                                     uint32_t first, uint32_t end)
+{
+	const uint32_t t = first + blockIdx.x * blockDim.x + threadIdx.x;
+	if (t >= end || t >= bc3_powrows<RB>::entries()) return;
+	const uint32_t i = t >> RB, d = t & ((1u << RB) - 1);
+	bc3u256 r = bc3_small<8>(1);
+	for (int k = (RB * i) >> 3; k <= (int)((RB * i + RB - 1) >> 3) && k < 32; k++) {
+		/* byte k of d << (RB*i) */
+		const int sh = RB * (int)i - 8 * k;
+		const uint32_t byte = (sh >= 0 ? d << sh : d >> -sh) & 255;
+		r = bc3_mod_mul<8, C>(r, t8[256 * k + byte]);
+	}
+	out[t] = r;
 }
 
 template <int N, uint32_t C>

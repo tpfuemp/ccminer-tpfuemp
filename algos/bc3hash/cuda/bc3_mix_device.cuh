@@ -14,7 +14,7 @@
 struct bc3_tables {
 	const bc3u64* pow64;   /* [8][256]  F64  */
 	const bc3u128* pow128; /* [16][256] F128 */
-	const bc3u256* pow256; /* [32][256] F256 */
+	const bc3u256* pow256; /* F256 powers: [32][256], or wider rows (bc3_powrows) */
 	const uint8_t* curve[4]; /* H, J, K, L: 64 MB each */
 };
 
@@ -142,11 +142,12 @@ __device__ void bc3_mix_c(bc3u256& h1, bc3u256& h2, const bc3u256 m256[16], cons
 /* One round of phase D in two steps:
  *   pow: (u1, u2)          -> k1, k2 (the two table powers)
  *   inv: (u1, u2, k1, k2)  -> next u1, u2 (inverse256 and the combine) */
+template <int RB = 8>
 __device__ __forceinline__ void bc3_mix_d_pow(bc3u256& k1, bc3u256& k2, const bc3u256& u1, const bc3u256& u2,
                                               const bc3_tables& t)
 {
 	bc3u256 p1, p2;
-	bc3_fixed_pow_pair<BC3_F256>(p1, p2, t.pow256, u1, u2);
+	bc3_fixed_pow256_pair<36113u, RB>(p1, p2, t.pow256, u1, u2);
 	k1 = p1 + bc3_beta(u2);
 	k2 = p2 + bc3_gamma(u1, u2) + bc3_ch(k1, u2, u1);
 }
@@ -162,12 +163,13 @@ __device__ __forceinline__ void bc3_mix_d_out(uint8_t* __restrict__ out32, const
 	bc3_store_be(out32, u1 + bc3_beta(u2));
 }
 
+template <int RB = 8>
 __device__ void bc3_mix_d(uint8_t* __restrict__ out32, const bc3u256& h1, const bc3u256& h2, const bc3_tables& t)
 {
 	bc3u256 u1 = h1, u2 = h2; /* + U256(folded), folded = 0 */
 	for (int i = 0; i < 64; i++) {
 		bc3u256 k1, k2;
-		bc3_mix_d_pow(k1, k2, u1, u2, t);
+		bc3_mix_d_pow<RB>(k1, k2, u1, u2, t);
 		bc3_mix_d_inv(u1, u2, k1, k2, i);
 	}
 	bc3_mix_d_out(out32, u1, u2);

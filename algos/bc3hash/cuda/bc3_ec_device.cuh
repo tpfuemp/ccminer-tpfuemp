@@ -227,7 +227,11 @@ struct bc3_jac {
 };
 
 /* r = 2r (a = 0); reached only when an addend equals the running sum */
+#ifdef BC3_RT_DIGITS
 __device__ __noinline__ void bc3_jac_double(bc3_jac& r)
+#else
+__device__ __forceinline__ void bc3_jac_double(bc3_jac& r)
+#endif
 {
 	const bc3u256 a = bc3_fp_sqr(r.x), b = bc3_fp_sqr(r.y), c = bc3_fp_sqr(b);
 	bc3u256 d = bc3_fp_sub(bc3_fp_sub(bc3_fp_sqr(bc3_fp_add(r.x, b)), a), c);
@@ -293,12 +297,19 @@ __device__ __forceinline__ void bc3_jac_accumulate(bc3_jac& r, const uint8_t* __
 {
 	r.inf = true;
 	r.x = r.y = r.z = bc3_small<8>(0);
+	bc3u256 kk = k;
 #pragma unroll 1
 	for (int j = 0; j < bc3_ecw<W>::windows; j++) {
+#ifdef BC3_RT_DIGITS
 		const int pos = j * W, wd = pos >> 5;
 		uint64_t v = k.w[wd];
 		if (wd + 1 < 8) v |= (uint64_t)k.w[wd + 1] << 32;
 		const uint32_t bits = (uint32_t)(v >> (pos & 31)) & ((1u << W) - 1);
+#else
+		/* digits from a running shifted copy (see bc3_fixed_pow256_pair) */
+		const uint32_t bits = kk.w[0] & ((1u << W) - 1);
+		kk = bc3_shr<W>(kk);
+#endif
 		if (bits == 0) continue; /* entry 0 is infinity: additive no-op */
 		bc3u256 x2, y2;
 		bc3_ec_load(x2, y2, table + (((size_t)j << W) + bits) * BC3_EC_ENTRY);
