@@ -496,6 +496,9 @@
     <ClCompile Include="algos\curvehash\curvehash_oracle.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="algos\bc3hash\bc3hash_oracle.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="algos\curvehash\secp256k1_unity.c">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1423,6 +1426,9 @@
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\curvehash\curvehash.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
+    <CudaCompile Include="algos\bc3hash\bc3hash.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\verthash\verthash.cu">

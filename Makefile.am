@@ -32,6 +32,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/balloon/balloon.h algos/balloon/sha256.h \
 			  algos/rinhash/rinhash_scanhash.cpp algos/rinhash/rinhash_coop.cu \
 			  algos/curvehash/curvehash_oracle.cpp algos/curvehash/curvehash.cu algos/curvehash/secp256k1_unity.c \
+			  algos/bc3hash/bc3hash_oracle.cpp algos/bc3hash/bc3hash.cu \
 			  algos/verthash/verthash.cu algos/verthash/cuda_verthash.cu \
 			  algos/verthash/verthash-cpu.c algos/verthash/verthash-data.cpp \
 			  cuda/sha3_device.cuh \
@@ -191,7 +192,8 @@ ccminer_LDADD    = @LIBCURL@ @JANSSON_LIBS@ @PTHREAD_LIBS@ @WS2_LIBS@ @CUDA_LIBS
 # -a mjollnir dispatch lives behind #ifdef in ccminer.cpp, which g++ compiles.
 # With it only on the CUDA side, heavy.cu gets the real body and the dispatch is
 # still compiled out, so the algo reports "not available in this build".
-ccminer_CPPFLAGS = -DWITH_HEAVY_ALGO @LIBCURL_CPPFLAGS@ @OPENMP_CFLAGS@ $(CPPFLAGS) $(PTHREAD_FLAGS) -fno-strict-aliasing $(JANSSON_INCLUDES) $(DEF_INCLUDES) $(nvml_defs) -I$(top_srcdir)/algos/curvehash/secp256k1
+ccminer_CPPFLAGS = -DWITH_HEAVY_ALGO @LIBCURL_CPPFLAGS@ @OPENMP_CFLAGS@ $(CPPFLAGS) $(PTHREAD_FLAGS) -fno-strict-aliasing $(JANSSON_INCLUDES) $(DEF_INCLUDES) $(nvml_defs) -I$(top_srcdir)/algos/curvehash/secp256k1 \
+	-I$(top_srcdir)/algos/curvehash/secp256k1/include -I$(top_srcdir)/algos/bc3hash/ref -I$(top_srcdir)/algos/bc3hash/ref/include
 
 if HAVE_OSX
 ccminer_CPPFLAGS += -I/usr/local/llvm/lib/clang/4.0.0/include
@@ -255,6 +257,13 @@ algos/hoohash/cuda_hoohashv110.o: algos/hoohash/cuda_hoohashv110.cu
 # homescrypt: its consensus binary32 FMA chain gets the same strict-FP flags.
 algos/homescrypt/homescrypt.o: algos/homescrypt/homescrypt.cu algos/homescrypt/homescrypt.h algos/homescrypt/homescrypt_kat.h
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=128 --fmad=false --prec-div=true --prec-sqrt=true --ftz=false -o $@ -c $<
+
+# bc3hash: the mix kernels need ~255 registers.
+algos/bc3hash/bc3hash.o: algos/bc3hash/bc3hash.cu algos/bc3hash/cuda/bc3_constants.cuh \
+		algos/bc3hash/cuda/bc3_uint_device.cuh algos/bc3hash/cuda/bc3_exp_device.cuh \
+		algos/bc3hash/cuda/bc3_ec_device.cuh algos/bc3hash/cuda/bc3_mix_device.cuh \
+		algos/bc3hash/cuda/bc3_hashes_device.cuh
+	$(NVCC) $(nvcc_FLAGS) --maxrregcount=255 -o $@ -c $<
 
 algos/blake256/blake256.o: algos/blake256/blake256.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=64 -o $@ -c $<

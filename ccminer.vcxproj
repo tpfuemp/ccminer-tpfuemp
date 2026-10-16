@@ -321,6 +321,10 @@
     <ClCompile Include="algos\equihash\equi_verify_192.cpp" />
     <ClCompile Include="algos\equihash\equihash.cpp" />
     <ClCompile Include="algos\curvehash\curvehash_oracle.cpp" />
+    <ClCompile Include="algos\bc3hash\bc3hash_oracle.cpp">
+      <LanguageStandard>stdcpp17</LanguageStandard>
+      <AdditionalIncludeDirectories>algos\bc3hash\ref;algos\bc3hash\ref\include;algos\curvehash\secp256k1\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+    </ClCompile>
     <ClCompile Include="algos\verthash\verthash-cpu.c" />
     <ClCompile Include="algos\verthash\verthash-data.cpp" />
     <ClCompile Include="algos\curvehash\secp256k1_unity.c">
@@ -402,6 +406,9 @@
     <CudaCompile Include="algos\balloon\cuda_balloon.cu" />
     <CudaCompile Include="algos\rinhash\rinhash_coop.cu" />
     <CudaCompile Include="algos\curvehash\curvehash.cu" />
+    <CudaCompile Include="algos\bc3hash\bc3hash.cu">
+      <MaxRegCount>255</MaxRegCount>
+    </CudaCompile>
     <CudaCompile Include="algos\verthash\verthash.cu" />
     <CudaCompile Include="algos\verthash\cuda_verthash.cu" />
     <CudaCompile Include="algos\kawpow\cuda_kawpow.cu" />

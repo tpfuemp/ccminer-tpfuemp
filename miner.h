@@ -386,6 +386,7 @@ extern int scanhash_sha3t(int thr_id, struct work* work, uint32_t max_nonce, uns
 extern int scanhash_soterg(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_x25x(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_curvehash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_bc3hash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_kawpow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern void free_kawpow(int thr_id);
 extern int scanhash_meowpow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
@@ -498,6 +499,7 @@ extern void free_sha3t(int thr_id);
 extern void free_soterg(int thr_id);
 extern void free_x25x(int thr_id);
 extern void free_curvehash(int thr_id);
+extern void free_bc3hash(int thr_id);
 extern void free_equihash(int thr_id);
 void sha3t256_hash(void *state, const void *input);
 void soterg_hash(void *output, const void *input);

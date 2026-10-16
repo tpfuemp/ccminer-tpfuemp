@@ -290,6 +290,7 @@ Options:\n\
 			argon2id1024	Bitweb (BTW)\n\
 			balloon		Balloon hash\n\
 			bastion		Hefty bastion\n\
+			bc3hash		Bitcoin III (BC3Hash, from block 64360)\n\
 			bitcore		Timetravel-10\n\
 			blake		Blake 256 (SFR)\n\
 			blake2b		Blake2-B 512 (BCX)\n\
@@ -359,7 +360,7 @@ Options:\n\
 			scrypt		Scrypt\n\
 			scrypt-jane	Scrypt-jane Chacha\n\
 			sha3d		Bsha3, Yilacoin and Kylacoin\n\
-			sha3t		Fjarcode and Bitcoin III\n\
+			sha3t		Fjarcode, Bitcoin III before block 64360\n\
 			sha256csm	SHA256csm (galleoncoin)\n\
 			sha256d		SHA256d (bitcoin)\n\
 			sha256dv	SHA256d Veil\n\
@@ -3320,6 +3321,9 @@ static void *miner_thread(void *userdata)
 			break;
 		case ALGO_CURVEHASH:
 			rc = scanhash_curvehash(thr_id, &work, max_nonce, &hashes_done);
+			break;
+		case ALGO_BC3HASH:
+			rc = scanhash_bc3hash(thr_id, &work, max_nonce, &hashes_done);
 			break;
 		case ALGO_VERTHASH:
 			rc = scanhash_verthash(thr_id, &work, max_nonce, &hashes_done);

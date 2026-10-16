@@ -50,6 +50,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `argon2id1024` | Bitweb (BTW) |
 | `balloon` | Balloon hash |
 | `bastion` | Hefty bastion |
+| `bc3hash` (`bc3`) | BC3Hash (Bitcoin III, from block 64360) |
 | `bitcore` (`timetravel10`) | Timetravel-10 |
 | `blake` | Blake-256 (SFR) |
 | `blake2b` | Blake2-B 512 (BCX) |
@@ -117,7 +118,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `sha256dv` | SHA256d (Veil) |
 | `sha256t` | SHA256 ×3 |
 | `sha3d` | BSHA3 (Yilacoin, Kylacoin) |
-| `sha3t` (`sha3-256t`) | SHA3-256T (Fjarcode, Bitcoin III) |
+| `sha3t` (`sha3-256t`) | SHA3-256T (Fjarcode, Bitcoin III before block 64360) |
 | `sha512256d` | Double SHA-512/256 (Radiant) |
 | `sia` | SIA (Blake2B) |
 | `sib` | Sibcoin (X11 + Streebog) |

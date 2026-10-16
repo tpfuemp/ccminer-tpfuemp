@@ -5,6 +5,9 @@ Guideline: `docs/coding-guideline.md`
 `hash = SHA3-256^3( header80 )`  - NIST FIPS 202 padding (0x06). CPU
 reference / share re-verify: `sph/sha3.c` (tiny-sha3, `sha3_init/final`).
 
+Bitcoin III mined sha3t only up to block 64 360; from there it is BC3Hash,
+`-a bc3hash` (see `algos/bc3hash/README.md`).
+
 ## Provenance
 
 - `cuda_sha3t.cu`  - Pkules donor kernel, already sp-style optimized when it
