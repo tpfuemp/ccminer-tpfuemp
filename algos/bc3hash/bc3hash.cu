@@ -33,6 +33,9 @@ extern "C" int bc3hash_window_bases(int point, int wbits, int count, unsigned ch
 extern "C" int bc3hash_curve_ref(int point, const uint32_t* k, uint32_t* x, uint32_t* y);
 
 #define BC3_TPB 64
+/* d_res: the two lowest candidates, the count, then up to BC3_SLOTS candidates */
+#define BC3_SLOTS MAX_NONCES
+#define BC3_RES_WORDS (3 + BC3_SLOTS)
 
 /* Pipeline state per nonce, SoA by 32-bit word: U256 slots h1, h2, m256[48..63],
  * j1..j4 of the current phase C round, and the 57 words of the front digests the
@@ -50,6 +53,7 @@ static uint32_t* d_state[MAX_GPUS];
 static uint32_t* d_front[MAX_GPUS];
 static uint32_t* d_res[MAX_GPUS];
 static uint32_t max_batch[MAX_GPUS];
+static uint32_t wave[MAX_GPUS]; /* nonces per k_d_final wave (0: unknown) */
 
 /* header bytes 0..75 (be32enc of pdata[0..18]) as words, and the full target */
 static __constant__ uint32_t c_header[19];
@@ -185,7 +189,8 @@ __global__ void bc3_k_d_final(bc3_tables tb, uint32_t threads, uint32_t startNon
 	}
 	if (below) {
 		report_candidate_2(resNonce, startNonce + t);
-		atomicAdd(&resNonce[2], 1u); /* candidate count */
+		const uint32_t k = atomicAdd(&resNonce[2], 1u);
+		if (k < BC3_SLOTS) resNonce[3 + k] = startNonce + t;
 	}
 }
 
@@ -199,7 +204,7 @@ static bc3_tables bc3_device_tables(int thr_id)
 	return tb;
 }
 
-/* One batch through all kernels; leaves the two lowest candidates in d_res. */
+/* One batch through all kernels; leaves the candidates in d_res. */
 static void bc3_launch(int thr_id, uint32_t threads, uint32_t startNonce, uint8_t* d_digests)
 {
 	const bc3_tables tb = bc3_device_tables(thr_id);
@@ -239,7 +244,8 @@ static uint32_t bc3_default_batch(int thr_id)
 	const int step = bab / gcd(bab, bd);
 	int waves = (want + step - 1) / step * step;
 	if (waves > want + want / 2) waves = want;
-	return (uint32_t)waves * bd * BC3_TPB * sms;
+	wave[thr_id] = (uint32_t)bd * BC3_TPB * sms;
+	return (uint32_t)waves * wave[thr_id];
 }
 
 static void bc3_set_header(const uint8_t* header76, const uint32_t* target8)
@@ -283,9 +289,9 @@ static const char* const kat_digest[4] = {
 	"b405f924e81156d1957784a38b362ba9bf52b83b37f486b6ff936c1a9fee16cd"};
 
 /* Hash `count` nonces from `start` of one 76-byte header through the real scan
- * kernels, digests and the two reported candidates back to the host. */
+ * kernels, digests and the first `nres` words of d_res back to the host. */
 static bool bc3_selftest_scan(int thr_id, const uint8_t* hdr76, const uint32_t* target8, uint32_t start,
-                              uint32_t count, uint8_t* digests, uint32_t res[2])
+                              uint32_t count, uint8_t* digests, uint32_t* res, int nres = 2)
 {
 	uint8_t* d_dig = NULL;
 	if (cudaMalloc(&d_dig, 32 * (size_t)count) != cudaSuccess) return selftest_cuda_fault();
@@ -294,7 +300,7 @@ static bool bc3_selftest_scan(int thr_id, const uint8_t* hdr76, const uint32_t* 
 	cudaMemcpy(d_res[thr_id], arm, sizeof(arm), cudaMemcpyHostToDevice);
 	bc3_launch(thr_id, count, start, d_dig);
 	const bool ok = cudaMemcpy(digests, d_dig, 32 * (size_t)count, cudaMemcpyDeviceToHost) == cudaSuccess &&
-	                cudaMemcpy(res, d_res[thr_id], 8, cudaMemcpyDeviceToHost) == cudaSuccess;
+	                cudaMemcpy(res, d_res[thr_id], 4 * (size_t)nres, cudaMemcpyDeviceToHost) == cudaSuccess;
 	cudaFree(d_dig);
 	return ok ? true : selftest_cuda_fault();
 }
@@ -364,7 +370,8 @@ static bool bc3_device_selftest(int thr_id)
 
 	/* scan: 64 consecutive nonces of a random-looking header against a target
 	 * that ~1/8 of hashes meet; the two reported nonces must be exactly the two
-	 * lowest CPU hits, and every GPU digest must equal the oracle's. */
+	 * lowest CPU hits, the count and slots must match the CPU hits, and every
+	 * GPU digest must equal the oracle's. */
 	bool scan_ok = true;
 	if (ran) {
 		uint8_t hdr[80], dig[64 * 32];
@@ -374,9 +381,11 @@ static bool bc3_device_selftest(int thr_id)
 		for (int i = 0; i < 7; i++) target[i] = UINT32_MAX;
 		target[7] = 0x1fffffffu;
 		const uint32_t start = 0x12345670u;
-		uint32_t res[2];
-		ran = bc3_selftest_scan(thr_id, hdr, target, start + (bc3_fault(thr_id, "scan") ? 1 : 0), 64, dig, res);
+		uint32_t res[BC3_RES_WORDS];
+		ran = bc3_selftest_scan(thr_id, hdr, target, start + (bc3_fault(thr_id, "scan") ? 1 : 0), 64, dig, res,
+		                        BC3_RES_WORDS);
 		uint32_t lo[2] = { UINT32_MAX, UINT32_MAX };
+		uint64_t hits = 0; /* bit n: nonce start + n meets the target */
 		for (uint32_t n = 0; ran && n < 64; n++) {
 			const uint32_t nonce = start + n;
 			hdr[76] = (uint8_t)(nonce >> 24), hdr[77] = (uint8_t)(nonce >> 16);
@@ -385,11 +394,23 @@ static bool bc3_device_selftest(int thr_id)
 			bc3hash_hash(h, hdr);
 			if (memcmp(h, dig + 32 * n, 32)) scan_ok = false;
 			if (h[7] <= target[7]) { /* target words 0..6 are all-ones */
+				hits |= 1ull << n;
 				if (lo[0] == UINT32_MAX) lo[0] = nonce;
 				else if (lo[1] == UINT32_MAX) lo[1] = nonce;
 			}
 		}
 		if (ran && (res[0] != lo[0] || res[1] != lo[1] || lo[1] == UINT32_MAX)) scan_ok = false;
+		uint32_t nhits = 0;
+		for (uint64_t m = hits; m; m &= m - 1) nhits++;
+		if (ran && res[2] != nhits) scan_ok = false;
+		uint64_t seen = 0; /* each slot a distinct hit; all hits when they fit */
+		for (uint32_t i = 0; ran && i < min(res[2], (uint32_t)BC3_SLOTS); i++) {
+			const uint32_t n = res[3 + i] - start;
+			if (n >= 64 || !(hits >> n & 1) || (seen >> n & 1)) scan_ok = false;
+			else seen |= 1ull << n;
+		}
+		if (ran && nhits <= BC3_SLOTS && seen != hits) scan_ok = false;
+		gpulog(LOG_DEBUG, thr_id, "bc3hash self-test scan: %u of 64 nonces are candidates", nhits);
 	}
 
 	const bool passed = ran && tbl_ok && kat_ok && rep_ok && neg_ok && scan_ok;
@@ -475,7 +496,7 @@ static void bc3hash_init(int thr_id, uint32_t throughput)
 	max_batch[thr_id] = throughput;
 	CUDA_SAFE_CALL(cudaMalloc(&d_state[thr_id], (size_t)BC3_ST_SLOTS * 8 * 4 * throughput));
 	CUDA_SAFE_CALL(cudaMalloc(&d_front[thr_id], (size_t)BC3_FRONT_WORDS * 4 * throughput));
-	CUDA_SAFE_CALL(cudaMalloc(&d_res[thr_id], 3 * sizeof(uint32_t)));
+	CUDA_SAFE_CALL(cudaMalloc(&d_res[thr_id], BC3_RES_WORDS * sizeof(uint32_t)));
 
 	gpulog(LOG_INFO, thr_id, "bc3hash: %d-bit curve windows (%u MB), %d-bit power rows, batch %u nonces",
 	       W, (unsigned)(4 * (tbytes >> 20)), pow_rb[thr_id], throughput);
@@ -581,8 +602,24 @@ extern "C" int scanhash_bc3hash(int thr_id, struct work* work, uint32_t max_nonc
 	throughput = min(throughput, max_batch[thr_id]);
 	throughput = min(throughput, max_nonce - first_nonce);
 
-	if (opt_benchmark && ptarget[7] < 0x0000ffffU)
-		ptarget[7] = 0x0000ffffU;
+	/* benchmark: rare candidates (2^-24), so batches are not cut short */
+	if (opt_benchmark && ptarget[7] < 0x000000ffU)
+		ptarget[7] = 0x000000ffU;
+
+	/* easy target: at most ~3 expected candidates per batch, in whole waves */
+	{
+		const double p = ((double)ptarget[7] + ptarget[6] / 4294967296.0 + 1.0) / 4294967296.0;
+		const double cap = 3.0 / p;
+		if (cap < throughput) {
+			const uint32_t w = wave[thr_id] ? wave[thr_id] : BC3_TPB;
+			throughput = min(throughput, max(w, (uint32_t)(cap / w) * w));
+		}
+		static uint32_t logged[MAX_GPUS];
+		if (opt_debug && throughput != logged[thr_id]) {
+			logged[thr_id] = throughput;
+			gpulog(LOG_DEBUG, thr_id, "bc3hash batch %u nonces (~%.1f candidates)", throughput, throughput * p);
+		}
+	}
 
 	/* 76-byte base header = be32enc(pdata[0..18]); the kernel reads these bytes
 	 * back as little-endian words, so upload the bytes, not pdata. */
@@ -610,37 +647,48 @@ extern "C" int scanhash_bc3hash(int thr_id, struct work* work, uint32_t max_nonc
 	}
 	bc3_set_header((const uint8_t*)endiandata, ptarget);
 
-	/* d_res: the two lowest candidates and the candidate count */
 	const uint32_t arm[3] = { UINT32_MAX, UINT32_MAX, 0 };
 	do {
 		CUDA_SAFE_CALL(cudaMemcpy(d_res[thr_id], arm, sizeof(arm), cudaMemcpyHostToDevice));
 		bc3_launch(thr_id, throughput, pdata[19], NULL);
-		uint32_t res[3];
+		uint32_t res[BC3_RES_WORDS];
 		CUDA_SAFE_CALL(cudaMemcpy(res, d_res[thr_id], sizeof(res), cudaMemcpyDeviceToHost));
 
 		if (res[0] != UINT32_MAX) {
+			/* all candidates and resume at the batch end, else the two lowest */
+			const bool all = res[2] <= BC3_SLOTS;
+			uint32_t cand[BC3_SLOTS], n = 0;
+			if (all) {
+				for (uint32_t i = 0; i < res[2]; i++) {
+					uint32_t j = n++;
+					for (; j > 0 && cand[j - 1] > res[3 + i]; j--) cand[j] = cand[j - 1];
+					cand[j] = res[3 + i];
+				}
+			} else {
+				cand[n++] = res[0];
+				cand[n++] = res[1];
+			}
 			work->valid_nonces = 0;
-			for (int s = 0; s < 2 && res[s] != UINT32_MAX; s++) {
+			for (uint32_t s = 0; s < n; s++) {
 				uint32_t _ALIGN(64) vhash[8];
-				be32enc(&endiandata[19], res[s]);
+				be32enc(&endiandata[19], cand[s]);
 				bc3hash_hash(vhash, endiandata);
 				if (vhash[7] <= ptarget[7] && fulltest(vhash, ptarget)) {
-					work->nonces[work->valid_nonces] = res[s];
+					work->nonces[work->valid_nonces] = cand[s];
 					if (work->valid_nonces == 0)
 						work_set_target_ratio(work, vhash);
 					else
-						bn_set_target_ratio(work, vhash, 1);
+						bn_set_target_ratio(work, vhash, work->valid_nonces);
 					work->valid_nonces++;
 				} else {
 					gpu_increment_reject(thr_id);
 					if (!opt_quiet)
-						gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", res[s]);
+						gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", cand[s]);
 				}
 			}
 			if (work->valid_nonces) {
-				/* At most two candidates: resume at the batch end, else past the higher. */
 				const uint64_t end = min((uint64_t)pdata[19] + throughput, (uint64_t)max_nonce);
-				pdata[19] = res[2] > 2 ? res[1] + 1 : (uint32_t)end;
+				pdata[19] = all ? (uint32_t)end : res[1] + 1;
 				*hashes_done = pdata[19] - first_nonce;
 				return work->valid_nonces;
 			}

@@ -94,9 +94,11 @@ Tables, per GPU:
 project default is 128. The default batch is a whole number of GPU waves (for
 example 71 680 nonces on an RTX 3060, 64 512 on a GTX 1080 Ti; `-i` to tune).
 
-The kernel reports the two lowest candidates and the candidate count. The host
-re-hashes both with the oracle before submitting, so a kernel defect can only
-cause a local reject, never a bad share.
+The kernel reports up to 7 candidates per batch (plus the two lowest and the
+count). The host re-hashes each with the oracle before submitting, so a kernel
+defect can only cause a local reject, never a bad share. On a very easy target
+(a pool's first vardiff steps) the batch shrinks to whole waves of about three
+expected candidates, so no batch has more than the report holds.
 
 ## Self-test and `-D`
 

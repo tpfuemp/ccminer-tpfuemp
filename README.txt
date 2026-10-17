@@ -1,5 +1,5 @@
 
-ccminer-tpfuemp 2026.10-p1   "BC3Hash for Bitcoin III; faster blake256, balloon and bmw; GPU self-tests"
+ccminer-tpfuemp 2026.10-p2   "BC3Hash for Bitcoin III; faster blake256, balloon and bmw; GPU self-tests"
 ---------------------------------------------------------------
 
 Donation addresses and contributor credits are in CREDITS.txt.
@@ -329,6 +329,16 @@ Toolkit, use the upstream project instead -- it retains that wider hardware and
 toolkit range: https://github.com/tpruvot/ccminer
 
 >>> RELEASE HISTORY <<<
+  Oct. 17th 2026 ccminer-tpfuemp 2026.10-p2 (patch, binaries added to the 2026.10 release)
+
+                  Fixes
+                    bc3hash    too low rate on large GPUs at a very low pool
+                               difficulty and in --benchmark
+
+                  Logging
+                    CUDA errors name the GPU even when several fail at once;
+                    startup lists GPUs with a display watchdog
+
   Oct. 17th 2026 ccminer-tpfuemp 2026.10-p1 (patch, binaries added to the 2026.10 release)
 
                   Logging
