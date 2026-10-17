@@ -131,8 +131,15 @@ __global__ void __launch_bounds__(BC3_TPB, 10) bc3_k_c_exp2(uint32_t threads, ui
 	bc3_st_put(st, threads, 21, t, j4);
 }
 
+/* sm_61 with 16-bit windows: 128 regs (16 warps/SM) beat 168 despite the small spill.
+ * 20-bit windows and sm_70+ stay at 168. */
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
+#define BC3_EC_MINB(W) ((W) == 16 ? 8 : 5)
+#else
+#define BC3_EC_MINB(W) 5
+#endif
 template <int W>
-__global__ void __launch_bounds__(BC3_TPB, 5) bc3_k_c_ec(bc3_tables tb, uint32_t threads, uint32_t* st)
+__global__ void __launch_bounds__(BC3_TPB, BC3_EC_MINB(W)) bc3_k_c_ec(bc3_tables tb, uint32_t threads, uint32_t* st)
 {
 	const uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
 	if (t >= threads) return;

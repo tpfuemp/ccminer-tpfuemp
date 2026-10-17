@@ -13,6 +13,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #ifndef UINT32_MAX
 /* slackware need that */
@@ -80,14 +82,27 @@ extern const uint3 threadIdx;
 /*********************************************************************/
 // Macros to catch CUDA errors in CUDA runtime calls
 
+#ifndef CUDA_SAFE_CALL_FAILED
+#define CUDA_SAFE_CALL_FAILED
+/* names the GPU as gpulog does (CUDA device id) plus its PCI bus id, which
+ * matches the driver's Xid lines in the kernel log */
+static inline void cuda_safe_call_failed(const char* func, int line, cudaError_t err)
+{
+	int dev = -1;
+	char bus[32];
+	if (cudaGetDevice(&dev) != cudaSuccess || cudaDeviceGetPCIBusId(bus, sizeof(bus), dev) != cudaSuccess)
+		snprintf(bus, sizeof(bus), "?");
+	fprintf(stderr, "GPU #%d (PCI %s): Cuda error in func '%s' at line %i : %s.\n",
+	        dev, bus, func, line, cudaGetErrorString(err));
+	exit(EXIT_FAILURE);
+}
+#endif
+
 #define CUDA_SAFE_CALL(call)                                          \
 do {                                                                  \
 	cudaError_t err = call;                                           \
-	if (cudaSuccess != err) {                                         \
-		fprintf(stderr, "Cuda error in func '%s' at line %i : %s.\n", \
-		         __FUNCTION__, __LINE__, cudaGetErrorString(err) );   \
-		exit(EXIT_FAILURE);                                           \
-	}                                                                 \
+	if (cudaSuccess != err)                                           \
+		cuda_safe_call_failed(__FUNCTION__, __LINE__, err);           \
 } while (0)
 
 #define CUDA_CALL_OR_RET(call) do {                                   \
