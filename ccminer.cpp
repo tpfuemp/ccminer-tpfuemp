@@ -5298,6 +5298,7 @@ int main(int argc, char *argv[])
 		"using '%s' algorithm.",
 		opt_n_threads, opt_n_threads > 1 ? "s":"",
 		algo_names[opt_algo]);
+	cuda_log_kernel_timeout();
 
 	/* main loop - simply wait for workio thread to exit */
 	pthread_join(thr_info[work_thr_id].pth, NULL);

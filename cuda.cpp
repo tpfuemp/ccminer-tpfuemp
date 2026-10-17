@@ -93,6 +93,28 @@ void cuda_devicenames()
 	}
 }
 
+/* GPUs with a display watchdog end long kernels with "the launch timed out" */
+void cuda_log_kernel_timeout()
+{
+	char list[MAX_GPUS * 8] = { 0 };
+	bool seen[MAX_GPUS] = { false };
+	int n = 0;
+	for (int i = 0; i < opt_n_threads && i < MAX_GPUS; i++) {
+		const int dev_id = device_map[i];
+		int on = 0;
+		if (dev_id < 0 || dev_id >= MAX_GPUS || seen[dev_id]) continue;
+		seen[dev_id] = true;
+		if (cudaDeviceGetAttribute(&on, cudaDevAttrKernelExecTimeout, dev_id) != cudaSuccess || !on)
+			continue;
+		sprintf(list + strlen(list), "%s#%d", n ? ", " : "", dev_id);
+		n++;
+	}
+	if (n)
+		applog(LOG_WARNING, "kernel run time limit (display watchdog) on GPU %s", list);
+	else
+		applog(LOG_INFO, "kernel run time limit (display watchdog): none");
+}
+
 void cuda_print_devices()
 {
 	int ngpus = cuda_num_devices();

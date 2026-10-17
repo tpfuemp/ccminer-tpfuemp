@@ -204,22 +204,44 @@ __device__ __host__ __forceinline__ void xchg(uint32_t &x, uint32_t &y) {
 
 #ifndef CUDA_SAFE_CALL_FAILED
 #define CUDA_SAFE_CALL_FAILED
-/* names the GPU as gpulog does (CUDA device id) plus its PCI bus id, which
- * matches the driver's Xid lines in the kernel log */
-static inline void cuda_safe_call_failed(const char* func, int line, cudaError_t err)
+/* Names the failing GPU (device id and PCI bus id, as in the driver's Xid log),
+ * recorded before each call: another thread's exit() may already have unloaded
+ * the runtime. Not static, so all translation units share one copy. */
+inline int& cuda_safe_call_dev()
 {
-	int dev = -1;
-	char bus[32];
-	if (cudaGetDevice(&dev) != cudaSuccess || cudaDeviceGetPCIBusId(bus, sizeof(bus), dev) != cudaSuccess)
-		snprintf(bus, sizeof(bus), "?");
+	static thread_local int dev = -1;
+	return dev;
+}
+inline const char* cuda_safe_call_bus(int dev)
+{
+	static char bus[MAX_GPUS][16];
+	static volatile bool known[MAX_GPUS];
+	if (dev < 0 || dev >= MAX_GPUS)
+		return "?";
+	if (!known[dev] && cudaDeviceGetPCIBusId(bus[dev], sizeof(bus[dev]), dev) == cudaSuccess)
+		known[dev] = true;
+	return known[dev] ? bus[dev] : "?";
+}
+inline void cuda_safe_call_note()
+{
+	int dev;
+	if (cudaGetDevice(&dev) == cudaSuccess) {
+		cuda_safe_call_dev() = dev;
+		cuda_safe_call_bus(dev);
+	}
+}
+inline void cuda_safe_call_failed(const char* func, int line, cudaError_t err)
+{
+	const int dev = cuda_safe_call_dev();
 	fprintf(stderr, "GPU #%d (PCI %s): Cuda error in func '%s' at line %i : %s.\n",
-	        dev, bus, func, line, cudaGetErrorString(err));
+	        dev, cuda_safe_call_bus(dev), func, line, cudaGetErrorString(err));
 	exit(EXIT_FAILURE);
 }
 #endif
 
 #define CUDA_SAFE_CALL(call)                                          \
 do {                                                                  \
+	cuda_safe_call_note();                                            \
 	cudaError_t err = call;                                           \
 	if (cudaSuccess != err)                                           \
 		cuda_safe_call_failed(__FUNCTION__, __LINE__, err);           \

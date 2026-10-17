@@ -693,6 +693,7 @@ void cuda_shutdown();
 int cuda_finddevice(char *name);
 int cuda_version();
 void cuda_print_devices();
+void cuda_log_kernel_timeout();
 int cuda_gpu_info(struct cgpu_info *gpu);
 int cuda_available_memory(int thr_id);
 

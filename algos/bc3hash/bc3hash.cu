@@ -131,8 +131,7 @@ __global__ void __launch_bounds__(BC3_TPB, 10) bc3_k_c_exp2(uint32_t threads, ui
 	bc3_st_put(st, threads, 21, t, j4);
 }
 
-/* sm_61 with 16-bit windows: 128 regs (16 warps/SM) beat 168 despite the small spill.
- * 20-bit windows and sm_70+ stay at 168. */
+/* sm_61 with 16-bit windows runs faster at 128 registers, everything else at 168 */
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
 #define BC3_EC_MINB(W) ((W) == 16 ? 8 : 5)
 #else
