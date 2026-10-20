@@ -212,7 +212,8 @@ void x_fused_fixed_shavite_gpu_hash_64(const uint32_t threads, uint64_t *g_hash)
 #define X_FUSED_FIXED_SHAVITE_LIST(X) \
 	X(XF_SKEIN_JH_KECCAK_LUFFA_CUBE_SHAVITE, 5, 3, 4, 6, 7) \
 	X(XF_JH_KECCAK_SKEIN_LUFFA_CUBE_SHAVITE, 3, 4, 5, 6, 7) \
-	X(XF_LUFFA_CUBE_SHAVITE,                 6, 7)
+	X(XF_LUFFA_CUBE_SHAVITE,                 6, 7) \
+	X(XF_CUBE_SHAVITE,                       7)
 
 __host__
 void x_fused_fixed_cpu_hash_64(uint32_t threads, int seq, uint32_t *d_hash)

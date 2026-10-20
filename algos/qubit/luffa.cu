@@ -1,5 +1,10 @@
 /*
  * luffa 80 algo (Introduced by Doomcoin)
+ *
+ * The single luffa-80 stage is also the terminal: luffa512_cpu_hash_80_final
+ * screens the top 64 bits on-device and reports the two lowest passing nonces
+ * into d_resNonce, skipping the third round (digest words 8..15), the 64-byte
+ * hash store and the cuda_check_hash passes.
  */
 extern "C" {
 #include "sph/sph_luffa.h"
@@ -10,7 +15,7 @@ extern "C" {
 #include "cuda_helper.h"
 #include "algos/common/cuda_x_stages.h"
 
-static uint32_t *d_hash[MAX_GPUS];
+static uint32_t *d_resNonce[MAX_GPUS];
 
 extern "C" void luffa_hash(void *state, const void *input)
 {
@@ -33,7 +38,8 @@ extern "C" int scanhash_luffa(int thr_id, struct work* work, uint32_t max_nonce,
 	uint32_t *pdata = work->data;
 	uint32_t *ptarget = work->target;
 	const uint32_t first_nonce = pdata[19];
-	uint32_t throughput = cuda_default_throughput(thr_id, 1U << 21);
+	/* the terminal kernel is short; smaller batches leave the GPU idle between them */
+	uint32_t throughput = cuda_default_throughput(thr_id, 1U << 24);
 	if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
 	if (opt_benchmark)
@@ -50,9 +56,9 @@ extern "C" int scanhash_luffa(int thr_id, struct work* work, uint32_t max_nonce,
 		}
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
-		CUDA_SAFE_CALL(cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput));
+		CUDA_SAFE_CALL(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)));
 
-		cuda_check_cpu_init(thr_id, throughput);
+		luffa512_80_device_selftest(thr_id);
 
 		init[thr_id] = true;
 	}
@@ -61,40 +67,49 @@ extern "C" int scanhash_luffa(int thr_id, struct work* work, uint32_t max_nonce,
 		be32enc(&endiandata[k], pdata[k]);
 
 	luffa512_setBlock_80((void*)endiandata);
-	cuda_check_cpu_setTarget(ptarget);
+	cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
 
 	do {
-		luffa512_cpu_hash_80(thr_id, (int) throughput, pdata[19], d_hash[thr_id], 0);
+		/* luffa + on-device target compare, 2 nonces via the two-lowest report */
+		luffa512_cpu_hash_80_final(thr_id, throughput, pdata[19], d_resNonce[thr_id], AS_U64(&ptarget[6]));
+		cudaMemcpy(&work->nonces[0], d_resNonce[thr_id], 2 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
 
 		*hashes_done = pdata[19] - first_nonce + throughput;
 
-		work->nonces[0] = cuda_check_hash(thr_id, throughput, pdata[19], d_hash[thr_id]);
 		if (work->nonces[0] != UINT32_MAX)
 		{
 			const uint32_t Htarg = ptarget[7];
+			const uint32_t startNounce = pdata[19];
 			uint32_t _ALIGN(64) vhash[8];
+			work->nonces[0] += startNounce;
 			be32enc(&endiandata[19], work->nonces[0]);
 			luffa_hash(vhash, endiandata);
 
 			if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
 				work->valid_nonces = 1;
 				work_set_target_ratio(work, vhash);
-				work->nonces[1] = cuda_check_hash_suppl(thr_id, throughput, pdata[19], d_hash[thr_id], 1);
 				if (work->nonces[1] != UINT32_MAX) {
+					work->nonces[1] += startNounce;
 					be32enc(&endiandata[19], work->nonces[1]);
 					luffa_hash(vhash, endiandata);
-					bn_set_target_ratio(work, vhash, 1);
-					work->valid_nonces++;
+					if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
+						bn_set_target_ratio(work, vhash, 1);
+						work->valid_nonces++;
+					}
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				} else {
 					pdata[19] = work->nonces[0] + 1; // cursor
 				}
 				return work->valid_nonces;
 			}
-			else if (vhash[7] > Htarg) {
-				gpu_increment_reject(thr_id);
-				if (!opt_quiet)
-				gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
+			else {
+				/* a screen pass failing fulltest is no GPU error; resume past it */
+				if (vhash[7] > Htarg) {
+					gpu_increment_reject(thr_id);
+					if (!opt_quiet)
+					gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
+				}
+				cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
 				pdata[19] = work->nonces[0] + 1;
 				continue;
 			}
@@ -120,9 +135,7 @@ extern "C" void free_luffa(int thr_id)
 
 	cudaDeviceSynchronize();
 
-	cudaFree(d_hash[thr_id]);
-
-	cuda_check_cpu_free(thr_id);
+	cudaFree(d_resNonce[thr_id]);
 
 	init[thr_id] = false;
 	cudaDeviceSynchronize();

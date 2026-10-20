@@ -68,7 +68,8 @@ extern "C" int scanhash_qubit(int thr_id, struct work* work, uint32_t max_nonce,
 	uint32_t *ptarget = work->target;
 	const int dev_id = device_map[thr_id];
 	const uint32_t first_nonce = pdata[19];
-	uint32_t throughput =  cuda_default_throughput(thr_id, 1U << 19); // 256*256*8
+	/* smaller batches leave the GPU idle between them (Pascal and Ampere) */
+	uint32_t throughput = cuda_default_throughput(thr_id, 1U << 22);
 	if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
 	if (opt_benchmark)
@@ -98,6 +99,8 @@ extern "C" int scanhash_qubit(int thr_id, struct work* work, uint32_t max_nonce,
 		CUDA_SAFE_CALL(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)));
 
 		cuda_check_cpu_init(thr_id, throughput);
+		luffa512_80_device_selftest(thr_id);
+		x_fused_device_selftest(thr_id); /* covers the cubehash-shavite kernel */
 
 		init[thr_id] = true;
 	}
@@ -116,8 +119,8 @@ extern "C" int scanhash_qubit(int thr_id, struct work* work, uint32_t max_nonce,
 
 		// Hash with CUDA
 		luffa512_cpu_hash_80(thr_id, throughput, pdata[19], d_hash[thr_id], order++);
-		cubehash512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
-		shavite512_cpu_hash_64(thr_id, throughput, d_hash[thr_id]); order++;
+		/* cubehash - shavite in one kernel (state kept in registers) */
+		x_fused_fixed_cpu_hash_64(throughput, XF_CUBE_SHAVITE, d_hash[thr_id]); order += 2;
 		simd512_cpu_hash_64(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
 		if (use_compat_kernels[thr_id]) {
 			echo512_cpu_hash_64_compat(thr_id, throughput, pdata[19], NULL, d_hash[thr_id], order++);
@@ -147,18 +150,23 @@ extern "C" int scanhash_qubit(int thr_id, struct work* work, uint32_t max_nonce,
 					work->nonces[1] += startNounce;
 					be32enc(&endiandata[19], work->nonces[1]);
 					qubithash(vhash, endiandata);
-					bn_set_target_ratio(work, vhash, 1);
-					work->valid_nonces++;
+					if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
+						bn_set_target_ratio(work, vhash, 1);
+						work->valid_nonces++;
+					}
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				} else {
 					pdata[19] = work->nonces[0] + 1; // cursor
 				}
 				return work->valid_nonces;
 			}
-			else if (vhash[7] > Htarg) {
-				gpu_increment_reject(thr_id);
-				if (!opt_quiet)
-				gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
+			else {
+				/* a screen pass failing fulltest is no GPU error; resume past it */
+				if (vhash[7] > Htarg) {
+					gpu_increment_reject(thr_id);
+					if (!opt_quiet)
+					gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
+				}
 				cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
 				pdata[19] = work->nonces[0] + 1;
 				continue;

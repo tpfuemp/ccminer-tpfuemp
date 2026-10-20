@@ -1,20 +1,14 @@
 /*
- * SIMD-512 multi-kernel stage (shared x-family stage; layout B — lives in the
- * unbranded algos/stages/, docs/coding-guideline.md).
+ * SIMD-512 64-byte stage (shared x-family stage, see docs/coding-guideline.md).
  *
- * Deliberately-kept fusion boundary (§6.1): no register-resident device fn — it
- * is an expand -> d_temp4 -> compress pipeline, so the fused kernel treats it as
- * a stage boundary. The FFT message expansion + the compress round machinery
- * live in cuda_simd512_func.cuh; this TU is the standalone 64-byte launcher
- * (simd512_cpu_hash_64 = expand_64 then compress_64) + init/free.
+ * One kernel, eight lanes per hash: the lanes run the NTT message expansion
+ * (cuda_simd512_func.cuh), keep the 1 KB expanded message in shared memory and
+ * then compress together, lane j holding state words j, 8+j, 16+j and 24+j; a
+ * step is lane-local except one xor-shuffle. Still a stage boundary for the
+ * x-family fused kernel.
  *
  * Based on the 2 Christians, klaus_t, Tanguy Pruvot, tsiv and SP (2013-2016);
- * Provos Alexis 2016; optimised by sp 2018 (+20% on the GTX 1080 Ti).
- *
- * NOTE: the unused simd+next-stage FUSED compress variants (echo/whirlpool/
- * hamsi/fugue + the _final target-screen kernels) and their embedded device
- * machinery were removed (zero consumers repo-wide) — a suprminer-era
- * simd->next fusion nobody in this tree wired up.
+ * Provos Alexis 2016; optimised by sp 2018.
  */
 
 #include "miner.h"
@@ -26,67 +20,124 @@
 #define __CUDA_ARCH__ 500
 #endif
 
-#define TPB52_1 128
-#define TPB52_2 128
-
-static uint4 *d_temp4[MAX_GPUS];
 #include "cuda_simd512_func.cuh"
 
-/* d_temp4 is interleaved (element k of hash h at k * threads + h, written by expand), so one
- * thread per hash reads it coalesced. */
-#define TPB_C 256
-__global__ __launch_bounds__(TPB_C, 2)
-static void simd512_gpu_compress_64(uint32_t threads, uint32_t *g_hash,const uint4 *const __restrict__ g_fft4)
+#define SC_STEP(w, p, r1, r2, ga, gb, gc, gd, F) { \
+	const uint32_t R = ROTL32(ga, r1); \
+	gd += (w) + F(ga, gb, gc); \
+	gd = __shfl_xor_sync(gmask, R, p, 8) + ROTL32(gd, r2); \
+	ga = R; }
+
+#define SIMDF_TPB 128
+#define SIMDF_ROW 264 /* +8 words: the four hashes of a warp start on different banks */
+
+__global__ __launch_bounds__(SIMDF_TPB, 4)
+static void simd512_gpu_fused_64(uint32_t threads, uint32_t *g_hash)
 {
-	const uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
-	uint32_t IV[32];
-	if (thread < threads){
+	__shared__ uint32_t s_w[SIMDF_TPB / 8][SIMDF_ROW];
 
-		uint32_t *Hash = &g_hash[thread<<4];
-//		Compression1(Hash, thread, g_fft4, g_state);
-		uint32_t A[32];
+	const uint32_t hash = (blockDim.x * blockIdx.x + threadIdx.x) >> 3;
+	const uint32_t lane = threadIdx.x & 7;
+	uint32_t *const w = s_w[threadIdx.x >> 3];
+	const uint32_t gmask = 0xFFu << (threadIdx.x & 24);
 
-		*(uint2x4*)&IV[ 0] = *(uint2x4*)&c_IV_512[ 0];
-		*(uint2x4*)&IV[ 8] = *(uint2x4*)&c_IV_512[ 8];
-		*(uint2x4*)&IV[16] = *(uint2x4*)&c_IV_512[16];
-		*(uint2x4*)&IV[24] = *(uint2x4*)&c_IV_512[24];
+	if (hash < threads)
+	{
+		uint32_t *Hash = &g_hash[hash << 4];
+		const uint32_t data0 = __ldg(&Hash[lane]);
+		const uint32_t data1 = __ldg(&Hash[lane + 8]);
 
-		*(uint2x4*)&A[ 0] = __ldg4((uint2x4*)&Hash[ 0]);
-		*(uint2x4*)&A[ 8] = __ldg4((uint2x4*)&Hash[ 8]);
+		uint4 v[8];
+		simd512_expand_lane(data0, data1, v);
+		#pragma unroll
+		for (int k = 0; k < 8; k++)
+			*(uint4*)&w[(k * 8 + lane) * 4] = v[k];
+		__syncwarp(gmask);
 
-		#pragma unroll 16
-		for(uint32_t i=0;i<16;i++)
-			A[ i] = A[ i] ^ IV[ i];
+		const uint32_t iv0 = c_IV_512[lane], iv1 = c_IV_512[8 + lane], iv2 = c_IV_512[16 + lane], iv3 = c_IV_512[24 + lane];
+		uint32_t g0 = data0 ^ iv0, g1 = data1 ^ iv1, g2 = iv2, g3 = iv3;
 
-		#pragma unroll 16
-		for(uint32_t i=16;i<32;i++)
-			A[ i] = IV[ i];
+		SC_STEP(w[0 + lane], 1, 3, 23, g0, g1, g2, g3, IF);
+		SC_STEP(w[8 + lane], 6, 23, 17, g3, g0, g1, g2, IF);
+		SC_STEP(w[16 + lane], 2, 17, 27, g2, g3, g0, g1, IF);
+		SC_STEP(w[24 + lane], 3, 27, 3, g1, g2, g3, g0, IF);
+		SC_STEP(w[32 + lane], 5, 3, 23, g0, g1, g2, g3, MAJ);
+		SC_STEP(w[40 + lane], 7, 23, 17, g3, g0, g1, g2, MAJ);
+		SC_STEP(w[48 + lane], 4, 17, 27, g2, g3, g0, g1, MAJ);
+		SC_STEP(w[56 + lane], 1, 27, 3, g1, g2, g3, g0, MAJ);
+		SC_STEP(w[64 + lane], 6, 28, 19, g0, g1, g2, g3, IF);
+		SC_STEP(w[72 + lane], 2, 19, 22, g3, g0, g1, g2, IF);
+		SC_STEP(w[80 + lane], 3, 22, 7, g2, g3, g0, g1, IF);
+		SC_STEP(w[88 + lane], 5, 7, 28, g1, g2, g3, g0, IF);
+		SC_STEP(w[96 + lane], 7, 28, 19, g0, g1, g2, g3, MAJ);
+		SC_STEP(w[104 + lane], 4, 19, 22, g3, g0, g1, g2, MAJ);
+		SC_STEP(w[112 + lane], 1, 22, 7, g2, g3, g0, g1, MAJ);
+		SC_STEP(w[120 + lane], 6, 7, 28, g1, g2, g3, g0, MAJ);
+		SC_STEP(w[128 + lane], 2, 29, 9, g0, g1, g2, g3, IF);
+		SC_STEP(w[136 + lane], 3, 9, 15, g3, g0, g1, g2, IF);
+		SC_STEP(w[144 + lane], 5, 15, 5, g2, g3, g0, g1, IF);
+		SC_STEP(w[152 + lane], 7, 5, 29, g1, g2, g3, g0, IF);
+		SC_STEP(w[160 + lane], 4, 29, 9, g0, g1, g2, g3, MAJ);
+		SC_STEP(w[168 + lane], 1, 9, 15, g3, g0, g1, g2, MAJ);
+		SC_STEP(w[176 + lane], 6, 15, 5, g2, g3, g0, g1, MAJ);
+		SC_STEP(w[184 + lane], 2, 5, 29, g1, g2, g3, g0, MAJ);
+		SC_STEP(w[192 + lane], 3, 4, 13, g0, g1, g2, g3, IF);
+		SC_STEP(w[200 + lane], 5, 13, 10, g3, g0, g1, g2, IF);
+		SC_STEP(w[208 + lane], 7, 10, 25, g2, g3, g0, g1, IF);
+		SC_STEP(w[216 + lane], 4, 25, 4, g1, g2, g3, g0, IF);
+		SC_STEP(w[224 + lane], 1, 4, 13, g0, g1, g2, g3, MAJ);
+		SC_STEP(w[232 + lane], 6, 13, 10, g3, g0, g1, g2, MAJ);
+		SC_STEP(w[240 + lane], 2, 10, 25, g2, g3, g0, g1, MAJ);
+		SC_STEP(w[248 + lane], 3, 25, 4, g1, g2, g3, g0, MAJ);
 
-		Round8(A, thread, threads, g_fft4);
+		SC_STEP(iv0, 5, 4, 13, g0, g1, g2, g3, IF);
+		SC_STEP(iv1, 7, 13, 10, g3, g0, g1, g2, IF);
+		SC_STEP(iv2, 4, 10, 25, g2, g3, g0, g1, IF);
+		SC_STEP(iv3, 1, 25, 4, g1, g2, g3, g0, IF);
 
-		STEP8_IF(&IV[ 0],32, 4,13,&A[ 0],&A[ 8],&A[16],&A[24]);
-		STEP8_IF(&IV[ 8],33,13,10,&A[24],&A[ 0],&A[ 8],&A[16]);
-		STEP8_IF(&IV[16],34,10,25,&A[16],&A[24],&A[ 0],&A[ 8]);
-		STEP8_IF(&IV[24],35,25, 4,&A[ 8],&A[16],&A[24],&A[ 0]);
+		const uint32_t f0 = g0, f1 = g1, f2 = g2, f3 = g3;
+		if (lane == 0) g0 ^= 512;
 
-		#pragma unroll 32
-		for(uint32_t i=0;i<32;i++){
-			IV[ i] = A[ i];
-		}
+		SC_STEP(__ldg(&d_cw[0][0][0 + lane]), 1, 3, 23, g0, g1, g2, g3, IF);
+		SC_STEP(__ldg(&d_cw[0][0][8 + lane]), 6, 23, 17, g3, g0, g1, g2, IF);
+		SC_STEP(__ldg(&d_cw[0][0][16 + lane]), 2, 17, 27, g2, g3, g0, g1, IF);
+		SC_STEP(__ldg(&d_cw[0][0][24 + lane]), 3, 27, 3, g1, g2, g3, g0, IF);
+		SC_STEP(__ldg(&d_cw[0][0][32 + lane]), 5, 3, 23, g0, g1, g2, g3, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][40 + lane]), 7, 23, 17, g3, g0, g1, g2, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][48 + lane]), 4, 17, 27, g2, g3, g0, g1, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][56 + lane]), 1, 27, 3, g1, g2, g3, g0, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][64 + lane]), 6, 28, 19, g0, g1, g2, g3, IF);
+		SC_STEP(__ldg(&d_cw[0][0][72 + lane]), 2, 19, 22, g3, g0, g1, g2, IF);
+		SC_STEP(__ldg(&d_cw[0][0][80 + lane]), 3, 22, 7, g2, g3, g0, g1, IF);
+		SC_STEP(__ldg(&d_cw[0][0][88 + lane]), 5, 7, 28, g1, g2, g3, g0, IF);
+		SC_STEP(__ldg(&d_cw[0][0][96 + lane]), 7, 28, 19, g0, g1, g2, g3, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][104 + lane]), 4, 19, 22, g3, g0, g1, g2, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][112 + lane]), 1, 22, 7, g2, g3, g0, g1, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][120 + lane]), 6, 7, 28, g1, g2, g3, g0, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][128 + lane]), 2, 29, 9, g0, g1, g2, g3, IF);
+		SC_STEP(__ldg(&d_cw[0][0][136 + lane]), 3, 9, 15, g3, g0, g1, g2, IF);
+		SC_STEP(__ldg(&d_cw[0][0][144 + lane]), 5, 15, 5, g2, g3, g0, g1, IF);
+		SC_STEP(__ldg(&d_cw[0][0][152 + lane]), 7, 5, 29, g1, g2, g3, g0, IF);
+		SC_STEP(__ldg(&d_cw[0][0][160 + lane]), 4, 29, 9, g0, g1, g2, g3, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][168 + lane]), 1, 9, 15, g3, g0, g1, g2, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][176 + lane]), 6, 15, 5, g2, g3, g0, g1, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][184 + lane]), 2, 5, 29, g1, g2, g3, g0, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][192 + lane]), 3, 4, 13, g0, g1, g2, g3, IF);
+		SC_STEP(__ldg(&d_cw[0][0][200 + lane]), 5, 13, 10, g3, g0, g1, g2, IF);
+		SC_STEP(__ldg(&d_cw[0][0][208 + lane]), 7, 10, 25, g2, g3, g0, g1, IF);
+		SC_STEP(__ldg(&d_cw[0][0][216 + lane]), 4, 25, 4, g1, g2, g3, g0, IF);
+		SC_STEP(__ldg(&d_cw[0][0][224 + lane]), 1, 4, 13, g0, g1, g2, g3, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][232 + lane]), 6, 13, 10, g3, g0, g1, g2, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][240 + lane]), 2, 10, 25, g2, g3, g0, g1, MAJ);
+		SC_STEP(__ldg(&d_cw[0][0][248 + lane]), 3, 25, 4, g1, g2, g3, g0, MAJ);
 
-		A[ 0] ^= 512;
+		SC_STEP(f0, 5, 4, 13, g0, g1, g2, g3, IF);
+		SC_STEP(f1, 7, 13, 10, g3, g0, g1, g2, IF);
+		SC_STEP(f2, 4, 10, 25, g2, g3, g0, g1, IF);
+		SC_STEP(f3, 1, 25, 4, g1, g2, g3, g0, IF);
 
-		Round8_0_final(A, 3,23,17,27);
-		Round8_1_final(A,28,19,22, 7);
-		Round8_2_final(A,29, 9,15, 5);
-		Round8_3_final(A, 4,13,10,25);
-		STEP8_IF(&IV[ 0],32, 4,13, &A[ 0], &A[ 8], &A[16], &A[24]);
-		STEP8_IF(&IV[ 8],33,13,10, &A[24], &A[ 0], &A[ 8], &A[16]);
-		STEP8_IF(&IV[16],34,10,25, &A[16], &A[24], &A[ 0], &A[ 8]);
-		STEP8_IF(&IV[24],35,25, 4, &A[ 8], &A[16], &A[24], &A[ 0]);
-
-		*(uint2x4*)&Hash[ 0] = *(uint2x4*)&A[ 0];
-		*(uint2x4*)&Hash[ 8] = *(uint2x4*)&A[ 8];
+		Hash[lane] = g0;
+		Hash[lane + 8] = g1;
 	}
 }
 
@@ -95,33 +146,25 @@ bool simd512_device_selftest(int thr_id, uint32_t threads);
 __host__
 int simd512_cpu_init(int thr_id, uint32_t threads)
 {
-	cudaMalloc(&d_temp4[thr_id], 64*sizeof(uint4)*threads);
-
-	// after the scratch allocation: the launcher's expand pass writes d_temp4
 	simd512_device_selftest(thr_id, threads);
 	return 0;
 }
 
 __host__
-void simd512_cpu_free(int thr_id){
-	cudaFree(d_temp4[thr_id]);
+void simd512_cpu_free(int thr_id)
+{
 }
 
 __host__
 void simd512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *d_nonceVector, uint32_t *d_hash, int order)
 {
-	const uint32_t tpb = TPB52_1;
-	const dim3 grid1((8*threads + tpb - 1) / tpb);
-	const dim3 block1(tpb);
-
-
-	simd512_gpu_expand_64 <<<grid1, block1>>> (threads, d_hash, d_temp4[thr_id]);
-	simd512_gpu_compress_64 <<< dim3((threads + TPB_C - 1) / TPB_C), dim3(TPB_C) >>> (threads, d_hash, d_temp4[thr_id]);
+	const dim3 grid((8 * threads + SIMDF_TPB - 1) / SIMDF_TPB);
+	simd512_gpu_fused_64 <<<grid, SIMDF_TPB>>> (threads, d_hash);
 }
 
 /* ------------------------------------------------------------------ self-test
  * Init-time KAT (cuda/stage_selftest.cuh) of the launcher vs sph_simd512.
- * Needs d_temp4 for >= n slots, hence the call from init. Fail-closed. */
+ * Fail-closed. */
 extern "C" {
 #include "sph/sph_simd.h"
 }

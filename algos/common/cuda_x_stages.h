@@ -180,6 +180,8 @@ void skein512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, uin
  * x16/x21s/ghostrider/timetravel migrate to the bare names. */
 void luffa512_setBlock_80(void *pdata);
 void luffa512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_hash, int order);
+void luffa512_cpu_hash_80_final(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_resNonce, const uint64_t target);
+bool luffa512_80_device_selftest(int thr_id);
 void qubit_luffa512_cpu_init(int thr_id, uint32_t threads);
 void qubit_luffa512_cpu_setBlock_80(void *pdata);
 void qubit_luffa512_cpu_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *d_hash, int order);

@@ -16,6 +16,7 @@ enum {
 	XF_SKEIN_JH_KECCAK_LUFFA_CUBE_SHAVITE, /* x11 x13 x14 x15 x17 hsr */
 	XF_JH_KECCAK_SKEIN_LUFFA_CUBE_SHAVITE, /* c11 */
 	XF_LUFFA_CUBE_SHAVITE,                 /* sib */
+	XF_CUBE_SHAVITE,                       /* qubit */
 	XF_FIXED_COUNT
 };
 
