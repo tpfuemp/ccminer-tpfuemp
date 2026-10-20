@@ -93,6 +93,13 @@ Tables, per GPU:
 `bc3hash.cu` is built with a 255-register cap in both build systems; the
 project default is 128. The default batch is a whole number of GPU waves (for
 example 71 680 nonces on an RTX 3060, 64 512 on a GTX 1080 Ti; `-i` to tune).
+The host waits for a batch with blocking sync instead of spinning a CPU core
+per GPU (CPU 100% -> ~2% of a core on the 3060, same rate); `--cuda-schedule`
+overrides it.
+
+On Windows the curve tables are also charged to system commit (about 3.5 GB
+per GPU with 20-bit windows), so a multi-GPU rig needs a pagefile of at least
+4 GB per GPU, or `BC3HASH_EC_WINDOW=16`.
 
 The kernel reports up to 7 candidates per batch (plus the two lowest and the
 count). The host re-hashes each with the oracle before submitting, so a kernel

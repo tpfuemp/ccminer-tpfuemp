@@ -425,9 +425,25 @@ static bool bc3_device_selftest(int thr_id)
 
 /* ------------------------------------------------------------------ init */
 
+/* A batch runs about a second: wait for it asleep, not spinning a CPU core per
+ * GPU (that starves the host on rigs with few cores). --cuda-schedule wins. */
+static bool sched_set[MAX_GPUS];
+static void bc3_blocking_sync(int thr_id)
+{
+	unsigned flags = 0;
+	cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
+	cudaGetLastError();
+	if (cudaGetDeviceFlags(&flags) != cudaSuccess ||
+	    (flags & cudaDeviceScheduleMask) != cudaDeviceScheduleBlockingSync)
+		cuda_reset_device(thr_id, NULL); /* context already active: a reset applies it */
+	sched_set[thr_id] = true;
+	gpulog(LOG_DEBUG, thr_id, "bc3hash: blocking sync (--cuda-schedule overrides)");
+}
+
 static void bc3hash_init(int thr_id, uint32_t throughput)
 {
 	cudaSetDevice(device_map[thr_id]);
+	if (opt_cudaschedule < 0) bc3_blocking_sync(thr_id);
 
 	for (int w = 0; w < 3; w++) {
 		size_t bytes;
@@ -715,5 +731,10 @@ extern "C" void free_bc3hash(int thr_id)
 	cudaFree(d_state[thr_id]);
 	cudaFree(d_front[thr_id]);
 	cudaFree(d_res[thr_id]);
+	if (sched_set[thr_id]) {
+		cudaSetDeviceFlags(cudaDeviceScheduleAuto); /* the next algo gets the default back */
+		cudaGetLastError();
+		sched_set[thr_id] = false;
+	}
 	init_done[thr_id] = false;
 }
