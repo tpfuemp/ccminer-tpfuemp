@@ -30,9 +30,24 @@
 
 #include "algos/flex/cuda_flex_pipeline.cuh"
 #include "algos/flex/cuda_flex_filter.cuh"
+#include "algos/flex/flex_kat.h"
+#include "cuda/selftest_gate.cuh"
 
 static flex_ctx ctx[MAX_GPUS];
 static bool init_done[MAX_GPUS] = { 0 };
+
+/* FLEX_GATE_FAULT=<leg> corrupts one GPU digest on the host side, so each leg
+ * of the startup gate and the -D differential can be shown to fire:
+ * 1 = KAT, 2 = negative control, 3 = filtered chain, 4 = -D differential. */
+static int flex_gate_fault(void)
+{
+	static int v = -1;
+	if (v < 0) {
+		const char *ev = getenv("FLEX_GATE_FAULT");
+		v = ev ? atoi(ev) : 0;
+	}
+	return v;
+}
 
 // ----------------------------------------------------------------------------
 // Startup guard 1 -- per-kernel self-consistency at full throughput.
@@ -377,10 +392,188 @@ static int flex_guard_width(int thr_id, uint32_t wide)
 }
 
 // ----------------------------------------------------------------------------
+// Startup gate, fail-closed, one CN block per leg: kat (pool-accepted digest),
+// neg (nonce + 1 must differ), filtered (scanhash's path vs flex_hash()).
+// A CUDA failure goes through selftest_cuda_fault() and only warns.
+// ----------------------------------------------------------------------------
+static bool flex_gate_kat(int thr_id, uint8_t *h_gpu, bool *neg_ok)
+{
+	flex_ctx *c = &ctx[thr_id];
+	const uint32_t T = FLEX_CN_TPB;
+	uint32_t ed[20], pd[20];
+
+	memcpy(ed, flex_kat_header, 80);
+	for (int k = 0; k < 20; k++) pd[k] = swab32(ed[k]);
+
+	c->threads = T;
+	flex_pipeline_run(c, thr_id, ed, pd, pd[19], -1, NULL, 0);
+	if (cudaMemcpy(h_gpu, c->d_hash, (size_t)64 * T, cudaMemcpyDeviceToHost) != cudaSuccess
+	    || c->lanes < 2)
+		return selftest_cuda_fault();
+
+	if (flex_gate_fault() == 1) h_gpu[0] ^= 1;
+	if (flex_gate_fault() == 2) memcpy(h_gpu + 64, flex_kat_expected, 32);
+
+	*neg_ok = memcmp(h_gpu + 64, flex_kat_expected, 32) != 0;
+	return memcmp(h_gpu, flex_kat_expected, 32) == 0;
+}
+
+static bool flex_gate_filtered(int thr_id, uint8_t *h_gpu, int *checked)
+{
+	flex_ctx *c = &ctx[thr_id];
+	const uint32_t T = FLEX_CN_TPB;
+	uint32_t h_n[FLEX_CN_TPB];
+	uint32_t lcg = 0x6a09e667u;
+
+	*checked = 0;
+	c->threads = T;
+	/* a few headers, in case one does not fill a block */
+	for (int it = 0; it < 4; it++) {
+		uint32_t pd[20], ed[20];
+		for (int k = 0; k < 20; k++) { lcg = lcg * 1664525u + 1013904223u; pd[k] = lcg; }
+		for (int k = 0; k < 20; k++) be32enc(&ed[k], pd[k]);
+
+		const uint32_t span = flex_filter_span(T, FLEX_FILTER_ACCEPT_SEED);
+		uint32_t yield = 0;
+		c->span = span;
+		cudaMemset(c->d_count, 0, sizeof(uint32_t));
+		flex_seed_setBlock_80(ed);
+		flex_filter_cpu(span, pd[19], T, c->d_nonces, c->d_count);
+		if (cudaMemcpy(&yield, c->d_count, sizeof(uint32_t), cudaMemcpyDeviceToHost) != cudaSuccess)
+			return selftest_cuda_fault();
+		if (yield > T) yield = T;
+		if (yield < T) continue;
+		if (cudaMemcpy(h_n, c->d_nonces, sizeof(uint32_t) * T, cudaMemcpyDeviceToHost) != cudaSuccess)
+			return selftest_cuda_fault();
+
+		flex_pipeline_run(c, thr_id, ed, pd, pd[19], -1, c->d_nonces, T);
+		const uint32_t L = c->lanes;
+		if (L == 0 || cudaMemcpy(h_gpu, c->d_hash, (size_t)64 * L, cudaMemcpyDeviceToHost) != cudaSuccess)
+			return selftest_cuda_fault();
+		if (flex_gate_fault() == 3) h_gpu[(size_t)(L - 1) * 64] ^= 1;
+
+		/* first, last and evenly between */
+		const uint32_t probes = (L < 8) ? L : 8;
+		for (uint32_t i = 0; i < probes; i++) {
+			const uint32_t t = (probes == 1) ? 0 : (i * (L - 1)) / (probes - 1);
+			uint32_t lane[20];
+			uint32_t _ALIGN(64) ref[8];
+			memcpy(lane, ed, 80);
+			be32enc(&lane[19], h_n[t]);
+			flex_hash(ref, lane);
+			(*checked)++;
+			if (memcmp(h_gpu + (size_t)t * 64, ref, 32) != 0) {
+				gpulog(LOG_ERR, thr_id, "flex: gate FILTERED chain DIFF at lane %u of %u, nonce %08x",
+				       t, L, h_n[t]);
+				return false;
+			}
+		}
+		return true;
+	}
+	gpulog(LOG_ERR, thr_id, "flex: gate filtered leg VACUOUS -- the filter never filled a block");
+	return false;
+}
+
+static bool flex_gate(int thr_id)
+{
+	flex_ctx *c = &ctx[thr_id];
+	const uint32_t real = c->threads;
+	uint8_t *h_gpu = (uint8_t*)malloc((size_t)64 * FLEX_CN_TPB);
+	bool neg_ok = false;
+	int checked = 0;
+
+	const bool kat_ok = flex_gate_kat(thr_id, h_gpu, &neg_ok);
+	const bool fil_ok = kat_ok && flex_gate_filtered(thr_id, h_gpu, &checked);
+
+	c->threads = real;
+	free(h_gpu);
+
+	if (!kat_ok)
+		gpulog(LOG_ERR, thr_id, "flex: GPU KAT FAILED -- the pool-accepted header does not hash to its digest");
+	else if (!neg_ok)
+		gpulog(LOG_ERR, thr_id, "flex: gate negative FAILED -- nonce + 1 gave the KAT digest");
+	const bool ok = kat_ok && neg_ok && fil_ok;
+	if (ok)
+		gpulog(LOG_INFO, thr_id, "flex: GPU self-test OK (KAT, negative, filtered %d lanes)", checked);
+	return ok;
+}
+
+// ----------------------------------------------------------------------------
+// -D differential: once per job, re-hash FLEX_DIFF_LANES (default 16) of the
+// batch's lanes on the CPU, spread first to last. Catches wrong digests that
+// never reach the screen.
+// ----------------------------------------------------------------------------
+static void flex_debug_differential(int thr_id, const uint32_t *pdata, const uint32_t *endiandata,
+                                    uint32_t hashed, int use_filter, uint32_t scan_base)
+{
+	static uint32_t last_sig[MAX_GPUS];
+	static int nlanes = -1;
+	if (nlanes < 0) {
+		const char *ev = getenv("FLEX_DIFF_LANES");
+		nlanes = ev ? atoi(ev) : 16;
+		if (nlanes < 1) nlanes = 1;
+	}
+
+	/* FNV-1a over the header minus the nonce: once per job, not per batch. */
+	uint32_t sig = 2166136261u;
+	for (int k = 0; k < 19; k++) { sig ^= pdata[k]; sig *= 16777619u; }
+	if (sig == last_sig[thr_id] || hashed == 0)
+		return;
+	last_sig[thr_id] = sig;
+
+	flex_ctx *c = &ctx[thr_id];
+	uint8_t *h_gpu = (uint8_t*)malloc((size_t)64 * hashed);
+	if (cudaMemcpy(h_gpu, c->d_hash, (size_t)64 * hashed, cudaMemcpyDeviceToHost) != cudaSuccess) {
+		gpulog(LOG_WARNING, thr_id, "flex: -D differential skipped, digest copy failed");
+		free(h_gpu);
+		return;
+	}
+
+	const uint32_t probes = ((uint32_t)nlanes < hashed) ? (uint32_t)nlanes : hashed;
+	if (flex_gate_fault() == 4) h_gpu[(size_t)(hashed - 1) * 64] ^= 1;
+
+	uint32_t bad = 0;
+	for (uint32_t i = 0; i < probes; i++) {
+		const uint32_t t = (probes == 1) ? 0 : (uint32_t)(((uint64_t)i * (hashed - 1)) / (probes - 1));
+		const uint32_t n = use_filter ? c->h_nonces[t] : scan_base + t;
+		uint32_t lane[20];
+		uint32_t _ALIGN(64) ref[8];
+		memcpy(lane, endiandata, 76);
+		be32enc(&lane[19], n);
+		flex_hash(ref, lane);
+		if (memcmp(h_gpu + (size_t)t * 64, ref, 32) != 0) {
+			if (!bad) {
+				uint8_t co[FLEX_CORE_CHAIN_LEN], cv[FLEX_CN_ALGO_COUNT];
+				flex_derive_order(lane, co, cv, NULL);
+				gpulog(LOG_ERR, thr_id,
+				       "flex: -D differential MISMATCH lane %u of %u, nonce %08x, cn %d,%d,%d",
+				       t, hashed, n, cv[0], cv[1], cv[2]);
+			}
+			bad++;
+		}
+	}
+	free(h_gpu);
+	if (bad)
+		gpulog(LOG_ERR, thr_id, "flex: -D differential job %08x: %u of %u lanes WRONG",
+		       sig, bad, probes);
+	else
+		gpulog(LOG_DEBUG, thr_id, "flex: -D differential job %08x: %u/%u lanes GPU==CPU",
+		       sig, probes, probes);
+}
+
+// ----------------------------------------------------------------------------
 extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done)
 {
 	uint32_t *pdata = work->data;
 	uint32_t *ptarget = work->target;
+
+	/* --benchmark resets the nonce every call; carry it so batches stay fresh */
+	static uint32_t bench_cursor[MAX_GPUS];
+	if (opt_benchmark) {
+		pdata[19] = bench_cursor[thr_id];
+		max_nonce = UINT32_MAX;
+	}
+
 	const uint32_t first_nonce = pdata[19];
 	const int dev_id = device_map[thr_id];
 	uint32_t _ALIGN(64) endiandata[20];
@@ -399,9 +592,12 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 			cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
 		}
 
+		/* feeds the fail-closed gate below */
+		bool cpu_ok;
 		{
 			char det[FLEX_SELFTEST_DETAIL];
-			if (flex_self_test(det, sizeof det))
+			cpu_ok = flex_self_test(det, sizeof det);
+			if (cpu_ok)
 				gpulog(LOG_INFO, thr_id, "flex: CPU self-test OK (%s)", det);
 			else
 				gpulog(LOG_ERR, thr_id, "flex: CPU SELF-TEST FAILED -- %s", det);
@@ -452,22 +648,28 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 		}
 		cuda_check_cpu_init(thr_id, throughput);
 
-		/* Startup does the CHEAP checks only; an API-driven algo switch pays
-		 * startup on every change. Consensus is unaffected -- every candidate is
-		 * re-hashed on the host before submit, so a broken card or build shows
-		 * up as "does not validate" within seconds of mining. Set FLEX_GUARD=1
-		 * to run the full set. */
-		if (!flex_guard_races(thr_id, throughput))
+		/* Cheap checks by default (an API algo switch pays startup each time);
+		 * FLEX_GUARD=1 adds the full set. All fail closed. */
+		const int races = flex_guard_races(thr_id, throughput);
+		if (!races)
 			gpulog(LOG_INFO, thr_id, "flex: core kernels race-free");
+		const bool gate_ok = flex_gate(thr_id);
+		bool wrong = !cpu_ok || races;
 
 		if (getenv("FLEX_GUARD")) {
 			gpulog(LOG_INFO, thr_id, "flex: running full startup guards...");
-			if (!flex_guard_chain(thr_id, throughput))
+			const int chain = flex_guard_chain(thr_id, throughput);
+			if (!chain)
 				gpulog(LOG_INFO, thr_id, "flex: GPU==CPU on the full chain");
-			flex_guard_filtered(thr_id, throughput);
-			if (getenv("FLEX_GUARD_WIDTH"))
-				flex_guard_width(thr_id, throughput);
+			const int filtered = flex_guard_filtered(thr_id, throughput);
+			const int width = getenv("FLEX_GUARD_WIDTH") ? flex_guard_width(thr_id, throughput) : 0;
+			wrong = wrong || chain || filtered || width;
 		}
+		/* A CUDA fault in the gate must not excuse a wrong answer found elsewhere. */
+		if (wrong)
+			s_selftest_cuda_fault = false;
+		selftest_gate(thr_id, "flex", gate_ok && !wrong);
+		flex_prof_reset();
 
 		init_done[thr_id] = true;
 	}
@@ -545,6 +747,7 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 		/* Nothing worth launching for. Still consume the span. */
 		pdata[19] += span;
 		if (pdata[19] > max_nonce || pdata[19] < first_nonce) pdata[19] = max_nonce;
+		bench_cursor[thr_id] = pdata[19];
 		*hashes_done = 0;
 		return 0;
 	}
@@ -576,6 +779,9 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 	 * ACTUALLY hashed. Screening  here would read past the end of
 	 * the batch and report nonces that were never computed. */
 	const uint32_t hashed = c->lanes;
+
+	if (opt_debug)
+		flex_debug_differential(thr_id, pdata, endiandata, hashed, flex_use_filter, scan_base);
 
 	/* The lanes are SCATTERED in nonce space now, so the shared screen --
 	 * which reports startNounce + thread -- must be given a base of 0. What it
@@ -661,6 +867,13 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 			if (resume > max_nonce || resume < first_nonce)
 				resume = max_nonce;
 			pdata[19] = resume;
+			bench_cursor[thr_id] = resume;
+
+			/* the miner loop does not log benchmark finds */
+			if (opt_benchmark && opt_debug)
+				for (int k = 0; k < work->valid_nonces; k++)
+					gpulog(LOG_DEBUG, thr_id, "flex: benchmark candidate %08x CPU-verified",
+					       work->nonces[k]);
 
 			/* CHAINED lanes, not the span. Counting the ~31x scanned nonces
 			 * would inflate the displayed rate by that factor -- the rinhash
@@ -678,6 +891,7 @@ extern "C" int scanhash_flex(int thr_id, struct work* work, uint32_t max_nonce, 
 	pdata[19] = flex_use_filter ? (scan_base + span) : (scan_base + hashed);
 	if (pdata[19] > max_nonce || pdata[19] < first_nonce)
 		pdata[19] = max_nonce;
+	bench_cursor[thr_id] = pdata[19];
 	*hashes_done = hashed;      /* chained, not scanned -- see above */
 	return 0;
 }

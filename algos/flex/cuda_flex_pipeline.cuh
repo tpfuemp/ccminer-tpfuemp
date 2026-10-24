@@ -102,6 +102,16 @@ static inline void flex_prof_group(int v, uint32_t lanes)
 	flex_prof_t = now;
 }
 
+/* also called after the startup checks, which book phases too */
+static inline void flex_prof_reset()
+{
+	memset(flex_prof_ms, 0, sizeof(flex_prof_ms));
+	memset(flex_prof_v_ms, 0, sizeof(flex_prof_v_ms));
+	memset(flex_prof_v_groups, 0, sizeof(flex_prof_v_groups));
+	memset(flex_prof_v_lanes, 0, sizeof(flex_prof_v_lanes));
+	flex_prof_batches = 0;
+}
+
 /* End a batch; every 20 batches log the mean per phase and reset. */
 static inline void flex_prof_end(int thr_id, uint32_t lanes)
 {
@@ -127,11 +137,7 @@ static inline void flex_prof_end(int thr_id, uint32_t lanes)
 		              (double)flex_prof_v_groups[v] / flex_prof_batches);
 	}
 	gpulog(LOG_INFO, thr_id, "flex profile, per CN group (ms/group, lanes/group, groups/batch):%s", buf);
-	memset(flex_prof_ms, 0, sizeof(flex_prof_ms));
-	memset(flex_prof_v_ms, 0, sizeof(flex_prof_v_ms));
-	memset(flex_prof_v_groups, 0, sizeof(flex_prof_v_groups));
-	memset(flex_prof_v_lanes, 0, sizeof(flex_prof_v_lanes));
-	flex_prof_batches = 0;
+	flex_prof_reset();
 }
 
 /* CryptoNight-v1 GPU path. prepare and the core are shared with ghostrider

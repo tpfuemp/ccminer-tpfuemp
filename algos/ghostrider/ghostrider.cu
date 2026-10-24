@@ -354,7 +354,7 @@ static const uint32_t gr_cn_units[6] = { 2u, 2u, 4u, 4u, 1u, 1u };
  * and is discarded whole. The budget bounds that exposure by holding batch
  * duration roughly constant across triples. GR_WORK_BUDGET overrides it;
  * -i overrides everything. */
-#define GR_WORK_BUDGET_DEFAULT 24576u
+#define GR_WORK_BUDGET_DEFAULT 16384u
 
 // Scratchpad budget (bytes) and the thread count the per-thread buffers were
 // sized for, established once at init.
@@ -528,7 +528,7 @@ static void gr_bench_account(int thr_id, uint32_t hashes, double secs)
 // cuda_checkhash_64 does, so this audits the screen's logic, not the layout.
 //
 // GR_VERIFY=1 audits every batch; GR_VERIFY=2 also corrupts one host-side digest
-// to force a miss, so the gate itself can be shown to fire.
+// to force a miss, so the gate itself can be shown to fire. 3/4: see below.
 // ----------------------------------------------------------------------------
 static uint32_t *gr_audit_buf[MAX_GPUS] = { 0 };
 static uint32_t  gr_audit_cap[MAX_GPUS] = { 0 };
@@ -554,7 +554,7 @@ static void gr_screen_audit(int thr_id, uint32_t throughput, uint32_t start_nonc
 	uint32_t *hb = gr_audit_buf[thr_id];
 	cudaMemcpy(hb, dh, (size_t)throughput * 64, cudaMemcpyDeviceToHost);
 
-	if (mode >= 2) hb[7] = 0; // negative control: lane 0 becomes unmissable
+	if (mode == 2) hb[7] = 0; // negative control: lane 0 becomes unmissable
 
 	uint32_t hostcnt = 0, hostfirst = UINT32_MAX;
 	bool sawreported = (reported == UINT32_MAX);
@@ -569,7 +569,7 @@ static void gr_screen_audit(int thr_id, uint32_t throughput, uint32_t start_nonc
 	// Make the screen state its own count over the same range.
 	cuda_check_hash_suppl(thr_id, throughput, start_nonce, dh, 1);
 	const uint32_t gpucnt = cuda_check_hash_count(thr_id);
-	const char *ctl = (mode >= 2) ? "  [negative control armed - a MISS here is EXPECTED]" : "";
+	const char *ctl = (mode == 2) ? "  [negative control armed - a MISS here is EXPECTED]" : "";
 
 	if (gpucnt != hostcnt)
 		gpulog(LOG_ERR, thr_id, "gr screen/host MISS: screen counted %u, host counted %u over [%08x,+%u) first=%08x%s",
@@ -580,10 +580,71 @@ static void gr_screen_audit(int thr_id, uint32_t throughput, uint32_t start_nonc
 		gpulog(LOG_DEBUG, thr_id, "gr screen/host ok: %u candidates over [%08x,+%u)", hostcnt, start_nonce, throughput);
 }
 
+// GR_VERIFY=3: once per header, re-hash GR_VERIFY_LANES (default 64) of the
+// copied-back digests on the CPU: lanes 0, 1, 127, 128, the last, then random.
+// GR_VERIFY=4 flips one sampled digest first, which must be reported.
+static void gr_hash_audit(int thr_id, uint32_t throughput, uint32_t start_nonce,
+	const uint32_t *endiandata, int mode)
+{
+	static uint32_t last_sig[MAX_GPUS];
+	uint32_t sig = 2166136261u;
+	for (int i = 0; i < 19; i++) sig = (sig ^ endiandata[i]) * 16777619u;
+	if (sig == last_sig[thr_id] || !gr_audit_buf[thr_id]) return;
+	last_sig[thr_id] = sig;
+
+	uint32_t want = 64;
+	const char *ev = getenv("GR_VERIFY_LANES");
+	if (ev && atoi(ev) > 0) want = (uint32_t) atoi(ev);
+	if (want > throughput) want = throughput;
+
+	uint32_t *hb = gr_audit_buf[thr_id];
+	uint32_t lanes[1024];
+	uint32_t n = 0;
+	const uint32_t fixed[5] = { 0, 1, 127, 128, throughput - 1 };
+	for (int i = 0; i < 5 && n < want; i++)
+		if (fixed[i] < throughput) lanes[n++] = fixed[i];
+	uint32_t x = start_nonce ^ sig;
+	while (n < want && n < 1024) {
+		x = x * 1664525u + 1013904223u;
+		lanes[n++] = x % throughput;
+	}
+
+	const uint32_t flip = (mode >= 4 && n > 2) ? lanes[2] : UINT32_MAX;
+	if (flip != UINT32_MAX) hb[flip * 16 + 3] ^= 0x10u;
+
+	uint32_t _ALIGN(64) ed[20], chash[8];
+	memcpy(ed, endiandata, 76);
+	uint32_t bad = 0, firstbad = UINT32_MAX;
+	for (uint32_t i = 0; i < n; i++) {
+		const uint32_t t = lanes[i];
+		be32enc(&ed[19], start_nonce + t);
+		ghostrider_hash(chash, ed);
+		if (memcmp(&hb[t * 16], chash, 32)) {
+			if (!bad) firstbad = t;
+			bad++;
+		}
+	}
+	const char *ctl = (flip != UINT32_MAX) ? "  [negative control armed - lane flipped]" : "";
+	if (bad)
+		gpulog(LOG_ERR, thr_id, "gr GPU != CPU on %u of %u lanes over [%08x,+%u), first lane %u (nonce %08x)%s",
+			bad, n, start_nonce, throughput, firstbad, start_nonce + firstbad, ctl);
+	else
+		gpulog(LOG_INFO, thr_id, "gr digest differential ok: %u of %u lanes match the CPU over [%08x,+%u), tail lane %u",
+			n, n, start_nonce, throughput, throughput - 1);
+}
+
 extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done)
 {
 	uint32_t* pdata = work->data;
 	uint32_t* ptarget = work->target;
+
+	/* --benchmark resets the nonce every call; carry it so batches stay fresh */
+	static uint32_t bench_cursor[MAX_GPUS];
+	if (opt_benchmark) {
+		pdata[19] = bench_cursor[thr_id];
+		max_nonce = UINT32_MAX;
+	}
+
 	const uint32_t first_nonce = pdata[19];
 	const int dev_id = device_map[thr_id];
 	uint32_t _ALIGN(64) endiandata[20];
@@ -934,6 +995,8 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 	}
 	if (gr_verify)
 		gr_screen_audit(thr_id, throughput, pdata[19], dh, ptarget, work->nonces[0], gr_verify);
+	if (gr_verify >= 3)
+		gr_hash_audit(thr_id, throughput, pdata[19], endiandata, gr_verify);
 
 	if (work->nonces[0] != UINT32_MAX) {
 		uint32_t _ALIGN(64) vhash[8];
@@ -976,6 +1039,12 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 			if (resume > max_nonce || resume < first_nonce)
 				resume = max_nonce;
 			pdata[19] = resume;
+			bench_cursor[thr_id] = resume;
+
+			/* the miner loop does not log benchmark finds */
+			if (opt_benchmark && opt_debug)
+				for (int k = 0; k < work->valid_nonces; k++)
+					gpulog(LOG_DEBUG, thr_id, "benchmark candidate %08x CPU-verified", work->nonces[k]);
 
 			*hashes_done = pdata[19] - first_nonce;
 			return work->valid_nonces;
@@ -989,6 +1058,7 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 	pdata[19] += throughput;
 	if (pdata[19] > max_nonce || pdata[19] < first_nonce)
 		pdata[19] = max_nonce;
+	bench_cursor[thr_id] = pdata[19];
 	*hashes_done = pdata[19] - first_nonce;
 	return 0;
 }
