@@ -1,5 +1,5 @@
 /*
- * curvehash (CurvehashCoin) — GPU scanhash.
+ * curvehash (CurvehashCoin) - GPU scanhash.
  *
  * One thread per nonce runs the full curvehash (device secp256k1 fixed-base
  * k*G stack + SHA-256, see cuda/curvehash_device.cuh) and screens hash[7]
@@ -8,7 +8,7 @@
  * can only cause a local reject, never a bad share.
  *
  * The fixed-base G-table is built on the host (libsecp256k1) once per device at
- * init and uploaded. EC is compute-bound → expect a low (kH/s-class) rate.
+ * init and uploaded. EC is compute-bound: expect a low (kH/s-class) rate.
  */
 
 #include <miner.h>
@@ -21,6 +21,7 @@
 #define CURVE_GTABLE_BYTES ((size_t)16 * 65536 * 64)
 
 static bool      init_done[MAX_GPUS] = { 0 };
+static uint32_t  curve_tpb[MAX_GPUS];
 static uint8_t  *d_gtable[MAX_GPUS];
 static uint8_t  *d_header[MAX_GPUS];
 static uint32_t *d_resNonce[MAX_GPUS];
@@ -32,10 +33,23 @@ extern "C" int  curvehash_host_reverify(int thr_id, const uint32_t *pdata, uint3
                                         const uint32_t *ptarget, uint32_t *hash);
 extern "C" void curvehash_host_free(int thr_id);
 
-/* 128 regs, 512 threads/SM, ~33% occupancy on sm_86. Measured optimal against
- * 384/448/640: occupancy pays up to ~512 threads/SM and then saturates, and the
- * 32 B spill it costs is cheaper than the residency any wider shape gives up. */
-#define CURVE_TPB 512
+/* Hash path and launch shape per arch: the word-domain chain at (320,2) on sm_61
+ * and at (128,4) on sm_80+, the byte path at (512,1) on sm_70/75. The host reads
+ * the block size back from the loaded kernel (curve_tpb), so a card running
+ * another arch's PTX still launches the shape it was compiled for. */
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700 && !defined(CURVEHASH_FIELD_10X26)
+#define CURVE_WORDS 1
+#define CURVE_TPB   320
+#define CURVE_MINB  2
+#elif defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800 && !defined(CURVEHASH_FIELD_10X26)
+#define CURVE_WORDS 1
+#define CURVE_TPB   128
+#define CURVE_MINB  4
+#else
+#define CURVE_WORDS 0
+#define CURVE_TPB   512
+#define CURVE_MINB  1
+#endif
 
 /* Shared by the scan kernel and the differential so the two cannot drift.
  * Inlining it leaves the scan kernel's SASS unchanged. */
@@ -54,7 +68,7 @@ __device__ __forceinline__ bool curvehash_nonce_digest(uint8_t h[32], uint32_t n
     return curvehash_full(h, hdr, gtable);
 }
 
-__global__ void __launch_bounds__(CURVE_TPB, 1)
+__global__ void __launch_bounds__(CURVE_TPB, CURVE_MINB)
 curvehash_scan_kernel(uint32_t threads, uint32_t startNonce,
     const uint8_t * __restrict__ header76, const uint8_t * __restrict__ gtable,
     uint32_t target7, uint32_t *resNonce)
@@ -63,12 +77,18 @@ curvehash_scan_kernel(uint32_t threads, uint32_t startNonce,
     if (idx >= threads) return;
     uint32_t nonce = startNonce + idx;
 
+    /* host compares hash[7] (uint32 at byte 28, little-endian read) <= target7 */
+#if CURVE_WORDS
+    uint32_t S[8];
+    if (!curvehash_full_w(S, header76, nonce, gtable)) return; /* invalid seckey: skip */
+    const uint32_t w7 = __byte_perm(S[7], 0, 0x0123);
+#else
     uint8_t h[32];
     if (!curvehash_nonce_digest(h, nonce, header76, gtable)) return; /* invalid seckey: skip */
 
-    /* host compares hash[7] (uint32 at byte 28, little-endian read) <= target7 */
     uint32_t w7 = ((uint32_t)h[31] << 24) | ((uint32_t)h[30] << 16) |
                   ((uint32_t)h[29] << 8)  | (uint32_t)h[28];
+#endif
     if (w7 <= target7) atomicMin(resNonce, nonce);
 }
 
@@ -87,7 +107,7 @@ curvehash_scan_kernel(uint32_t threads, uint32_t startNonce,
  */
 #define CURVE_DIFF_ACC 16
 
-__global__ void __launch_bounds__(CURVE_TPB, 1)
+__global__ void __launch_bounds__(CURVE_TPB, CURVE_MINB)
 curvehash_diff_kernel(uint32_t threads, uint32_t startNonce,
     const uint8_t * __restrict__ header76, const uint8_t * __restrict__ gtable,
     uint32_t *acc, uint32_t fault)
@@ -102,14 +122,23 @@ curvehash_diff_kernel(uint32_t threads, uint32_t startNonce,
     if (fault == 2 && idx == 3) nonce = startNonce + 4;
     if (fault == 2 && idx == 4) nonce = startNonce + 3;
 
+#if CURVE_WORDS
+    uint32_t S[8];
+    if (!curvehash_full_w(S, header76, nonce, gtable)) return;
+#else
     uint8_t h[32];
     if (!curvehash_nonce_digest(h, nonce, header76, gtable)) return;
+#endif
 
     const uint32_t w = 2u * (startNonce + idx) + 1u;
     #pragma unroll
     for (int i = 0; i < 8; i++) {
+#if CURVE_WORDS
+        const uint32_t d = __byte_perm(S[i], 0, 0x0123);
+#else
         uint32_t d = ((uint32_t)h[4*i+3] << 24) | ((uint32_t)h[4*i+2] << 16) |
                      ((uint32_t)h[4*i+1] << 8)  | (uint32_t)h[4*i];
+#endif
         atomicXor(&acc[i],     d);
         atomicXor(&acc[8 + i], d * w);
     }
@@ -122,7 +151,22 @@ __global__ void curvehash_selftest_kernel(const uint8_t *gtable, const uint8_t *
 {
     int t = blockIdx.x * blockDim.x + threadIdx.x;
     if (t >= n) return;
+#if CURVE_WORDS
+    /* same path as the scan kernel */
+    const uint8_t *h = hdrs + t * 80;
+    const uint32_t nonce_be = ((uint32_t)h[76] << 24) | ((uint32_t)h[77] << 16) |
+                              ((uint32_t)h[78] << 8) | h[79];
+    uint32_t S[8];
+    curvehash_full_w(S, h, nonce_be, gtable);
+    for (int i = 0; i < 8; i++) {
+        out[t * 32 + 4 * i]     = (uint8_t)(S[i] >> 24);
+        out[t * 32 + 4 * i + 1] = (uint8_t)(S[i] >> 16);
+        out[t * 32 + 4 * i + 2] = (uint8_t)(S[i] >> 8);
+        out[t * 32 + 4 * i + 3] = (uint8_t)S[i];
+    }
+#else
     curvehash_full(out + t * 32, hdrs + t * 80, gtable);
+#endif
 }
 
 /*
@@ -237,7 +281,7 @@ static bool curvehash_differential(int thr_id, const uint32_t *pdata, uint32_t f
     const uint32_t start = pdata[19] + CURVE_DIFF_OFF;
     uint32_t h_acc[CURVE_DIFF_ACC], cpu[CURVE_DIFF_ACC] = { 0 };
     uint32_t *d_acc = NULL;
-    const uint32_t tpb = CURVE_TPB;
+    const uint32_t tpb = curve_tpb[thr_id];
     const uint32_t grid = (CURVE_DIFF_N + tpb - 1) / tpb;
 
     CUDA_SAFE_CALL(cudaMalloc(&d_acc, sizeof(h_acc)));
@@ -282,6 +326,11 @@ static void curvehash_init(int thr_id)
 {
     cudaSetDevice(device_map[thr_id]);
 
+    /* block size the loaded scan kernel was compiled for (CURVE_TPB) */
+    cudaFuncAttributes fa;
+    CUDA_SAFE_CALL(cudaFuncGetAttributes(&fa, curvehash_scan_kernel));
+    curve_tpb[thr_id] = fa.maxThreadsPerBlock >= 512 ? 512 : fa.maxThreadsPerBlock >= 320 ? 320 : 128;
+
     CUDA_SAFE_CALL(cudaMalloc(&d_gtable[thr_id], CURVE_GTABLE_BYTES));
     CUDA_SAFE_CALL(cudaMalloc(&d_header[thr_id], 76));
     CUDA_SAFE_CALL(cudaMalloc(&d_resNonce[thr_id], sizeof(uint32_t)));
@@ -313,14 +362,15 @@ extern "C" int scanhash_curvehash(int thr_id, struct work *work, uint32_t max_no
     uint32_t *pdata = work->data;
     uint32_t *ptarget = work->target;
     const uint32_t first_nonce = pdata[19];
-    uint32_t throughput = cuda_default_throughput(thr_id, 1U << 16); /* EC-heavy but no per-thread mem; big batch fills the GPU at tpb 512 (-i to tune) */
-    if (init_done[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
-
     if (opt_benchmark && ptarget[7] < 0x0000ffffU)
         ptarget[7] = 0x0000ffffU;
 
     if (!init_done[thr_id])
         curvehash_init(thr_id);
+
+    /* the sm_61 shape needs 2^18 nonces per launch to fill the GPU; -i overrides */
+    uint32_t throughput = cuda_default_throughput(thr_id, curve_tpb[thr_id] == 320 ? 1U << 18 : 1U << 16);
+    throughput = min(throughput, max_nonce - first_nonce);
 
     /* 76-byte base header = be32enc(pdata[0..18]); the kernel appends the nonce
      * and consumes this as BYTES. If it is ever changed to read uint32 words,
@@ -350,7 +400,7 @@ extern "C" int scanhash_curvehash(int thr_id, struct work *work, uint32_t max_no
     }
 
     const uint32_t UMAX = UINT32_MAX;
-    const uint32_t tpb = CURVE_TPB;
+    const uint32_t tpb = curve_tpb[thr_id];
 
     do {
         CUDA_SAFE_CALL(cudaMemcpy(d_resNonce[thr_id], &UMAX, sizeof(uint32_t), cudaMemcpyHostToDevice));

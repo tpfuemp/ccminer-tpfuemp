@@ -262,7 +262,8 @@ algos/homescrypt/homescrypt.o: algos/homescrypt/homescrypt.cu algos/homescrypt/h
 algos/bc3hash/bc3hash.o: algos/bc3hash/bc3hash.cu algos/bc3hash/cuda/bc3_constants.cuh \
 		algos/bc3hash/cuda/bc3_uint_device.cuh algos/bc3hash/cuda/bc3_exp_device.cuh \
 		algos/bc3hash/cuda/bc3_ec_device.cuh algos/bc3hash/cuda/bc3_mix_device.cuh \
-		algos/bc3hash/cuda/bc3_hashes_device.cuh
+		algos/bc3hash/cuda/bc3_hashes_device.cuh algos/bc3hash/cuda/bc3_modinv_device.cuh \
+		algos/bc3hash/cuda/bc3_secp_device.cuh
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=255 -o $@ -c $<
 
 algos/blake256/blake256.o: algos/blake256/blake256.cu

@@ -106,12 +106,13 @@ __device__ static __forceinline__ int ch_seckey_valid(const unsigned char *k)
 
 /*
  * out32 = curvehash(header80). Returns 1 if computed, 0 if a round hit an
- * invalid seckey (k==0 or k>=n) — consensus asserts this never happens for a
+ * invalid seckey (k==0 or k>=n); consensus asserts this never happens for a
  * valid block, so the caller must treat such a nonce as non-winning (never
  * submit). On the 0 path out32 is left as 0xFF.. so any target compare rejects.
  */
-__device__ static int curvehash_full(unsigned char *out32, const unsigned char *header80,
-                                     const unsigned char *gtable)
+template <bool F8X32>
+__device__ static int curvehash_full_t(unsigned char *out32, const unsigned char *header80,
+                                       const unsigned char *gtable)
 {
     unsigned char phash[32];
     unsigned char pub[65];
@@ -124,11 +125,106 @@ __device__ static int curvehash_full(unsigned char *out32, const unsigned char *
             return 0;
         }
         pub[0] = 0x04;
-        secp256k1_ecmult_gen_xy(pub + 1, pub + 33, phash, gtable);
+        if (F8X32)
+            secp256k1_ecmult_gen_xy_8x32(pub + 1, pub + 33, phash, gtable);
+        else
+            secp256k1_ecmult_gen_xy(pub + 1, pub + 33, phash, gtable);
         ch_sha256(phash, pub, 65);
     }
     #pragma unroll
     for (int i = 0; i < 32; i++) out32[i] = phash[i];
+    return 1;
+}
+
+/* EC field: bc3hash's 8 x 32-bit one; -DCURVEHASH_FIELD_10X26 selects the
+ * 10 x 26 libsecp256k1 port (and -DCURVEHASH_INV_ADDCHAIN its inversion). */
+#ifdef CURVEHASH_FIELD_10X26
+#define CURVEHASH_F8X32 false
+#else
+#define CURVEHASH_F8X32 true
+#endif
+
+__device__ static int curvehash_full(unsigned char *out32, const unsigned char *header80,
+                                     const unsigned char *gtable)
+{
+    return curvehash_full_t<CURVEHASH_F8X32>(out32, header80, gtable);
+}
+
+/*
+ * The same chain on 32-bit words and the 8 x 32 field, without byte arrays.
+ * In: the 76 header bytes and nonce_be (header bytes 76..79 as a big-endian
+ * word). Out: the final SHA-256 state S[8]; digest byte 4i = S[i] >> 24.
+ */
+__device__ __forceinline__ uint32_t ch_be32(const unsigned char *p)
+{
+    return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3];
+}
+
+__device__ __forceinline__ void ch_sha256_iv(uint32_t S[8])
+{
+    S[0] = 0x6a09e667; S[1] = 0xbb67ae85; S[2] = 0x3c6ef372; S[3] = 0xa54ff53a;
+    S[4] = 0x510e527f; S[5] = 0x9b05688c; S[6] = 0x1f83d9ab; S[7] = 0x5be0cd19;
+}
+
+/* 1 <= k < n on LS-first limbs */
+__device__ __forceinline__ bool ch_seckey_valid_w(const bc3u256 &k)
+{
+    const uint32_t n[8] = { 0xd0364141u, 0xbfd25e8cu, 0xaf48a03bu, 0xbaaedce6u,
+                            0xfffffffeu, 0xffffffffu, 0xffffffffu, 0xffffffffu };
+    uint32_t borrow = 0, nz = 0;
+    #pragma unroll
+    for (int i = 0; i < 8; i++) {
+        const uint64_t d = (uint64_t)k.w[i] - n[i] - borrow;
+        borrow = (uint32_t)(d >> 63);
+        nz |= k.w[i];
+    }
+    return nz != 0 && borrow; /* k - n borrows iff k < n */
+}
+
+__device__ static int curvehash_full_w(uint32_t S[8], const unsigned char *header76, uint32_t nonce_be,
+                                       const unsigned char *gtable)
+{
+    uint32_t W[16];
+    ch_sha256_iv(S);
+    #pragma unroll
+    for (int i = 0; i < 16; i++) W[i] = ch_be32(header76 + 4 * i);
+    ch_sha256_transform(S, W);
+    W[0] = ch_be32(header76 + 64);
+    W[1] = ch_be32(header76 + 68);
+    W[2] = ch_be32(header76 + 72);
+    W[3] = nonce_be;
+    W[4] = 0x80000000u;
+    #pragma unroll
+    for (int i = 5; i < 15; i++) W[i] = 0;
+    W[15] = 80 * 8;
+    ch_sha256_transform(S, W);
+
+    #pragma unroll 1
+    for (int round = 0; round < 8; round++) {
+        bc3u256 k, x, y;
+        #pragma unroll
+        for (int i = 0; i < 8; i++) k.w[7 - i] = S[i];
+        if (!ch_seckey_valid_w(k)) {
+            #pragma unroll
+            for (int i = 0; i < 8; i++) S[i] = 0xffffffffu;
+            return 0;
+        }
+        secp256k1_ecmult_gen_8x32(x, y, k, gtable);
+        /* pub = 04 || X || Y: the coordinate words shifted one byte right */
+        W[0] = 0x04000000u | (x.w[7] >> 8);
+        #pragma unroll
+        for (int i = 1; i < 8; i++) W[i] = __funnelshift_l(x.w[7 - i], x.w[8 - i], 24);
+        W[8] = __funnelshift_l(y.w[7], x.w[0], 24);
+        #pragma unroll
+        for (int i = 9; i < 16; i++) W[i] = __funnelshift_l(y.w[7 - (i - 8)], y.w[7 - (i - 9)], 24);
+        ch_sha256_iv(S);
+        ch_sha256_transform(S, W);
+        W[0] = (y.w[0] << 24) | 0x00800000u; /* last Y byte, then the 0x80 pad */
+        #pragma unroll
+        for (int i = 1; i < 15; i++) W[i] = 0;
+        W[15] = 65 * 8;
+        ch_sha256_transform(S, W);
+    }
     return 1;
 }
 

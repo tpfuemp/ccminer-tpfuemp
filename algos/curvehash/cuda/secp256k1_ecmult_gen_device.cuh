@@ -69,4 +69,67 @@ __device__ static int secp256k1_ecmult_gen_xy(unsigned char *x32, unsigned char 
     return 1;
 }
 
+/*
+ * The same k*G on bc3hash's 8 x 32-bit field and safegcd inverse, same table.
+ * Windows come from a shifted copy of k (no run-time byte index); the output is
+ * canonical, so the bytes equal secp256k1_ecmult_gen_xy's. 0 iff infinity.
+ */
+#include "../../bc3hash/cuda/bc3_secp_device.cuh"
+
+__device__ static int secp256k1_ecmult_gen_xy_8x32(unsigned char *x32, unsigned char *y32,
+                                                   const unsigned char *k32, const unsigned char *gtable) {
+    bc3u256 k = bc3_load_be<8>(k32);
+    bc3_jac r;
+    r.inf = true;
+    r.x = r.y = r.z = bc3_small<8>(0);
+    #pragma unroll 1
+    for (int j = 0; j < SECP256K1_ECMULT_GEN_WINDOWS; j++) {
+        const uint32_t bits = k.w[0] & (SECP256K1_ECMULT_GEN_ENTRIES - 1);
+        k = bc3_shr<SECP256K1_ECMULT_GEN_WBITS>(k);
+        if (bits == 0) {
+            continue; /* table[j][0] == infinity: additive no-op */
+        }
+        bc3u256 x2, y2;
+        bc3_ec_load(x2, y2, gtable +
+            ((size_t)j * SECP256K1_ECMULT_GEN_ENTRIES + bits) * SECP256K1_ECMULT_GEN_ENTRY);
+        bc3_jac_add_affine(r, x2, y2);
+    }
+    if (r.inf) {
+        return 0;
+    }
+    const bc3u256 zi = bc3_modinv<BC3_MOD_SECP>(bc3_fp_canon(r.z));
+    const bc3u256 z2 = bc3_fp_sqr(zi), z3 = bc3_fp_mul(z2, zi);
+    bc3_store_be<8>(x32, bc3_fp_canon(bc3_fp_mul(r.x, z2)));
+    bc3_store_be<8>(y32, bc3_fp_canon(bc3_fp_mul(r.y, z3)));
+    return 1;
+}
+
+/* As above on limbs (LS-first bc3u256 in and out), for curvehash_full_w. */
+__device__ __forceinline__ int secp256k1_ecmult_gen_8x32(bc3u256 &x, bc3u256 &y, bc3u256 k,
+                                                         const unsigned char *gtable) {
+    bc3_jac r;
+    r.inf = true;
+    r.x = r.y = r.z = bc3_small<8>(0);
+    #pragma unroll 1
+    for (int j = 0; j < SECP256K1_ECMULT_GEN_WINDOWS; j++) {
+        const uint32_t bits = k.w[0] & (SECP256K1_ECMULT_GEN_ENTRIES - 1);
+        k = bc3_shr<SECP256K1_ECMULT_GEN_WBITS>(k);
+        if (bits == 0) {
+            continue; /* table[j][0] == infinity: additive no-op */
+        }
+        bc3u256 x2, y2;
+        bc3_ec_load(x2, y2, gtable +
+            ((size_t)j * SECP256K1_ECMULT_GEN_ENTRIES + bits) * SECP256K1_ECMULT_GEN_ENTRY);
+        bc3_jac_add_affine(r, x2, y2);
+    }
+    if (r.inf) {
+        return 0;
+    }
+    const bc3u256 zi = bc3_modinv<BC3_MOD_SECP>(bc3_fp_canon(r.z));
+    const bc3u256 z2 = bc3_fp_sqr(zi), z3 = bc3_fp_mul(z2, zi);
+    x = bc3_fp_canon(bc3_fp_mul(r.x, z2));
+    y = bc3_fp_canon(bc3_fp_mul(r.y, z3));
+    return 1;
+}
+
 #endif /* SECP256K1_ECMULT_GEN_DEVICE_CUH */
