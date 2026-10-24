@@ -6,22 +6,54 @@
 #include "cuda_helper.h"
 #include <host_defines.h>
 
-uint32_t *d_fugue256_hashoutput[MAX_GPUS];
-static uint32_t *d_resultNonce[MAX_GPUS];
+#include "cuda/candidate_report.cuh"
+#include "cuda/selftest_gate.cuh"
 
-__constant__ uint32_t GPUstate[30]; // Single GPU
+/* res[0] < res[1]: the two lowest candidates of a launch (UINT32_MAX = none) */
+static uint32_t *d_resNonce[MAX_GPUS];
+/* false once a launch reported something: the buffer is re-armed before the next one */
+static bool armed[MAX_GPUS];
+
 __constant__ uint32_t pTarget[8]; // Single GPU
+/* sph state after the 19 nonce-free words, advanced through the nonce-free part of
+ * sub-round 4, and the folded x0..x2 lookups of its first SMIX (see SMIX_PRE). */
+__constant__ uint32_t GPUpre[30];
+__constant__ uint32_t GPUpreCR[7];
 
-/* The four mixing tables, resident in device memory. Every block stages
- * them into shared memory once, so a plain cached load is enough. */
-static __device__ uint32_t d_mixTab[4][256];
+/* T0 of the super-mix. The other three tables are its byte rotations,
+ * T_k(x) = ROTR(T0(x), 8k), so only T0 is stored. */
+static __device__ uint32_t d_mixTab0[256];
 
-#define mixtab0(x) (*((uint32_t*)mixtabs + (    (x))))
-#define mixtab1(x) (*((uint32_t*)mixtabs + (256+(x))))
-#define mixtab2(x) (*((uint32_t*)mixtabs + (512+(x))))
-#define mixtab3(x) (*((uint32_t*)mixtabs + (768+(x))))
+/* T0 replicated per lane group (lane l reads copy l % 16): a warp's random lookups hit
+ * at most two words per bank, against ~3 with a single table. 16 KB per block. */
+#define FUGUE_TAB_COPIES 16
+#define FUGUE_SHARED_BYTES (256 * FUGUE_TAB_COPIES * sizeof(uint32_t))
 
-/* TABELLEN */
+/* x * c_fugue_shl[k] == x << 8k, c_fugue_row = byte stride of one entry; constant-bank
+ * operands keep ptxas from folding the IMADs back into shift-and-mask. */
+static __constant__ uint32_t c_fugue_shl[4] = { 1u, 1u << 8, 1u << 16, 1u << 24 };
+static __constant__ uint32_t c_fugue_row = FUGUE_TAB_COPIES * sizeof(uint32_t);
+
+/* T_k applied to byte (3 - k) of x, i.e. mixtab0(x >> 24) ... mixtab3(x & 0xFF). */
+template <bool IMADIDX>
+__device__ __forceinline__ uint32_t fugue_mix(const uint32_t *tab, const uint32_t lane, const int k, const uint32_t x)
+{
+	uint32_t v;
+#if __CUDA_ARCH__ >= 800
+	if (IMADIDX) {
+		/* sm_80+: (x << 8k) >> 24 with the shift and the scale-and-add on the
+		 * IMAD pipe, one ALU-pipe op per lookup instead of two */
+		const uint32_t t = k ? x * c_fugue_shl[k] : x;
+		const uint32_t off = (t >> 24) * c_fugue_row + lane * (uint32_t)sizeof(uint32_t);
+		v = *(const uint32_t *)((const char *)tab + off);
+	} else
+#endif
+	v = tab[((x >> (24 - 8 * k)) & 0xFF) * FUGUE_TAB_COPIES + lane];
+	return k ? __funnelshift_r(v, v, 8 * k) : v;
+}
+
+#define FMIX(k, x) fugue_mix<IMADIDX>(mixtabs, lane, (k), (x))
+
 static const uint32_t mixtab0_cpu[] = {
 	SPH_C32(0x63633297), SPH_C32(0x7c7c6feb), SPH_C32(0x77775ec7),
 	SPH_C32(0x7b7b7af7), SPH_C32(0xf2f2e8e5), SPH_C32(0x6b6b0ab7),
@@ -111,272 +143,6 @@ static const uint32_t mixtab0_cpu[] = {
 	SPH_C32(0x16166258)
 };
 
-static const uint32_t mixtab1_cpu[] = {
-	SPH_C32(0x97636332), SPH_C32(0xeb7c7c6f), SPH_C32(0xc777775e),
-	SPH_C32(0xf77b7b7a), SPH_C32(0xe5f2f2e8), SPH_C32(0xb76b6b0a),
-	SPH_C32(0xa76f6f16), SPH_C32(0x39c5c56d), SPH_C32(0xc0303090),
-	SPH_C32(0x04010107), SPH_C32(0x8767672e), SPH_C32(0xac2b2bd1),
-	SPH_C32(0xd5fefecc), SPH_C32(0x71d7d713), SPH_C32(0x9aabab7c),
-	SPH_C32(0xc3767659), SPH_C32(0x05caca40), SPH_C32(0x3e8282a3),
-	SPH_C32(0x09c9c949), SPH_C32(0xef7d7d68), SPH_C32(0xc5fafad0),
-	SPH_C32(0x7f595994), SPH_C32(0x074747ce), SPH_C32(0xedf0f0e6),
-	SPH_C32(0x82adad6e), SPH_C32(0x7dd4d41a), SPH_C32(0xbea2a243),
-	SPH_C32(0x8aafaf60), SPH_C32(0x469c9cf9), SPH_C32(0xa6a4a451),
-	SPH_C32(0xd3727245), SPH_C32(0x2dc0c076), SPH_C32(0xeab7b728),
-	SPH_C32(0xd9fdfdc5), SPH_C32(0x7a9393d4), SPH_C32(0x982626f2),
-	SPH_C32(0xd8363682), SPH_C32(0xfc3f3fbd), SPH_C32(0xf1f7f7f3),
-	SPH_C32(0x1dcccc52), SPH_C32(0xd034348c), SPH_C32(0xa2a5a556),
-	SPH_C32(0xb9e5e58d), SPH_C32(0xe9f1f1e1), SPH_C32(0xdf71714c),
-	SPH_C32(0x4dd8d83e), SPH_C32(0xc4313197), SPH_C32(0x5415156b),
-	SPH_C32(0x1004041c), SPH_C32(0x31c7c763), SPH_C32(0x8c2323e9),
-	SPH_C32(0x21c3c37f), SPH_C32(0x60181848), SPH_C32(0x6e9696cf),
-	SPH_C32(0x1405051b), SPH_C32(0x5e9a9aeb), SPH_C32(0x1c070715),
-	SPH_C32(0x4812127e), SPH_C32(0x368080ad), SPH_C32(0xa5e2e298),
-	SPH_C32(0x81ebeba7), SPH_C32(0x9c2727f5), SPH_C32(0xfeb2b233),
-	SPH_C32(0xcf757550), SPH_C32(0x2409093f), SPH_C32(0x3a8383a4),
-	SPH_C32(0xb02c2cc4), SPH_C32(0x681a1a46), SPH_C32(0x6c1b1b41),
-	SPH_C32(0xa36e6e11), SPH_C32(0x735a5a9d), SPH_C32(0xb6a0a04d),
-	SPH_C32(0x535252a5), SPH_C32(0xec3b3ba1), SPH_C32(0x75d6d614),
-	SPH_C32(0xfab3b334), SPH_C32(0xa42929df), SPH_C32(0xa1e3e39f),
-	SPH_C32(0xbc2f2fcd), SPH_C32(0x268484b1), SPH_C32(0x575353a2),
-	SPH_C32(0x69d1d101), SPH_C32(0x00000000), SPH_C32(0x99ededb5),
-	SPH_C32(0x802020e0), SPH_C32(0xddfcfcc2), SPH_C32(0xf2b1b13a),
-	SPH_C32(0x775b5b9a), SPH_C32(0xb36a6a0d), SPH_C32(0x01cbcb47),
-	SPH_C32(0xcebebe17), SPH_C32(0xe43939af), SPH_C32(0x334a4aed),
-	SPH_C32(0x2b4c4cff), SPH_C32(0x7b585893), SPH_C32(0x11cfcf5b),
-	SPH_C32(0x6dd0d006), SPH_C32(0x91efefbb), SPH_C32(0x9eaaaa7b),
-	SPH_C32(0xc1fbfbd7), SPH_C32(0x174343d2), SPH_C32(0x2f4d4df8),
-	SPH_C32(0xcc333399), SPH_C32(0x228585b6), SPH_C32(0x0f4545c0),
-	SPH_C32(0xc9f9f9d9), SPH_C32(0x0802020e), SPH_C32(0xe77f7f66),
-	SPH_C32(0x5b5050ab), SPH_C32(0xf03c3cb4), SPH_C32(0x4a9f9ff0),
-	SPH_C32(0x96a8a875), SPH_C32(0x5f5151ac), SPH_C32(0xbaa3a344),
-	SPH_C32(0x1b4040db), SPH_C32(0x0a8f8f80), SPH_C32(0x7e9292d3),
-	SPH_C32(0x429d9dfe), SPH_C32(0xe03838a8), SPH_C32(0xf9f5f5fd),
-	SPH_C32(0xc6bcbc19), SPH_C32(0xeeb6b62f), SPH_C32(0x45dada30),
-	SPH_C32(0x842121e7), SPH_C32(0x40101070), SPH_C32(0xd1ffffcb),
-	SPH_C32(0xe1f3f3ef), SPH_C32(0x65d2d208), SPH_C32(0x19cdcd55),
-	SPH_C32(0x300c0c24), SPH_C32(0x4c131379), SPH_C32(0x9dececb2),
-	SPH_C32(0x675f5f86), SPH_C32(0x6a9797c8), SPH_C32(0x0b4444c7),
-	SPH_C32(0x5c171765), SPH_C32(0x3dc4c46a), SPH_C32(0xaaa7a758),
-	SPH_C32(0xe37e7e61), SPH_C32(0xf43d3db3), SPH_C32(0x8b646427),
-	SPH_C32(0x6f5d5d88), SPH_C32(0x6419194f), SPH_C32(0xd7737342),
-	SPH_C32(0x9b60603b), SPH_C32(0x328181aa), SPH_C32(0x274f4ff6),
-	SPH_C32(0x5ddcdc22), SPH_C32(0x882222ee), SPH_C32(0xa82a2ad6),
-	SPH_C32(0x769090dd), SPH_C32(0x16888895), SPH_C32(0x034646c9),
-	SPH_C32(0x95eeeebc), SPH_C32(0xd6b8b805), SPH_C32(0x5014146c),
-	SPH_C32(0x55dede2c), SPH_C32(0x635e5e81), SPH_C32(0x2c0b0b31),
-	SPH_C32(0x41dbdb37), SPH_C32(0xade0e096), SPH_C32(0xc832329e),
-	SPH_C32(0xe83a3aa6), SPH_C32(0x280a0a36), SPH_C32(0x3f4949e4),
-	SPH_C32(0x18060612), SPH_C32(0x902424fc), SPH_C32(0x6b5c5c8f),
-	SPH_C32(0x25c2c278), SPH_C32(0x61d3d30f), SPH_C32(0x86acac69),
-	SPH_C32(0x93626235), SPH_C32(0x729191da), SPH_C32(0x629595c6),
-	SPH_C32(0xbde4e48a), SPH_C32(0xff797974), SPH_C32(0xb1e7e783),
-	SPH_C32(0x0dc8c84e), SPH_C32(0xdc373785), SPH_C32(0xaf6d6d18),
-	SPH_C32(0x028d8d8e), SPH_C32(0x79d5d51d), SPH_C32(0x234e4ef1),
-	SPH_C32(0x92a9a972), SPH_C32(0xab6c6c1f), SPH_C32(0x435656b9),
-	SPH_C32(0xfdf4f4fa), SPH_C32(0x85eaeaa0), SPH_C32(0x8f656520),
-	SPH_C32(0xf37a7a7d), SPH_C32(0x8eaeae67), SPH_C32(0x20080838),
-	SPH_C32(0xdebaba0b), SPH_C32(0xfb787873), SPH_C32(0x942525fb),
-	SPH_C32(0xb82e2eca), SPH_C32(0x701c1c54), SPH_C32(0xaea6a65f),
-	SPH_C32(0xe6b4b421), SPH_C32(0x35c6c664), SPH_C32(0x8de8e8ae),
-	SPH_C32(0x59dddd25), SPH_C32(0xcb747457), SPH_C32(0x7c1f1f5d),
-	SPH_C32(0x374b4bea), SPH_C32(0xc2bdbd1e), SPH_C32(0x1a8b8b9c),
-	SPH_C32(0x1e8a8a9b), SPH_C32(0xdb70704b), SPH_C32(0xf83e3eba),
-	SPH_C32(0xe2b5b526), SPH_C32(0x83666629), SPH_C32(0x3b4848e3),
-	SPH_C32(0x0c030309), SPH_C32(0xf5f6f6f4), SPH_C32(0x380e0e2a),
-	SPH_C32(0x9f61613c), SPH_C32(0xd435358b), SPH_C32(0x475757be),
-	SPH_C32(0xd2b9b902), SPH_C32(0x2e8686bf), SPH_C32(0x29c1c171),
-	SPH_C32(0x741d1d53), SPH_C32(0x4e9e9ef7), SPH_C32(0xa9e1e191),
-	SPH_C32(0xcdf8f8de), SPH_C32(0x569898e5), SPH_C32(0x44111177),
-	SPH_C32(0xbf696904), SPH_C32(0x49d9d939), SPH_C32(0x0e8e8e87),
-	SPH_C32(0x669494c1), SPH_C32(0x5a9b9bec), SPH_C32(0x781e1e5a),
-	SPH_C32(0x2a8787b8), SPH_C32(0x89e9e9a9), SPH_C32(0x15cece5c),
-	SPH_C32(0x4f5555b0), SPH_C32(0xa02828d8), SPH_C32(0x51dfdf2b),
-	SPH_C32(0x068c8c89), SPH_C32(0xb2a1a14a), SPH_C32(0x12898992),
-	SPH_C32(0x340d0d23), SPH_C32(0xcabfbf10), SPH_C32(0xb5e6e684),
-	SPH_C32(0x134242d5), SPH_C32(0xbb686803), SPH_C32(0x1f4141dc),
-	SPH_C32(0x529999e2), SPH_C32(0xb42d2dc3), SPH_C32(0x3c0f0f2d),
-	SPH_C32(0xf6b0b03d), SPH_C32(0x4b5454b7), SPH_C32(0xdabbbb0c),
-	SPH_C32(0x58161662)
-};
-
-static const uint32_t mixtab2_cpu[] = {
-	SPH_C32(0x32976363), SPH_C32(0x6feb7c7c), SPH_C32(0x5ec77777),
-	SPH_C32(0x7af77b7b), SPH_C32(0xe8e5f2f2), SPH_C32(0x0ab76b6b),
-	SPH_C32(0x16a76f6f), SPH_C32(0x6d39c5c5), SPH_C32(0x90c03030),
-	SPH_C32(0x07040101), SPH_C32(0x2e876767), SPH_C32(0xd1ac2b2b),
-	SPH_C32(0xccd5fefe), SPH_C32(0x1371d7d7), SPH_C32(0x7c9aabab),
-	SPH_C32(0x59c37676), SPH_C32(0x4005caca), SPH_C32(0xa33e8282),
-	SPH_C32(0x4909c9c9), SPH_C32(0x68ef7d7d), SPH_C32(0xd0c5fafa),
-	SPH_C32(0x947f5959), SPH_C32(0xce074747), SPH_C32(0xe6edf0f0),
-	SPH_C32(0x6e82adad), SPH_C32(0x1a7dd4d4), SPH_C32(0x43bea2a2),
-	SPH_C32(0x608aafaf), SPH_C32(0xf9469c9c), SPH_C32(0x51a6a4a4),
-	SPH_C32(0x45d37272), SPH_C32(0x762dc0c0), SPH_C32(0x28eab7b7),
-	SPH_C32(0xc5d9fdfd), SPH_C32(0xd47a9393), SPH_C32(0xf2982626),
-	SPH_C32(0x82d83636), SPH_C32(0xbdfc3f3f), SPH_C32(0xf3f1f7f7),
-	SPH_C32(0x521dcccc), SPH_C32(0x8cd03434), SPH_C32(0x56a2a5a5),
-	SPH_C32(0x8db9e5e5), SPH_C32(0xe1e9f1f1), SPH_C32(0x4cdf7171),
-	SPH_C32(0x3e4dd8d8), SPH_C32(0x97c43131), SPH_C32(0x6b541515),
-	SPH_C32(0x1c100404), SPH_C32(0x6331c7c7), SPH_C32(0xe98c2323),
-	SPH_C32(0x7f21c3c3), SPH_C32(0x48601818), SPH_C32(0xcf6e9696),
-	SPH_C32(0x1b140505), SPH_C32(0xeb5e9a9a), SPH_C32(0x151c0707),
-	SPH_C32(0x7e481212), SPH_C32(0xad368080), SPH_C32(0x98a5e2e2),
-	SPH_C32(0xa781ebeb), SPH_C32(0xf59c2727), SPH_C32(0x33feb2b2),
-	SPH_C32(0x50cf7575), SPH_C32(0x3f240909), SPH_C32(0xa43a8383),
-	SPH_C32(0xc4b02c2c), SPH_C32(0x46681a1a), SPH_C32(0x416c1b1b),
-	SPH_C32(0x11a36e6e), SPH_C32(0x9d735a5a), SPH_C32(0x4db6a0a0),
-	SPH_C32(0xa5535252), SPH_C32(0xa1ec3b3b), SPH_C32(0x1475d6d6),
-	SPH_C32(0x34fab3b3), SPH_C32(0xdfa42929), SPH_C32(0x9fa1e3e3),
-	SPH_C32(0xcdbc2f2f), SPH_C32(0xb1268484), SPH_C32(0xa2575353),
-	SPH_C32(0x0169d1d1), SPH_C32(0x00000000), SPH_C32(0xb599eded),
-	SPH_C32(0xe0802020), SPH_C32(0xc2ddfcfc), SPH_C32(0x3af2b1b1),
-	SPH_C32(0x9a775b5b), SPH_C32(0x0db36a6a), SPH_C32(0x4701cbcb),
-	SPH_C32(0x17cebebe), SPH_C32(0xafe43939), SPH_C32(0xed334a4a),
-	SPH_C32(0xff2b4c4c), SPH_C32(0x937b5858), SPH_C32(0x5b11cfcf),
-	SPH_C32(0x066dd0d0), SPH_C32(0xbb91efef), SPH_C32(0x7b9eaaaa),
-	SPH_C32(0xd7c1fbfb), SPH_C32(0xd2174343), SPH_C32(0xf82f4d4d),
-	SPH_C32(0x99cc3333), SPH_C32(0xb6228585), SPH_C32(0xc00f4545),
-	SPH_C32(0xd9c9f9f9), SPH_C32(0x0e080202), SPH_C32(0x66e77f7f),
-	SPH_C32(0xab5b5050), SPH_C32(0xb4f03c3c), SPH_C32(0xf04a9f9f),
-	SPH_C32(0x7596a8a8), SPH_C32(0xac5f5151), SPH_C32(0x44baa3a3),
-	SPH_C32(0xdb1b4040), SPH_C32(0x800a8f8f), SPH_C32(0xd37e9292),
-	SPH_C32(0xfe429d9d), SPH_C32(0xa8e03838), SPH_C32(0xfdf9f5f5),
-	SPH_C32(0x19c6bcbc), SPH_C32(0x2feeb6b6), SPH_C32(0x3045dada),
-	SPH_C32(0xe7842121), SPH_C32(0x70401010), SPH_C32(0xcbd1ffff),
-	SPH_C32(0xefe1f3f3), SPH_C32(0x0865d2d2), SPH_C32(0x5519cdcd),
-	SPH_C32(0x24300c0c), SPH_C32(0x794c1313), SPH_C32(0xb29decec),
-	SPH_C32(0x86675f5f), SPH_C32(0xc86a9797), SPH_C32(0xc70b4444),
-	SPH_C32(0x655c1717), SPH_C32(0x6a3dc4c4), SPH_C32(0x58aaa7a7),
-	SPH_C32(0x61e37e7e), SPH_C32(0xb3f43d3d), SPH_C32(0x278b6464),
-	SPH_C32(0x886f5d5d), SPH_C32(0x4f641919), SPH_C32(0x42d77373),
-	SPH_C32(0x3b9b6060), SPH_C32(0xaa328181), SPH_C32(0xf6274f4f),
-	SPH_C32(0x225ddcdc), SPH_C32(0xee882222), SPH_C32(0xd6a82a2a),
-	SPH_C32(0xdd769090), SPH_C32(0x95168888), SPH_C32(0xc9034646),
-	SPH_C32(0xbc95eeee), SPH_C32(0x05d6b8b8), SPH_C32(0x6c501414),
-	SPH_C32(0x2c55dede), SPH_C32(0x81635e5e), SPH_C32(0x312c0b0b),
-	SPH_C32(0x3741dbdb), SPH_C32(0x96ade0e0), SPH_C32(0x9ec83232),
-	SPH_C32(0xa6e83a3a), SPH_C32(0x36280a0a), SPH_C32(0xe43f4949),
-	SPH_C32(0x12180606), SPH_C32(0xfc902424), SPH_C32(0x8f6b5c5c),
-	SPH_C32(0x7825c2c2), SPH_C32(0x0f61d3d3), SPH_C32(0x6986acac),
-	SPH_C32(0x35936262), SPH_C32(0xda729191), SPH_C32(0xc6629595),
-	SPH_C32(0x8abde4e4), SPH_C32(0x74ff7979), SPH_C32(0x83b1e7e7),
-	SPH_C32(0x4e0dc8c8), SPH_C32(0x85dc3737), SPH_C32(0x18af6d6d),
-	SPH_C32(0x8e028d8d), SPH_C32(0x1d79d5d5), SPH_C32(0xf1234e4e),
-	SPH_C32(0x7292a9a9), SPH_C32(0x1fab6c6c), SPH_C32(0xb9435656),
-	SPH_C32(0xfafdf4f4), SPH_C32(0xa085eaea), SPH_C32(0x208f6565),
-	SPH_C32(0x7df37a7a), SPH_C32(0x678eaeae), SPH_C32(0x38200808),
-	SPH_C32(0x0bdebaba), SPH_C32(0x73fb7878), SPH_C32(0xfb942525),
-	SPH_C32(0xcab82e2e), SPH_C32(0x54701c1c), SPH_C32(0x5faea6a6),
-	SPH_C32(0x21e6b4b4), SPH_C32(0x6435c6c6), SPH_C32(0xae8de8e8),
-	SPH_C32(0x2559dddd), SPH_C32(0x57cb7474), SPH_C32(0x5d7c1f1f),
-	SPH_C32(0xea374b4b), SPH_C32(0x1ec2bdbd), SPH_C32(0x9c1a8b8b),
-	SPH_C32(0x9b1e8a8a), SPH_C32(0x4bdb7070), SPH_C32(0xbaf83e3e),
-	SPH_C32(0x26e2b5b5), SPH_C32(0x29836666), SPH_C32(0xe33b4848),
-	SPH_C32(0x090c0303), SPH_C32(0xf4f5f6f6), SPH_C32(0x2a380e0e),
-	SPH_C32(0x3c9f6161), SPH_C32(0x8bd43535), SPH_C32(0xbe475757),
-	SPH_C32(0x02d2b9b9), SPH_C32(0xbf2e8686), SPH_C32(0x7129c1c1),
-	SPH_C32(0x53741d1d), SPH_C32(0xf74e9e9e), SPH_C32(0x91a9e1e1),
-	SPH_C32(0xdecdf8f8), SPH_C32(0xe5569898), SPH_C32(0x77441111),
-	SPH_C32(0x04bf6969), SPH_C32(0x3949d9d9), SPH_C32(0x870e8e8e),
-	SPH_C32(0xc1669494), SPH_C32(0xec5a9b9b), SPH_C32(0x5a781e1e),
-	SPH_C32(0xb82a8787), SPH_C32(0xa989e9e9), SPH_C32(0x5c15cece),
-	SPH_C32(0xb04f5555), SPH_C32(0xd8a02828), SPH_C32(0x2b51dfdf),
-	SPH_C32(0x89068c8c), SPH_C32(0x4ab2a1a1), SPH_C32(0x92128989),
-	SPH_C32(0x23340d0d), SPH_C32(0x10cabfbf), SPH_C32(0x84b5e6e6),
-	SPH_C32(0xd5134242), SPH_C32(0x03bb6868), SPH_C32(0xdc1f4141),
-	SPH_C32(0xe2529999), SPH_C32(0xc3b42d2d), SPH_C32(0x2d3c0f0f),
-	SPH_C32(0x3df6b0b0), SPH_C32(0xb74b5454), SPH_C32(0x0cdabbbb),
-	SPH_C32(0x62581616)
-};
-
-static const uint32_t mixtab3_cpu[] = {
-	SPH_C32(0x63329763), SPH_C32(0x7c6feb7c), SPH_C32(0x775ec777),
-	SPH_C32(0x7b7af77b), SPH_C32(0xf2e8e5f2), SPH_C32(0x6b0ab76b),
-	SPH_C32(0x6f16a76f), SPH_C32(0xc56d39c5), SPH_C32(0x3090c030),
-	SPH_C32(0x01070401), SPH_C32(0x672e8767), SPH_C32(0x2bd1ac2b),
-	SPH_C32(0xfeccd5fe), SPH_C32(0xd71371d7), SPH_C32(0xab7c9aab),
-	SPH_C32(0x7659c376), SPH_C32(0xca4005ca), SPH_C32(0x82a33e82),
-	SPH_C32(0xc94909c9), SPH_C32(0x7d68ef7d), SPH_C32(0xfad0c5fa),
-	SPH_C32(0x59947f59), SPH_C32(0x47ce0747), SPH_C32(0xf0e6edf0),
-	SPH_C32(0xad6e82ad), SPH_C32(0xd41a7dd4), SPH_C32(0xa243bea2),
-	SPH_C32(0xaf608aaf), SPH_C32(0x9cf9469c), SPH_C32(0xa451a6a4),
-	SPH_C32(0x7245d372), SPH_C32(0xc0762dc0), SPH_C32(0xb728eab7),
-	SPH_C32(0xfdc5d9fd), SPH_C32(0x93d47a93), SPH_C32(0x26f29826),
-	SPH_C32(0x3682d836), SPH_C32(0x3fbdfc3f), SPH_C32(0xf7f3f1f7),
-	SPH_C32(0xcc521dcc), SPH_C32(0x348cd034), SPH_C32(0xa556a2a5),
-	SPH_C32(0xe58db9e5), SPH_C32(0xf1e1e9f1), SPH_C32(0x714cdf71),
-	SPH_C32(0xd83e4dd8), SPH_C32(0x3197c431), SPH_C32(0x156b5415),
-	SPH_C32(0x041c1004), SPH_C32(0xc76331c7), SPH_C32(0x23e98c23),
-	SPH_C32(0xc37f21c3), SPH_C32(0x18486018), SPH_C32(0x96cf6e96),
-	SPH_C32(0x051b1405), SPH_C32(0x9aeb5e9a), SPH_C32(0x07151c07),
-	SPH_C32(0x127e4812), SPH_C32(0x80ad3680), SPH_C32(0xe298a5e2),
-	SPH_C32(0xeba781eb), SPH_C32(0x27f59c27), SPH_C32(0xb233feb2),
-	SPH_C32(0x7550cf75), SPH_C32(0x093f2409), SPH_C32(0x83a43a83),
-	SPH_C32(0x2cc4b02c), SPH_C32(0x1a46681a), SPH_C32(0x1b416c1b),
-	SPH_C32(0x6e11a36e), SPH_C32(0x5a9d735a), SPH_C32(0xa04db6a0),
-	SPH_C32(0x52a55352), SPH_C32(0x3ba1ec3b), SPH_C32(0xd61475d6),
-	SPH_C32(0xb334fab3), SPH_C32(0x29dfa429), SPH_C32(0xe39fa1e3),
-	SPH_C32(0x2fcdbc2f), SPH_C32(0x84b12684), SPH_C32(0x53a25753),
-	SPH_C32(0xd10169d1), SPH_C32(0x00000000), SPH_C32(0xedb599ed),
-	SPH_C32(0x20e08020), SPH_C32(0xfcc2ddfc), SPH_C32(0xb13af2b1),
-	SPH_C32(0x5b9a775b), SPH_C32(0x6a0db36a), SPH_C32(0xcb4701cb),
-	SPH_C32(0xbe17cebe), SPH_C32(0x39afe439), SPH_C32(0x4aed334a),
-	SPH_C32(0x4cff2b4c), SPH_C32(0x58937b58), SPH_C32(0xcf5b11cf),
-	SPH_C32(0xd0066dd0), SPH_C32(0xefbb91ef), SPH_C32(0xaa7b9eaa),
-	SPH_C32(0xfbd7c1fb), SPH_C32(0x43d21743), SPH_C32(0x4df82f4d),
-	SPH_C32(0x3399cc33), SPH_C32(0x85b62285), SPH_C32(0x45c00f45),
-	SPH_C32(0xf9d9c9f9), SPH_C32(0x020e0802), SPH_C32(0x7f66e77f),
-	SPH_C32(0x50ab5b50), SPH_C32(0x3cb4f03c), SPH_C32(0x9ff04a9f),
-	SPH_C32(0xa87596a8), SPH_C32(0x51ac5f51), SPH_C32(0xa344baa3),
-	SPH_C32(0x40db1b40), SPH_C32(0x8f800a8f), SPH_C32(0x92d37e92),
-	SPH_C32(0x9dfe429d), SPH_C32(0x38a8e038), SPH_C32(0xf5fdf9f5),
-	SPH_C32(0xbc19c6bc), SPH_C32(0xb62feeb6), SPH_C32(0xda3045da),
-	SPH_C32(0x21e78421), SPH_C32(0x10704010), SPH_C32(0xffcbd1ff),
-	SPH_C32(0xf3efe1f3), SPH_C32(0xd20865d2), SPH_C32(0xcd5519cd),
-	SPH_C32(0x0c24300c), SPH_C32(0x13794c13), SPH_C32(0xecb29dec),
-	SPH_C32(0x5f86675f), SPH_C32(0x97c86a97), SPH_C32(0x44c70b44),
-	SPH_C32(0x17655c17), SPH_C32(0xc46a3dc4), SPH_C32(0xa758aaa7),
-	SPH_C32(0x7e61e37e), SPH_C32(0x3db3f43d), SPH_C32(0x64278b64),
-	SPH_C32(0x5d886f5d), SPH_C32(0x194f6419), SPH_C32(0x7342d773),
-	SPH_C32(0x603b9b60), SPH_C32(0x81aa3281), SPH_C32(0x4ff6274f),
-	SPH_C32(0xdc225ddc), SPH_C32(0x22ee8822), SPH_C32(0x2ad6a82a),
-	SPH_C32(0x90dd7690), SPH_C32(0x88951688), SPH_C32(0x46c90346),
-	SPH_C32(0xeebc95ee), SPH_C32(0xb805d6b8), SPH_C32(0x146c5014),
-	SPH_C32(0xde2c55de), SPH_C32(0x5e81635e), SPH_C32(0x0b312c0b),
-	SPH_C32(0xdb3741db), SPH_C32(0xe096ade0), SPH_C32(0x329ec832),
-	SPH_C32(0x3aa6e83a), SPH_C32(0x0a36280a), SPH_C32(0x49e43f49),
-	SPH_C32(0x06121806), SPH_C32(0x24fc9024), SPH_C32(0x5c8f6b5c),
-	SPH_C32(0xc27825c2), SPH_C32(0xd30f61d3), SPH_C32(0xac6986ac),
-	SPH_C32(0x62359362), SPH_C32(0x91da7291), SPH_C32(0x95c66295),
-	SPH_C32(0xe48abde4), SPH_C32(0x7974ff79), SPH_C32(0xe783b1e7),
-	SPH_C32(0xc84e0dc8), SPH_C32(0x3785dc37), SPH_C32(0x6d18af6d),
-	SPH_C32(0x8d8e028d), SPH_C32(0xd51d79d5), SPH_C32(0x4ef1234e),
-	SPH_C32(0xa97292a9), SPH_C32(0x6c1fab6c), SPH_C32(0x56b94356),
-	SPH_C32(0xf4fafdf4), SPH_C32(0xeaa085ea), SPH_C32(0x65208f65),
-	SPH_C32(0x7a7df37a), SPH_C32(0xae678eae), SPH_C32(0x08382008),
-	SPH_C32(0xba0bdeba), SPH_C32(0x7873fb78), SPH_C32(0x25fb9425),
-	SPH_C32(0x2ecab82e), SPH_C32(0x1c54701c), SPH_C32(0xa65faea6),
-	SPH_C32(0xb421e6b4), SPH_C32(0xc66435c6), SPH_C32(0xe8ae8de8),
-	SPH_C32(0xdd2559dd), SPH_C32(0x7457cb74), SPH_C32(0x1f5d7c1f),
-	SPH_C32(0x4bea374b), SPH_C32(0xbd1ec2bd), SPH_C32(0x8b9c1a8b),
-	SPH_C32(0x8a9b1e8a), SPH_C32(0x704bdb70), SPH_C32(0x3ebaf83e),
-	SPH_C32(0xb526e2b5), SPH_C32(0x66298366), SPH_C32(0x48e33b48),
-	SPH_C32(0x03090c03), SPH_C32(0xf6f4f5f6), SPH_C32(0x0e2a380e),
-	SPH_C32(0x613c9f61), SPH_C32(0x358bd435), SPH_C32(0x57be4757),
-	SPH_C32(0xb902d2b9), SPH_C32(0x86bf2e86), SPH_C32(0xc17129c1),
-	SPH_C32(0x1d53741d), SPH_C32(0x9ef74e9e), SPH_C32(0xe191a9e1),
-	SPH_C32(0xf8decdf8), SPH_C32(0x98e55698), SPH_C32(0x11774411),
-	SPH_C32(0x6904bf69), SPH_C32(0xd93949d9), SPH_C32(0x8e870e8e),
-	SPH_C32(0x94c16694), SPH_C32(0x9bec5a9b), SPH_C32(0x1e5a781e),
-	SPH_C32(0x87b82a87), SPH_C32(0xe9a989e9), SPH_C32(0xce5c15ce),
-	SPH_C32(0x55b04f55), SPH_C32(0x28d8a028), SPH_C32(0xdf2b51df),
-	SPH_C32(0x8c89068c), SPH_C32(0xa14ab2a1), SPH_C32(0x89921289),
-	SPH_C32(0x0d23340d), SPH_C32(0xbf10cabf), SPH_C32(0xe684b5e6),
-	SPH_C32(0x42d51342), SPH_C32(0x6803bb68), SPH_C32(0x41dc1f41),
-	SPH_C32(0x99e25299), SPH_C32(0x2dc3b42d), SPH_C32(0x0f2d3c0f),
-	SPH_C32(0xb03df6b0), SPH_C32(0x54b74b54), SPH_C32(0xbb0cdabb),
-	SPH_C32(0x16625816)
-};
 
 #define TIX2(q, x00, x01, x08, x10, x24) { \
 		x10 ^= x00; \
@@ -430,49 +196,49 @@ static const uint32_t mixtab3_cpu[] = {
 		uint32_t r2 = 0; \
 		uint32_t r3 = 0; \
 		uint32_t tmp; \
-		tmp = mixtab0(x0 >> 24); \
+		tmp = FMIX(0, x0); \
 		c0 ^= tmp; \
-		tmp = mixtab1((x0 >> 16) & 0xFF); \
+		tmp = FMIX(1, x0); \
 		c0 ^= tmp; \
 		r1 ^= tmp; \
-		tmp = mixtab2((x0 >>  8) & 0xFF); \
+		tmp = FMIX(2, x0); \
 		c0 ^= tmp; \
 		r2 ^= tmp; \
-		tmp = mixtab3(x0 & 0xFF); \
+		tmp = FMIX(3, x0); \
 		c0 ^= tmp; \
 		r3 ^= tmp; \
-		tmp = mixtab0(x1 >> 24); \
+		tmp = FMIX(0, x1); \
 		c1 ^= tmp; \
 		r0 ^= tmp; \
-		tmp = mixtab1((x1 >> 16) & 0xFF); \
+		tmp = FMIX(1, x1); \
 		c1 ^= tmp; \
-		tmp = mixtab2((x1 >>  8) & 0xFF); \
+		tmp = FMIX(2, x1); \
 		c1 ^= tmp; \
 		r2 ^= tmp; \
-		tmp = mixtab3(x1 & 0xFF); \
+		tmp = FMIX(3, x1); \
 		c1 ^= tmp; \
 		r3 ^= tmp; \
-		tmp = mixtab0(x2 >> 24); \
+		tmp = FMIX(0, x2); \
 		c2 ^= tmp; \
 		r0 ^= tmp; \
-		tmp = mixtab1((x2 >> 16) & 0xFF); \
+		tmp = FMIX(1, x2); \
 		c2 ^= tmp; \
 		r1 ^= tmp; \
-		tmp = mixtab2((x2 >>  8) & 0xFF); \
+		tmp = FMIX(2, x2); \
 		c2 ^= tmp; \
-		tmp = mixtab3(x2 & 0xFF); \
+		tmp = FMIX(3, x2); \
 		c2 ^= tmp; \
 		r3 ^= tmp; \
-		tmp = mixtab0(x3 >> 24); \
+		tmp = FMIX(0, x3); \
 		c3 ^= tmp; \
 		r0 ^= tmp; \
-		tmp = mixtab1((x3 >> 16) & 0xFF); \
+		tmp = FMIX(1, x3); \
 		c3 ^= tmp; \
 		r1 ^= tmp; \
-		tmp = mixtab2((x3 >>  8) & 0xFF); \
+		tmp = FMIX(2, x3); \
 		c3 ^= tmp; \
 		r2 ^= tmp; \
-		tmp = mixtab3(x3 & 0xFF); \
+		tmp = FMIX(3, x3); \
 		c3 ^= tmp; \
 		x0 = ((c0 ^ r0) & SPH_C32(0xFF000000)) \
 			| ((c1 ^ r1) & SPH_C32(0x00FF0000)) \
@@ -491,6 +257,48 @@ static const uint32_t mixtab3_cpu[] = {
 			| ((c1 ^ (r2 >> 8)) & SPH_C32(0x0000FF00)) \
 			| ((c2 ^ (r3 >> 8)) & SPH_C32(0x000000FF)); \
 		/* */ \
+	}
+
+/* SMIX of sub-round 4 with x0..x2 per-job constants: the twelve lookups on
+ * x0..x2 are folded on the host into GPUpreCR = c0 c1 c2 r0 r1 r2 r3, so only
+ * the four on x3 (the nonce word) remain. Same combine as SMIX. */
+#define SMIX_PRE(x0, x1, x2, x3) { \
+		uint32_t c0 = GPUpreCR[0]; \
+		uint32_t c1 = GPUpreCR[1]; \
+		uint32_t c2 = GPUpreCR[2]; \
+		uint32_t c3 = 0; \
+		uint32_t r0 = GPUpreCR[3]; \
+		uint32_t r1 = GPUpreCR[4]; \
+		uint32_t r2 = GPUpreCR[5]; \
+		uint32_t r3 = GPUpreCR[6]; \
+		uint32_t tmp; \
+		tmp = FMIX(0, x3); \
+		c3 ^= tmp; \
+		r0 ^= tmp; \
+		tmp = FMIX(1, x3); \
+		c3 ^= tmp; \
+		r1 ^= tmp; \
+		tmp = FMIX(2, x3); \
+		c3 ^= tmp; \
+		r2 ^= tmp; \
+		tmp = FMIX(3, x3); \
+		c3 ^= tmp; \
+		x0 = ((c0 ^ r0) & SPH_C32(0xFF000000)) \
+			| ((c1 ^ r1) & SPH_C32(0x00FF0000)) \
+			| ((c2 ^ r2) & SPH_C32(0x0000FF00)) \
+			| ((c3 ^ r3) & SPH_C32(0x000000FF)); \
+		x1 = ((c1 ^ (r0 << 8)) & SPH_C32(0xFF000000)) \
+			| ((c2 ^ (r1 << 8)) & SPH_C32(0x00FF0000)) \
+			| ((c3 ^ (r2 << 8)) & SPH_C32(0x0000FF00)) \
+			| ((c0 ^ (r3 >> 24)) & SPH_C32(0x000000FF)); \
+		x2 = ((c2 ^ (r0 << 16)) & SPH_C32(0xFF000000)) \
+			| ((c3 ^ (r1 << 16)) & SPH_C32(0x00FF0000)) \
+			| ((c0 ^ (r2 >> 16)) & SPH_C32(0x0000FF00)) \
+			| ((c1 ^ (r3 >> 16)) & SPH_C32(0x000000FF)); \
+		x3 = ((c3 ^ (r0 << 24)) & SPH_C32(0xFF000000)) \
+			| ((c0 ^ (r1 >> 8)) & SPH_C32(0x00FF0000)) \
+			| ((c1 ^ (r2 >> 8)) & SPH_C32(0x0000FF00)) \
+			| ((c2 ^ (r3 >> 8)) & SPH_C32(0x000000FF)); \
 	}
 
 #define S00   (sc[ 0])
@@ -531,45 +339,46 @@ static const uint32_t mixtab3_cpu[] = {
 #define S35   (sc[35])
 
 #define SWAB32(x)		( ((x & 0x000000FF) << 24) | ((x & 0x0000FF00) << 8) | ((x & 0x00FF0000) >> 8) | ((x & 0xFF000000) >> 24) )
-/* GPU - FUNKTIONEN */
 
-__global__ void  __launch_bounds__(256)
-fugue256_gpu_hash(int thr_id, uint32_t threads, uint32_t startNounce, void *outputHash, uint32_t *resNounce)
+template <int TPB, bool IMADIDX>
+__global__ void  __launch_bounds__(TPB)
+fugue256_gpu_hash(uint32_t threads, uint32_t startNounce, uint32_t *resNounce)
 {
-	extern __shared__ char mixtabs[];
+	extern __shared__ uint32_t mixtabs[];
 
-	*((uint32_t*)mixtabs + (    threadIdx.x)) = __ldg(&d_mixTab[0][threadIdx.x]);
-	*((uint32_t*)mixtabs + (256+threadIdx.x)) = __ldg(&d_mixTab[1][threadIdx.x]);
-	*((uint32_t*)mixtabs + (512+threadIdx.x)) = __ldg(&d_mixTab[2][threadIdx.x]);
-	*((uint32_t*)mixtabs + (768+threadIdx.x)) = __ldg(&d_mixTab[3][threadIdx.x]);
+	for (uint32_t i = threadIdx.x; i < 256 * FUGUE_TAB_COPIES; i += blockDim.x)
+		mixtabs[i] = __ldg(&d_mixTab0[i / FUGUE_TAB_COPIES]);
 
 	__syncthreads();
+
+	const uint32_t lane = threadIdx.x % FUGUE_TAB_COPIES;
 
 	uint32_t thread = (blockDim.x * blockIdx.x + threadIdx.x);
 	if (thread < threads)
 	{
-		/* Nimm den State und verarbeite das letztenByte (die Nounce) */
+		/* state after word 18; word 19 is the nonce */
 		uint32_t sc[30];
 
 	#pragma unroll 30
 		for(int i=0;i<30;i++)
-			sc[i] = GPUstate[i];
+			sc[i] = GPUpre[i];
 
-		uint32_t nounce = startNounce + thread; // muss noch ermittelt werden
+		uint32_t nounce = startNounce + thread;
 		uint32_t q;
 
 
-		// Bei Byte 80 laufen die Teilrunden: 4-0-1 (hier fest)
+		// sub-rounds 4, 0, 1: the nonce, then the 64-bit bit count (0, 640)
 
-		// Teilrunde 4
+		// sub-round 4
+		/* TIX2 and the first CMIX30 minus the nonce-free part done by fugue256_cpu_setBlock */
 		q = nounce;
-		TIX2(q, S06, S07, S14, S16, S00);
-		CMIX30(S03, S04, S05, S07, S08, S09, S18, S19, S20);
-		SMIX(S03, S04, S05, S06);
+		S06 = q;
+		S14 ^= q;
+		SMIX_PRE(S03, S04, S05, S06);
 		CMIX30(S00, S01, S02, S04, S05, S06, S15, S16, S17);
 		SMIX(S00, S01, S02, S03);
 
-		// Teilrunde 0
+		// sub-round 0
 		q = 0;
 		TIX2(q, S00, S01, S08, S10, S24);
 		CMIX30(S27, S28, S29, S01, S02, S03, S12, S13, S14);
@@ -577,16 +386,15 @@ fugue256_gpu_hash(int thr_id, uint32_t threads, uint32_t startNounce, void *outp
 		CMIX30(S24, S25, S26, S28, S29, S00, S09, S10, S11);
 		SMIX(S24, S25, S26, S27);
 
-		// Teilrunde 1
-		q = 0x280; // hoffentlich richtig rum...
+		// sub-round 1
+		q = 0x280;
 		TIX2(q, S24, S25, S02, S04, S18);
 		CMIX30(S21, S22, S23, S25, S26, S27, S06, S07, S08);
 		SMIX(S21, S22, S23, S24);
 		CMIX30(S18, S19, S20, S22, S23, S24, S03, S04, S05);
 		SMIX(S18, S19, S20, S21);
 
-		// Rundenende
-		// rms = 12, d.h. 30 - 12 = 18
+		// final rounds
 
 	#pragma unroll 10
 		for(int i=0;i<10;i++)
@@ -644,22 +452,20 @@ fugue256_gpu_hash(int thr_id, uint32_t threads, uint32_t startNounce, void *outp
 				sc[k] = tmp2[k];
 			// ROR(14, 30); END
 
+			if (i == 12)
+				break; // the last SMIX runs below, only if word 7 passes
 			SMIX(sc[18], sc[19], sc[20], sc[21]);
 		}
+
+		/* Digest word 7 is SWAB32(sc[6]), and the last SMIX writes only
+		 * sc[18..21]: settle the common case before paying for it. */
+		if (SWAB32(sc[6]) > pTarget[7])
+			return;
+		SMIX(sc[18], sc[19], sc[20], sc[21]);
 
 		sc[22] ^= sc[18];
 		sc[3] ^= sc[18];
 
-		/*
-		// SWAP32 und Daten ausgeben
-	#pragma unroll 4
-		for(int i=0;i<4;i++)
-			((uint32_t*)outputHash)[8*thread+i] = SWAB32(sc[19+i]);
-
-	#pragma unroll 4
-		for(int i=0;i<4;i++)
-			((uint32_t*)outputHash)[8*thread+i+4] = SWAB32(sc[3+i]);
-		*/
 		uint32_t hash[8];
 	#pragma unroll 4
 		for(int i=0;i<4;i++)
@@ -683,64 +489,175 @@ fugue256_gpu_hash(int thr_id, uint32_t threads, uint32_t startNounce, void *outp
 			}
 		}
 
-		if(rc == true)
-		{
-			if(resNounce[0] > nounce)
-				resNounce[0] = nounce;
-		}
+		if (rc)
+			report_candidate_2(resNounce, nounce);
 	}
 }
 
 
 __host__
-void fugue256_cpu_init(int thr_id, uint32_t threads)
+void fugue256_cpu_init(int thr_id)
 {
-	/* Upload the hash tables once per device. */
-	const size_t tab = sizeof(uint32_t) * 256;
-	cudaMemcpyToSymbol(d_mixTab, mixtab0_cpu, tab, 0 * tab, cudaMemcpyHostToDevice);
-	cudaMemcpyToSymbol(d_mixTab, mixtab1_cpu, tab, 1 * tab, cudaMemcpyHostToDevice);
-	cudaMemcpyToSymbol(d_mixTab, mixtab2_cpu, tab, 2 * tab, cudaMemcpyHostToDevice);
-	cudaMemcpyToSymbol(d_mixTab, mixtab3_cpu, tab, 3 * tab, cudaMemcpyHostToDevice);
+	/* Upload the mixing table once per device. */
+	cudaMemcpyToSymbol(d_mixTab0, mixtab0_cpu, sizeof(uint32_t) * 256, 0, cudaMemcpyHostToDevice);
 
-	CUDA_SAFE_CALL(cudaMalloc(&d_fugue256_hashoutput[thr_id], (size_t) 32 * threads));
-	cudaMalloc(&d_resultNonce[thr_id], sizeof(uint32_t));
+	CUDA_SAFE_CALL(cudaMalloc(&d_resNonce[thr_id], 2 * sizeof(uint32_t)));
+	armed[thr_id] = false;
 }
 
 __host__
 void fugue256_cpu_free(int thr_id)
 {
-	cudaFree(d_fugue256_hashoutput[thr_id]);
-	cudaFree(d_resultNonce[thr_id]);
+	cudaFree(d_resNonce[thr_id]);
+	d_resNonce[thr_id] = NULL;
 }
 
 __host__
 void fugue256_cpu_setBlock(int thr_id, void *data, void *pTargetIn)
 {
+	/* sph keeps the last 4-byte word (the nonce) pending, so this state has
+	 * absorbed 19 words and the kernel resumes at sub-round 4 with the nonce. */
 	sph_fugue256_context ctx_fugue_const;
 	sph_fugue256_init(&ctx_fugue_const);
 	sph_fugue256 (&ctx_fugue_const, data, 80);
-	cudaMemcpyToSymbol(GPUstate, ctx_fugue_const.S, sizeof(uint32_t) * 30);
+
+	/* nonce-free part of sub-round 4: TIX2 without q, then CMIX30 */
+	uint32_t pre[30], cr[7] = { 0 };
+	memcpy(pre, ctx_fugue_const.S, sizeof(pre));
+	pre[16] ^= pre[6];
+	pre[7] ^= pre[0];
+	pre[3] ^= pre[7]; pre[4] ^= pre[8]; pre[5] ^= pre[9];
+	pre[18] ^= pre[7]; pre[19] ^= pre[8]; pre[20] ^= pre[9];
+	/* the x0..x2 lookups of SMIX(S03, S04, S05, S06): c0 c1 c2 r0 r1 r2 r3 */
+	for (int w = 0; w < 3; w++) {
+		const uint32_t x = pre[3 + w];
+		for (int k = 0; k < 4; k++) {
+			const uint32_t t0 = mixtab0_cpu[(x >> (24 - 8 * k)) & 0xFF];
+			const uint32_t t = k ? ((t0 >> (8 * k)) | (t0 << (32 - 8 * k))) : t0;
+			cr[w] ^= t;                 /* c_w takes all four */
+			if (k != w) cr[3 + k] ^= t; /* r_k takes every word but its own */
+		}
+	}
+	cudaMemcpyToSymbol(GPUpre, pre, sizeof(pre));
+	cudaMemcpyToSymbol(GPUpreCR, cr, sizeof(cr));
 
 	cudaMemcpyToSymbol(pTarget, pTargetIn, 32);
-
-	cudaMemset(d_resultNonce[thr_id], 0xFF, sizeof(uint32_t));
 }
 
+/* Returns the lowest candidate of the launch (UINT32_MAX if none) and the
+ * second lowest in *secNonce. */
 __host__
-void fugue256_cpu_hash(int thr_id, uint32_t threads, uint32_t startNounce, void *outputHashes, uint32_t *nounce)
+uint32_t fugue256_cpu_hash(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *secNonce)
 {
-	const uint32_t threadsperblock = 256; // must match the mixtab staging width
-	// berechne wie viele Thread Blocks wir brauchen
-	dim3 grid((threads + threadsperblock-1)/threadsperblock);
-	dim3 block(threadsperblock);
+	if (!armed[thr_id]) {
+		cudaMemset(d_resNonce[thr_id], 0xFF, 2 * sizeof(uint32_t));
+		armed[thr_id] = true;
+	}
 
-	// Größe des dynamischen Shared Memory Bereichs
-	size_t shared_size = 4 * 256 * sizeof(uint32_t);
-	fugue256_gpu_hash<<<grid, block, shared_size>>>(thr_id, threads, startNounce, d_fugue256_hashoutput[thr_id], d_resultNonce[thr_id]);
+	if (device_sm[device_map[thr_id]] < 700) {
+		/* sm_6x: TPB 512 is faster at the same residency; newer arches tie */
+		const uint32_t tpb = 512;
+		fugue256_gpu_hash<512, false><<<(threads + tpb-1)/tpb, tpb, FUGUE_SHARED_BYTES>>>(threads, startNounce, d_resNonce[thr_id]);
+	} else if (device_sm[device_map[thr_id]] >= 800) {
+		const uint32_t tpb = 256;
+		fugue256_gpu_hash<256, true><<<(threads + tpb-1)/tpb, tpb, FUGUE_SHARED_BYTES>>>(threads, startNounce, d_resNonce[thr_id]);
+	} else {
+		const uint32_t tpb = 256;
+		fugue256_gpu_hash<256, false><<<(threads + tpb-1)/tpb, tpb, FUGUE_SHARED_BYTES>>>(threads, startNounce, d_resNonce[thr_id]);
+	}
 
-	// Strategisches Sleep Kommando zur Senkung der CPU Last
+	// sleep-based sync, keeps CPU load low
 	MyStreamSynchronize(NULL, 0, thr_id);
 
-	//cudaMemcpy(outputHashes, d_fugue256_hashoutput[thr_id], 8 * sizeof(uint32_t), cudaMemcpyDeviceToHost);
-	cudaMemcpy(nounce, d_resultNonce[thr_id], sizeof(uint32_t), cudaMemcpyDeviceToHost);
+	uint32_t res[2] = { UINT32_MAX, UINT32_MAX };
+	cudaMemcpy(res, d_resNonce[thr_id], sizeof(res), cudaMemcpyDeviceToHost);
+	if (res[0] != UINT32_MAX)
+		armed[thr_id] = false;
+	*secNonce = res[1];
+	return res[0];
+}
+
+/* ---- init-time self-test (fail-closed, cuda/selftest_gate.cuh) ---- */
+
+#define FUGUE_ST_SPAN  299 /* two blocks, the second one ragged */
+#define FUGUE_ST_START 0x51u
+
+static void fugue256_st_hash(const uint32_t *endiandata, uint32_t nonce, uint32_t *digest)
+{
+	uint32_t data[20];
+	memcpy(data, endiandata, sizeof(data));
+	data[19] = SWAB32(nonce); // the kernel reads the nonce word big-endian
+	sph_fugue256_context ctx;
+	sph_fugue256_init(&ctx);
+	sph_fugue256(&ctx, data, 80);
+	sph_fugue256_close(&ctx, digest);
+}
+
+static bool fugue256_st_lower(const uint32_t *a, const uint32_t *b) // a < b as 256-bit LE words
+{
+	for (int i = 7; i >= 0; i--)
+		if (a[i] != b[i]) return a[i] < b[i];
+	return false;
+}
+
+bool fugue256_device_selftest(int thr_id)
+{
+	/* Fugue-256("") -- the designers' published empty-message digest */
+	static const uint8_t fugue_empty[32] = {
+		0xd6,0xec,0x52,0x89,0x80,0xc1,0x30,0xaa, 0xd1,0xd1,0xac,0xd2,0x8b,0x9d,0xd8,0xdb,
+		0xde,0xae,0x0d,0x79,0xed,0xed,0x1f,0xca, 0x72,0xc2,0xaf,0x9f,0x37,0xc2,0x24,0x6f
+	};
+	uint8_t d[32];
+	sph_fugue256_context ctx;
+	sph_fugue256_init(&ctx);
+	sph_fugue256(&ctx, "", 0);
+	sph_fugue256_close(&ctx, d);
+	const bool host_ok = memcmp(d, fugue_empty, 32) == 0;
+
+	uint32_t data[20];
+	for (int i = 0; i < 20; i++)
+		data[i] = 0x01020304u * (uint32_t)(i + 1);
+
+	/* The target is the SECOND lowest digest of the span, so exactly two nonces
+	 * pass, and the device must report both, lowest nonce first. */
+	uint32_t lo[8], hi[8], dig[8];
+	uint32_t n_lo = UINT32_MAX, n_hi = UINT32_MAX;
+	memset(lo, 0xff, 32); memset(hi, 0xff, 32);
+	for (uint32_t t = 0; t < FUGUE_ST_SPAN; t++) {
+		const uint32_t n = FUGUE_ST_START + t;
+		fugue256_st_hash(data, n, dig);
+		if (fugue256_st_lower(dig, lo)) {
+			memcpy(hi, lo, 32); n_hi = n_lo;
+			memcpy(lo, dig, 32); n_lo = n;
+		} else if (fugue256_st_lower(dig, hi)) {
+			memcpy(hi, dig, 32); n_hi = n;
+		}
+	}
+	const uint32_t want0 = min(n_lo, n_hi), want1 = max(n_lo, n_hi);
+
+	fugue256_cpu_setBlock(thr_id, data, hi);
+	uint32_t got1 = 0;
+	const uint32_t got0 = fugue256_cpu_hash(thr_id, FUGUE_ST_SPAN, FUGUE_ST_START, &got1);
+	const bool kat_ok = (got0 == want0) && (got1 == want1);
+
+	/* Same target, one header bit flipped: the answer must not survive. */
+	data[0] ^= 1u;
+	fugue256_cpu_setBlock(thr_id, data, hi);
+	uint32_t neg1 = 0;
+	const uint32_t neg0 = fugue256_cpu_hash(thr_id, FUGUE_ST_SPAN, FUGUE_ST_START, &neg1);
+	const bool neg_ok = !(neg0 == want0 && neg1 == want1);
+
+	const cudaError_t err = cudaGetLastError();
+	if (err != cudaSuccess) {
+		gpulog(LOG_ERR, thr_id, "fugue256 self-test: %s", cudaGetErrorString(err));
+		selftest_cuda_fault();
+	}
+
+	const bool passed = host_ok && kat_ok && neg_ok && err == cudaSuccess;
+	if (!passed)
+		gpulog(LOG_ERR, thr_id, "fugue256 self-test FAILED (host %d kat %d neg %d)"
+			" want=%08x/%08x got=%08x/%08x", (int)host_ok, (int)kat_ok, (int)neg_ok,
+			want0, want1, got0, got1);
+
+	return selftest_gate(thr_id, "fugue256", passed);
 }

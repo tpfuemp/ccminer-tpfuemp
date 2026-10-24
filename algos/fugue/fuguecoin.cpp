@@ -28,10 +28,11 @@ int scanhash_fugue256(int thr_id, struct work* work, uint32_t max_nonce, unsigne
 	uint32_t _ALIGN(64) endiandata[20];
 	uint32_t *pdata = work->data;
 	uint32_t *ptarget = work->target;
-	uint32_t start_nonce = pdata[19]++;
-	int intensity = (device_sm[device_map[thr_id]] > 500) ? 22 : 19;
+	const uint32_t first_nonce = pdata[19];
+	/* 2^25 (~35 ms launches), tuned on a GTX 1080 Ti (sm_61) and an RTX 3060 (sm_86) */
+	int intensity = (device_sm[device_map[thr_id]] > 500) ? 25 : 19;
 	uint32_t throughput = cuda_default_throughput(thr_id, 1U << intensity);
-	if (init[thr_id]) throughput = min(throughput, max_nonce - start_nonce);
+	if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
 	if (opt_benchmark)
 		ptarget[7] = 0xf;
@@ -48,7 +49,9 @@ int scanhash_fugue256(int thr_id, struct work* work, uint32_t max_nonce, unsigne
 		}
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
-		fugue256_cpu_init(thr_id, throughput);
+		fugue256_cpu_init(thr_id);
+		/* fail-closed; leaves its own header in the device symbols, setBlock below replaces it */
+		fugue256_device_selftest(thr_id);
 		init[thr_id] = true;
 	}
 
@@ -59,29 +62,57 @@ int scanhash_fugue256(int thr_id, struct work* work, uint32_t max_nonce, unsigne
 	fugue256_cpu_setBlock(thr_id, endiandata, (void*)ptarget);
 
 	do {
-		// GPU
-		uint32_t foundNounce = UINT32_MAX;
-		fugue256_cpu_hash(thr_id, throughput, pdata[19], NULL, &foundNounce);
+		// GPU: the two lowest candidates of the launch
+		work->nonces[0] = fugue256_cpu_hash(thr_id, throughput, pdata[19], &work->nonces[1]);
 
-		*hashes_done = pdata[19] - start_nonce + throughput;
+		*hashes_done = pdata[19] - first_nonce + throughput;
 
-		if (foundNounce < UINT32_MAX && bench_algo < 0)
+		if (work->nonces[0] != UINT32_MAX && bench_algo < 0)
 		{
-			uint32_t vhash[8];
-			sph_fugue256_context ctx_fugue;
-			endiandata[19] = SWAP32(foundNounce);
+			const uint32_t Htarg = ptarget[7];
+			uint32_t _ALIGN(64) vhash[8];
+			/* everything up to the higher of the two has been screened */
+			const uint32_t scanned = (work->nonces[1] != UINT32_MAX) ? work->nonces[1] : work->nonces[0];
+			work->valid_nonces = 0;
 
-			sph_fugue256_init(&ctx_fugue);
-			sph_fugue256 (&ctx_fugue, endiandata, 80);
-			sph_fugue256_close(&ctx_fugue, &vhash);
-
-			if (vhash[7] <= ptarget[7] && fulltest(vhash, ptarget))
-			{
+			endiandata[19] = SWAP32(work->nonces[0]);
+			fugue256_hash((unsigned char*)vhash, (const unsigned char*)endiandata, 80);
+			if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
 				work_set_target_ratio(work, vhash);
-				pdata[19] = foundNounce;
-				return 1;
+				work->valid_nonces++;
 			} else {
-				gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", foundNounce);
+				gpu_increment_reject(thr_id);
+				gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
+			}
+
+			if (work->nonces[1] != UINT32_MAX) {
+				endiandata[19] = SWAP32(work->nonces[1]);
+				fugue256_hash((unsigned char*)vhash, (const unsigned char*)endiandata, 80);
+				if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
+					if (!work->valid_nonces) {
+						/* the first failed: this one is the share (slot 0) */
+						work->nonces[0] = work->nonces[1];
+						work_set_target_ratio(work, vhash);
+					} else if (bn_hash_target_ratio(vhash, ptarget) > work->shareratio[0]) {
+						work->sharediff[1] = work->sharediff[0];
+						work->shareratio[1] = work->shareratio[0];
+						const uint32_t n0 = work->nonces[0];
+						work->nonces[0] = work->nonces[1];
+						work->nonces[1] = n0;
+						work_set_target_ratio(work, vhash);
+					} else {
+						bn_set_target_ratio(work, vhash, 1);
+					}
+					work->valid_nonces++;
+				} else {
+					gpu_increment_reject(thr_id);
+					gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[1]);
+				}
+			}
+
+			if (work->valid_nonces) {
+				pdata[19] = scanned + 1; // next scan start
+				return work->valid_nonces;
 			}
 		}
 
@@ -94,7 +125,7 @@ int scanhash_fugue256(int thr_id, struct work* work, uint32_t max_nonce, unsigne
 
 	} while (!work_restart[thr_id].restart);
 
-	*hashes_done = pdata[19] - start_nonce;
+	*hashes_done = pdata[19] - first_nonce;
 	return 0;
 }
 

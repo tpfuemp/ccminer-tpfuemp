@@ -1,31 +1,29 @@
-# fugue (`-a fugue`)
+# fugue (`-a fugue256`)
 
-Fuguecoin proof-of-work (Fugue-256), relocated from the repo root
-(`fuguecoin.cpp`) as part of clearing algo sources out of the root directory.
+Fuguecoin proof-of-work: Fugue-256 of the 80-byte header.
 
-## Layout
+## Files
 
-Relocation only — every symbol (`scanhash_fugue256`, `fugue256_hash`,
-`free_fugue256`) is unchanged, so the dispatch wiring (`algos.h`
-`ALGO_FUGUE256`, `miner.h`, `ccminer.cpp` — live at `case ALGO_FUGUE256`) is
-untouched.
+- `fuguecoin.cpp` - host driver (`scanhash_fugue256`) and CPU reference (`fugue256_hash`, `sph_fugue256`).
+- `cuda_fugue256.h` - interface to the kernel (`fugue256_cpu_init` / `_setBlock` / `_hash` / `_free`,
+  `fugue256_device_selftest`).
+- `algos/stages/cuda_fugue256.cu` - the kernel. Single consumer: this algo.
 
-- `fuguecoin.cpp` — the host driver and CPU reference (`sph_fugue256`).
+## Kernel
 
-The GPU side is the shared Fugue-256 primitive in `algos/stages/`
-(`cuda_fugue256.cu` — `fugue256_cpu_init` / `fugue256_cpu_setBlock` /
-`fugue256_cpu_hash` / `fugue256_cpu_free`), so only the driver moved here.
-
-- `fuguecoin.cpp` — the host driver / CPU reference.
-- `cuda_fugue256.h` — the driver↔kernel interface (4 launcher declarations);
-  its sole consumer is `fuguecoin.cpp`, so it was moved out of the repo root to
-  live beside it (it is not build-registered — a plain included header).
-
-Includes are project-include-dir (`sph/sph_fugue.h`, `miner.h`, `cuda_runtime.h`)
-plus own-folder `"cuda_fugue256.h"`; no parent-relative (`../`) includes, so the
-move is source-transparent.
+- The host absorbs the 19 nonce-free header words (plus the nonce-free part of the next sub-round and
+  of its first SMIX); each thread hashes one nonce from there.
+- One mixing table (T0) in shared memory, replicated per lane group; the other three tables are byte
+  rotations of it. On sm_80+ the table index is computed on the IMAD pipe.
+- Digest word 7 is compared against the target before the last SMIX, which does not change it.
+- Launch: TPB 512 on sm_6x, 256 elsewhere; default intensity 25.
+- Candidates: the two lowest nonces of a launch (`report_candidate_2`); the host re-verifies both
+  with `sph_fugue256` + `fulltest` before submitting.
 
 ## Validation
 
-Rebuild + benchmark re-validation owed (relocation = rename; correctness follows
-from the unchanged diff). The host `sph_fugue256` re-verifies GPU candidates.
+- Init-time self-test, fail-closed: the published Fugue-256 empty-message digest for the CPU
+  reference, a two-candidate KAT through the real launcher over a ragged span, and a flipped-header
+  negative.
+- `--benchmark` finds and CPU re-verifies candidates (benchmark target `ptarget[7] = 0xf`).
+- No Fuguecoin pool is known to be running, so there is no live-share record.
