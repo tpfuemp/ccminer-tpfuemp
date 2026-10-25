@@ -129,6 +129,7 @@ void algo_free_all(int thr_id)
 	free_zr5(thr_id);
 	free_curvehash(thr_id);
 	free_bc3hash(thr_id);
+	free_pearlhash(thr_id);
 	free_kawpow(thr_id);
 	free_meowpow(thr_id);
 	free_evrprogpow(thr_id);

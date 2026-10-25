@@ -92,6 +92,7 @@ its command line interface and options.
                           xaya                NeoScrypt (XAYA variant)
                           nist5               NIST5 (TalkCoin)
                           odo / odocrypt      Odocrypt (DigiByte)
+                          pearlhash / pearl   Pearl (PRL), noisy int8 GEMM (rate in MAC/s)
                           penta               Pentablake (5x Blake-512)
                           phi / phi1612       PHI1612 (BHCoin)
                           polytimos           Polytimos

@@ -1431,6 +1431,9 @@
     <CudaCompile Include="algos\bc3hash\bc3hash.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
+    <CudaCompile Include="algos\pearlhash\pearlhash.cu">
+      <Filter>Source Files\CUDA</Filter>
+    </CudaCompile>
     <CudaCompile Include="algos\verthash\verthash.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>

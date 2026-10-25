@@ -104,6 +104,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `xaya` (`neoscrypt-xaya`) | NeoScrypt (XAYA variant) |
 | `nist5` | NIST5 (TalkCoin) |
 | `odo` (`odocrypt`) | Odocrypt (DigiByte) |
+| `pearlhash` (`pearl`) | Pearl (PRL), noisy int8 GEMM; rate in MAC/s |
 | `penta` | Pentablake (5× Blake-512) |
 | `phi` (`phi1612`) | PHI1612 (BHCoin) |
 | `polytimos` | Polytimos |

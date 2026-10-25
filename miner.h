@@ -387,6 +387,9 @@ extern int scanhash_soterg(int thr_id, struct work* work, uint32_t max_nonce, un
 extern int scanhash_x25x(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_curvehash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_bc3hash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern int scanhash_pearlhash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern uint32_t pearl_proof_put(char *b64);
+extern char *pearl_proof_take(uint32_t id);
 extern int scanhash_kawpow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern void free_kawpow(int thr_id);
 extern int scanhash_meowpow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
@@ -500,6 +503,7 @@ extern void free_soterg(int thr_id);
 extern void free_x25x(int thr_id);
 extern void free_curvehash(int thr_id);
 extern void free_bc3hash(int thr_id);
+extern void free_pearlhash(int thr_id);
 extern void free_equihash(int thr_id);
 void sha3t256_hash(void *state, const void *input);
 void soterg_hash(void *output, const void *input);
@@ -818,6 +822,10 @@ struct stratum_job {
 	unsigned char verus_solution[VERUS_SOL_FIXED_LEN];
 	bool          has_verus_target;
 	unsigned char verus_target[32];
+	// Pearl (PRL) job, see algos/pearlhash/
+	bool          pearl_job;
+	unsigned char pearl_header[76];
+	char          pearl_target[65];
 };
 
 struct stratum_ctx {
@@ -911,6 +919,10 @@ struct work {
 	unsigned char kawpow_mix[32];     // mix_hash of the found solution (for submit)
 	uint16_t      kawpow_prefix;      // 2-byte extranonce nonce prefix (top 16 bits)
 	uint64_t      kawpow_nonce;       // full 64-bit nonce of the found solution
+
+	// Pearl (PRL): data[] = raw 76-byte header + trial cursor, nonces[] = proof-stash ids
+	bool          is_pearl;
+	char          pearl_target[65];   // base share target, 64 hex, big-endian
 
 	/* pok getwork txs */
 	uint32_t tx_count;

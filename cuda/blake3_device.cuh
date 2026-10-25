@@ -12,9 +12,10 @@
  * 1024. The 180-byte case is decred's header -- three blocks, last block 52
  * bytes, and a middle block carrying NO flags.
  *
- * NOT valid for input > 1024 bytes: that needs the chunk tree (chunk counters,
- * parent nodes). This is the tree's ONLY BLAKE3: decred, hoohash and rinhash all
- * use it, so a change here lands on three consensus algos at once.
+ * blake3_256() is NOT valid for input > 1024 bytes; blake3_hash() (below) is the
+ * full chunk tree, keyed or unkeyed. This is the tree's ONLY BLAKE3: decred,
+ * hoohash, rinhash and pearlhash all use it, so a change to the shared core lands
+ * on four consensus algos at once.
  */
 #ifndef CUDA_BLAKE3_DEVICE_CUH
 #define CUDA_BLAKE3_DEVICE_CUH
@@ -225,6 +226,137 @@ static B3_HD void blake3_final(const uint32_t cv[8], const uint32_t m[16],
 		out[i*4+2] = (uint8_t)(next[i] >> 16);
 		out[i*4+3] = (uint8_t)(next[i] >> 24);
 	}
+}
+
+/* ---------------------------------------------------------------------------
+ * Keyed mode and the full chunk tree. blake3_keyed_block(): keyed hash of one
+ * 64-byte block. blake3_hash(): any length, keyed (key != NULL) or not.
+ */
+#define BLAKE3_PARENT		4u
+#define BLAKE3_KEYED_HASH	16u
+
+static B3_HDI void blake3_cv_to_bytes(const uint32_t cv[8], uint8_t *out)
+{
+	#pragma unroll
+	for (int i = 0; i < 8; i++) {
+		out[i*4]   = (uint8_t)(cv[i]);
+		out[i*4+1] = (uint8_t)(cv[i] >> 8);
+		out[i*4+2] = (uint8_t)(cv[i] >> 16);
+		out[i*4+3] = (uint8_t)(cv[i] >> 24);
+	}
+}
+
+/* keyed BLAKE3-256 of exactly one 64-byte block (m = 16 LE words) */
+static B3_HD void blake3_keyed_block(const uint32_t key[8], const uint32_t m[16], uint32_t out_cv[8])
+{
+	blake3_compress(key, m, 0, BLAKE3_BLOCK_LEN,
+		BLAKE3_CHUNK_START | BLAKE3_CHUNK_END | BLAKE3_ROOT | BLAKE3_KEYED_HASH, out_cv);
+}
+
+/* A node whose compression is still pending, so the caller can decide ROOT. */
+typedef struct {
+	uint32_t cv[8];
+	uint32_t block[16];
+	uint64_t counter;
+	uint32_t block_len;
+	uint32_t flags;
+} blake3_node;
+
+/* All blocks of one chunk except the last are compressed; the last is left pending. */
+static B3_HD void blake3_chunk_node(const uint32_t key[8], const uint8_t *in, size_t len,
+	uint64_t chunk_counter, uint32_t base_flags, blake3_node *node)
+{
+	uint32_t cv[8];
+	for (int i = 0; i < 8; i++) cv[i] = key[i];
+	size_t pos = 0;
+	uint32_t start = BLAKE3_CHUNK_START;
+	while (len - pos > BLAKE3_BLOCK_LEN) {
+		uint32_t block[16], next[8];
+		blake3_words_from_le(in + pos, block);
+		blake3_compress(cv, block, chunk_counter, BLAKE3_BLOCK_LEN, base_flags | start, next);
+		for (int i = 0; i < 8; i++) cv[i] = next[i];
+		start = 0;
+		pos += BLAKE3_BLOCK_LEN;
+	}
+	uint8_t buf[BLAKE3_BLOCK_LEN];
+	for (int i = 0; i < BLAKE3_BLOCK_LEN; i++)
+		buf[i] = (pos + i < len) ? in[pos + i] : 0;
+	for (int i = 0; i < 8; i++) node->cv[i] = cv[i];
+	blake3_words_from_le(buf, node->block);
+	node->counter = chunk_counter;
+	node->block_len = (uint32_t)(len - pos);
+	node->flags = base_flags | start | BLAKE3_CHUNK_END;
+}
+
+static B3_HD void blake3_parent_node(const uint32_t key[8], const uint32_t left[8],
+	const uint32_t right[8], uint32_t base_flags, blake3_node *node)
+{
+	for (int i = 0; i < 8; i++) {
+		node->cv[i] = key[i];
+		node->block[i] = left[i];
+		node->block[8 + i] = right[i];
+	}
+	node->counter = 0;
+	node->block_len = BLAKE3_BLOCK_LEN;
+	node->flags = base_flags | BLAKE3_PARENT;
+}
+
+static B3_HD void blake3_node_cv(const blake3_node *node, uint32_t extra_flags, uint32_t out_cv[8])
+{
+	blake3_compress(node->cv, node->block, node->counter, node->block_len,
+		node->flags | extra_flags, out_cv);
+}
+
+/* BLAKE3-256 of any length; key == NULL for the unkeyed hash. Standard tree:
+ * chunk CVs are merged on a stack whenever the chunk count gains a trailing zero
+ * bit, and only the final node is compressed with ROOT. 54 stack entries cover
+ * the 2^64-byte maximum. */
+static B3_HD void blake3_hash(const uint8_t *in, size_t len, const uint8_t *key, uint8_t *out)
+{
+	uint32_t kw[8];
+	uint32_t base_flags = 0;
+	if (key) {
+		for (int i = 0; i < 8; i++)
+			kw[i] = (uint32_t)key[i*4] | ((uint32_t)key[i*4+1] << 8)
+			      | ((uint32_t)key[i*4+2] << 16) | ((uint32_t)key[i*4+3] << 24);
+		base_flags = BLAKE3_KEYED_HASH;
+	} else {
+		const uint32_t *IV = blake3_iv();
+		for (int i = 0; i < 8; i++) kw[i] = IV[i];
+	}
+
+	uint32_t stack[54][8];
+	int depth = 0;
+	uint64_t chunk = 0;
+	size_t pos = 0;
+	while (len - pos > BLAKE3_CHUNK_LEN) {
+		blake3_node node;
+		uint32_t cv[8];
+		blake3_chunk_node(kw, in + pos, BLAKE3_CHUNK_LEN, chunk, base_flags, &node);
+		blake3_node_cv(&node, 0, cv);
+		chunk++;
+		pos += BLAKE3_CHUNK_LEN;
+		for (uint64_t t = chunk; (t & 1) == 0; t >>= 1) {
+			blake3_node parent;
+			depth--;
+			blake3_parent_node(kw, stack[depth], cv, base_flags, &parent);
+			blake3_node_cv(&parent, 0, cv);
+		}
+		for (int i = 0; i < 8; i++) stack[depth][i] = cv[i];
+		depth++;
+	}
+
+	blake3_node node;
+	blake3_chunk_node(kw, in + pos, len - pos, chunk, base_flags, &node);
+	while (depth > 0) {
+		uint32_t right[8];
+		blake3_node_cv(&node, 0, right);
+		depth--;
+		blake3_parent_node(kw, stack[depth], right, base_flags, &node);
+	}
+	uint32_t root[8];
+	blake3_node_cv(&node, BLAKE3_ROOT, root);
+	blake3_cv_to_bytes(root, out);
 }
 
 /* --- decred: a 180-byte header, so 64 + 64 + 52 and the nonce at byte 140 --- */

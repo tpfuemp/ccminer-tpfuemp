@@ -125,6 +125,7 @@ enum sha_algos {
 	ALGO_HOMESCRYPT,
 	ALGO_VERUS,
 	ALGO_BC3HASH,
+	ALGO_PEARLHASH,
 	ALGO_AUTO,
 	ALGO_COUNT
 };
@@ -268,6 +269,7 @@ static const char *algo_names[] = {
 	"homescrypt",
 	"verus",
 	"bc3hash",
+	"pearlhash",
 	"auto", /* reserved for multi algo */
 	""
 };
@@ -369,6 +371,8 @@ static inline int algo_to_int(char* arg)
 			i = ALGO_CURVEHASH;
 		else if (!strcasecmp("bc3", arg))
 			i = ALGO_BC3HASH;
+		else if (!strcasecmp("pearl", arg))
+			i = ALGO_PEARLHASH;
 		else
 			i = -1;
 	}

@@ -291,6 +291,7 @@ Options:\n\
 			balloon		Balloon hash\n\
 			bastion		Hefty bastion\n\
 			bc3hash		Bitcoin III (BC3Hash, from block 64360)\n\
+			pearlhash	Pearl (PRL, noisy int8 GEMM; rate in MAC/s)\n\
 			bitcore		Timetravel-10\n\
 			blake		Blake 256 (SFR)\n\
 			blake2b		Blake2-B 512 (BCX)\n\
@@ -1234,6 +1235,31 @@ static bool submit_upstream_work(CURL *curl, struct work *work)
 			return true;
 		}
 
+		// Pearl: mining.submit {job_id, plain_proof}; nonces[] holds a proof-stash id
+		if (opt_algo == ALGO_PEARLHASH) {
+			char *proof = pearl_proof_take(nonce);
+			if (!proof) {
+				applog(LOG_ERR, "pearlhash: proof %u not in the stash, share dropped", nonce);
+				return true;
+			}
+			const size_t len = strlen(proof) + strlen(work->job_id + 8) + 128;
+			char *line = (char*)malloc(len);
+			stratum.sharediff = work->sharediff[idnonce];
+			submit_id_remember(sub_id, stratum.sharediff);
+			snprintf(line, len, "{\"id\": %u, \"method\": \"mining.submit\", \"params\": "
+				"{\"job_id\": \"%s\", \"plain_proof\": \"%s\"}}", sub_id, work->job_id + 8, proof);
+			free(proof);
+			gettimeofday(&stratum.tv_submit, NULL);
+			const bool sent_ok = stratum_send_line(&stratum, line);
+			free(line);
+			if (unlikely(!sent_ok)) {
+				applog(LOG_ERR, "submit_upstream_work stratum_send_line failed");
+				return false;
+			}
+			stratum.job.shares_count++;
+			return true;
+		}
+
 		// Veil SHA256Dv: bespoke mining.submit carrying (nonce_hi, ntime, nonce_lo).
 		if (opt_algo == ALGO_SHA256DV) {
 			uint32_t v_ntime, v_hi, v_lo;
@@ -1928,6 +1954,18 @@ static bool stratum_gen_work(struct stratum_ctx *sctx, struct work *work)
 	// and the pool of the current stratum
 	work->pooln = sctx->pooln;
 
+	if (opt_algo == ALGO_PEARLHASH) {
+		// Pearl: raw 76-byte header, data[19] = trial cursor
+		memset(work->data, 0, sizeof(work->data));
+		memcpy(work->data, sctx->job.pearl_header, 76);
+		work->data[19] = 0;
+		work->is_pearl = sctx->job.pearl_job;
+		memcpy(work->pearl_target, sctx->job.pearl_target, sizeof(work->pearl_target));
+		work->targetdiff = sctx->job.diff;
+		pthread_mutex_unlock(&stratum_work_lock);
+		return true;
+	}
+
 	if (opt_algo == ALGO_HOMESCRYPT && sctx->job.lmt_job) {
 		// Lumenite pools send the finished header. Store each word as the
 		// big-endian decode of the wire so scanhash's be32enc restores it; ntime
@@ -2609,6 +2647,12 @@ static void *miner_thread(void *userdata)
 			memcpy(&work, &g_work, sizeof(struct work));
 			nonceptr[0] = pos;
 			nonceptr[2] = roll;
+		} else if (opt_algo == ALGO_PEARLHASH && (strcmp(work.job_id, g_work.job_id) ||
+		           strcmp(work.pearl_target, g_work.pearl_target))) {
+			/* retarget: same header, new job id and target; keep the trial position */
+			const uint32_t pos = nonceptr[0];
+			memcpy(&work, &g_work, sizeof(struct work));
+			nonceptr[0] = pos;
 		} else
 			nonceptr[0]++; //??
 
@@ -3325,6 +3369,9 @@ static void *miner_thread(void *userdata)
 		case ALGO_BC3HASH:
 			rc = scanhash_bc3hash(thr_id, &work, max_nonce, &hashes_done);
 			break;
+		case ALGO_PEARLHASH:
+			rc = scanhash_pearlhash(thr_id, &work, max_nonce, &hashes_done);
+			break;
 		case ALGO_VERTHASH:
 			rc = scanhash_verthash(thr_id, &work, max_nonce, &hashes_done);
 			break;
@@ -3422,6 +3469,10 @@ static void *miner_thread(void *userdata)
 				case ALGO_QUARK:
 					// to stay comparable to other ccminer forks or pools
 					rate_factor = 0.5;
+					break;
+				case ALGO_PEARLHASH:
+					// hashes_done is in units of 2^20 int8 MAC; show MAC/s
+					rate_factor = 1048576.0;
 					break;
 			}
 
@@ -3755,8 +3806,13 @@ static bool stratum_handle_response(char *buf)
 	} else {
 		if (!res_val)
 			goto out;
-		share_result(json_is_true(res_val), stratum.pooln, sharediff,
-			err_val ? json_string_value(json_array_get(err_val, 1)) : NULL);
+		/* errors are [code, "msg", ...] here, or {"code": n, "msg": "..."} (Pearl) */
+		const char *reason = NULL;
+		if (err_val && json_is_object(err_val))
+			reason = json_string_value(json_object_get(err_val, "msg"));
+		else if (err_val)
+			reason = json_string_value(json_array_get(err_val, 1));
+		share_result(json_is_true(res_val), stratum.pooln, sharediff, reason);
 	}
 
 	ret = true;

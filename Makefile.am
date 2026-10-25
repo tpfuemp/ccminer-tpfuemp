@@ -33,6 +33,7 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  algos/rinhash/rinhash_scanhash.cpp algos/rinhash/rinhash_coop.cu \
 			  algos/curvehash/curvehash_oracle.cpp algos/curvehash/curvehash.cu algos/curvehash/secp256k1_unity.c \
 			  algos/bc3hash/bc3hash_oracle.cpp algos/bc3hash/bc3hash.cu \
+			  algos/pearlhash/pearlhash.cu \
 			  algos/verthash/verthash.cu algos/verthash/cuda_verthash.cu \
 			  algos/verthash/verthash-cpu.c algos/verthash/verthash-data.cpp \
 			  cuda/sha3_device.cuh \
@@ -265,6 +266,11 @@ algos/bc3hash/bc3hash.o: algos/bc3hash/bc3hash.cu algos/bc3hash/cuda/bc3_constan
 		algos/bc3hash/cuda/bc3_hashes_device.cuh algos/bc3hash/cuda/bc3_modinv_device.cuh \
 		algos/bc3hash/cuda/bc3_secp_device.cuh
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=255 -o $@ -c $<
+
+# pearlhash: list the headers, the .cu is mostly them (header-only oracle + kernels)
+algos/pearlhash/pearlhash.o: algos/pearlhash/pearlhash.cu algos/pearlhash/pearl_device.cuh \
+		algos/pearlhash/pearl_ref.h algos/pearlhash/pearl_proof.h cuda/blake3_device.cuh
+	$(NVCC) $(nvcc_FLAGS) --maxrregcount=128 -o $@ -c $<
 
 algos/blake256/blake256.o: algos/blake256/blake256.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=64 -o $@ -c $<

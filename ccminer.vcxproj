@@ -409,6 +409,7 @@
     <CudaCompile Include="algos\bc3hash\bc3hash.cu">
       <MaxRegCount>255</MaxRegCount>
     </CudaCompile>
+    <CudaCompile Include="algos\pearlhash\pearlhash.cu" />
     <CudaCompile Include="algos\verthash\verthash.cu" />
     <CudaCompile Include="algos\verthash\cuda_verthash.cu" />
     <CudaCompile Include="algos\kawpow\cuda_kawpow.cu" />

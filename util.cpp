@@ -1300,6 +1300,8 @@ bool stratum_subscribe(struct stratum_ctx *sctx)
 	bool ret = false, retry = false;
 
 	if (sctx->rpc2) return true;
+	/* Pearl pools have no subscribe step (it answers error 20); authorize opens the session */
+	if (opt_algo == ALGO_PEARLHASH) return true;
 
 start:
 	const char *ua = opt_user_agent ? opt_user_agent : USER_AGENT;
@@ -1396,9 +1398,17 @@ bool stratum_authorize(struct stratum_ctx *sctx, const char *user, const char *p
 	if (sctx->rpc2)
 		return rpc2_stratum_authorize(sctx, user, pass);
 
-	s = (char*)malloc(80 + strlen(user) + strlen(pass));
-	sprintf(s, "{\"id\": 2, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"%s\"]}",
-	        user, pass);
+	if (opt_algo == ALGO_PEARLHASH) {
+		/* named params; the pool splits "wallet.worker" itself */
+		const char *ua = opt_user_agent ? opt_user_agent : USER_AGENT;
+		s = (char*)malloc(128 + strlen(user) + strlen(pass) + strlen(ua));
+		sprintf(s, "{\"id\": 2, \"method\": \"mining.authorize\", \"params\": "
+			"{\"wallet\": \"%s\", \"pass\": \"%s\", \"agent\": \"%s\"}}", user, pass, ua);
+	} else {
+		s = (char*)malloc(80 + strlen(user) + strlen(pass));
+		sprintf(s, "{\"id\": 2, \"method\": \"mining.authorize\", \"params\": [\"%s\", \"%s\"]}",
+		        user, pass);
+	}
 
 	if (!stratum_send_line(sctx, s))
 		goto out;
@@ -1434,7 +1444,8 @@ bool stratum_authorize(struct stratum_ctx *sctx, const char *user, const char *p
 	sctx->tm_connected = time(NULL);
 	ret = true;
 
-	if (!opt_extranonce)
+	/* Pearl jobs carry no extranonce */
+	if (!opt_extranonce || opt_algo == ALGO_PEARLHASH)
 		goto out;
 
 	// subscribe to extranonce (optional)
@@ -1656,6 +1667,74 @@ static bool kawpow_stratum_set_target(struct stratum_ctx *sctx, json_t *params)
 	return true;
 }
 
+// Pearl (PRL) mining.notify, object params: {header (76 bytes hex), height,
+// job_id "<8hex>_<diff>", target (64 hex, big-endian), cert_version (optional)}.
+static bool pearl_stratum_notify(struct stratum_ctx *sctx, json_t *params)
+{
+	const char *job_id = json_string_value(json_object_get(params, "job_id"));
+	const char *header = json_string_value(json_object_get(params, "header"));
+	const char *target = json_string_value(json_object_get(params, "target"));
+	json_t *j_height = json_object_get(params, "height");
+	json_t *j_cert = json_object_get(params, "cert_version");
+	int i;
+
+	if (!json_is_object(params) || !job_id || !header || !target ||
+	    strlen(header) != 152 || strlen(target) != 64 || strlen(job_id) > 100) {
+		applog(LOG_ERR, "Pearl notify: invalid parameters");
+		return false;
+	}
+	/* only certificate version 3 is implemented; a missing field means 3 */
+	if (j_cert && !json_is_null(j_cert)) {
+		json_int_t cv = json_is_integer(j_cert) ? json_integer_value(j_cert)
+			: (json_is_string(j_cert) ? atoi(json_string_value(j_cert)) : -1);
+		if (cv != 3) {
+			static json_int_t warned = 0;
+			if (cv != warned) {
+				warned = cv;
+				applog(LOG_ERR, "Pearl notify: pool requires certificate version %d, this miner "
+					"supports only version 3; job refused (update the miner)", (int) cv);
+			}
+			/* replace the job so the miner idles instead of mining the old one */
+			pthread_mutex_lock(&stratum_work_lock);
+			free(sctx->job.job_id);
+			sctx->job.job_id = strdup("pearl-refused");
+			sctx->job.pearl_job = false;
+			sctx->job.clean = true;
+			pthread_mutex_unlock(&stratum_work_lock);
+			return true;
+		}
+	}
+	pthread_mutex_lock(&stratum_work_lock);
+	if (!hex2bin(sctx->job.pearl_header, header, 76)) {
+		pthread_mutex_unlock(&stratum_work_lock);
+		applog(LOG_ERR, "Pearl notify: bad header hex");
+		return false;
+	}
+	free(sctx->job.job_id);
+	sctx->job.job_id = strdup(job_id);
+	memcpy(sctx->job.pearl_target, target, 64);
+	sctx->job.pearl_target[64] = '\0';
+	memcpy(sctx->job.version, sctx->job.pearl_header, 4);
+	memcpy(sctx->job.ntime, sctx->job.pearl_header + 68, 4);
+	memcpy(sctx->job.nbits, sctx->job.pearl_header + 72, 4);
+	for (i = 0; i < sctx->job.merkle_count; i++)
+		free(sctx->job.merkle[i]);
+	free(sctx->job.merkle);
+	sctx->job.merkle = NULL;
+	sctx->job.merkle_count = 0;
+	sctx->job.height = j_height ? (uint32_t) json_integer_value(j_height) : 0;
+	sctx->job.clean = true;
+	sctx->job.pearl_job = true;
+	/* the job id's suffix is the pool's difficulty band: display only */
+	{
+		const char *u = strrchr(job_id, '_');
+		double d = u ? atof(u + 1) : 0.;
+		sctx->job.diff = d > 0. ? d : 1.;
+	}
+	pthread_mutex_unlock(&stratum_work_lock);
+	return true;
+}
+
 // Lumenite (MeshPool) mining.notify, with the finished header:
 // [job_id, header_hex(160), nbits_hex, clean, extranonce2_hex, ntime_hex].
 // The standard submit echoes this extranonce2.
@@ -1732,6 +1811,8 @@ static bool stratum_notify(struct stratum_ctx *sctx, json_t *params)
 	if (is_progpow_algo(opt_algo)) {
 		return kawpow_stratum_notify(sctx, params);
 	}
+	if (opt_algo == ALGO_PEARLHASH)
+		return pearl_stratum_notify(sctx, params);
 	/* Set-only in kawpow_stratum_notify(): reaching here means this job is not a
 	 * ProgPoW one, so the flag must not outlive the algo that set it. */
 	sctx->job.is_kawpow = false;
