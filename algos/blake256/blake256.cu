@@ -802,9 +802,14 @@ extern "C" int scanhash_blake256(int thr_id, struct work* work, uint32_t max_non
 			continue;
 		}
 
+		if ((uint64_t) throughput + pdata[19] >= max_nonce) {
+			pdata[19] = max_nonce;
+			break;
+		}
 		pdata[19] += throughput;
 
-	} while (!work_restart[thr_id].restart && max_nonce > (uint64_t)throughput + pdata[19]);
+		// the range check also catches the resume-after-candidates `continue`
+	} while (!work_restart[thr_id].restart && pdata[19] < max_nonce);
 
 	*hashes_done = pdata[19] - first_nonce;
 

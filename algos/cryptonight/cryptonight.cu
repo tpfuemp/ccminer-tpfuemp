@@ -155,7 +155,7 @@ extern "C" int scanhash_cryptonight(int thr_id, struct work* work, uint32_t max_
 		nonce += throughput;
 		gpulog(LOG_DEBUG, thr_id, "nonce %08x", nonce);
 
-	} while (!work_restart[thr_id].restart && max_nonce > (uint64_t)throughput + nonce);
+	} while (!work_restart[thr_id].restart);
 
 done:
 	gpulog(LOG_DEBUG, thr_id, "nonce %08x exit", nonce);

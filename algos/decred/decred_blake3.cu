@@ -292,10 +292,13 @@ extern "C" int scanhash_decred(int thr_id, struct work *work, uint32_t max_nonce
 				return work->valid_nonces;
 			}
 		}
+		if ((uint64_t) throughput + (*pnonce) >= max_nonce) {
+			*pnonce = max_nonce;
+			break;
+		}
 		*pnonce += throughput;
 
-	} while (!work_restart[thr_id].restart
-		&& max_nonce > (uint64_t)throughput + (*pnonce));
+	} while (!work_restart[thr_id].restart);
 
 	*hashes_done = (*pnonce) - first_nonce;
 	MyStreamSynchronize(NULL, 0, device_map[thr_id]);
