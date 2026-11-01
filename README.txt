@@ -143,7 +143,7 @@ its command line interface and options.
                           x25x                X25X (SUQA/SIN)
                           yescrypt            Globalboost-Y (BSTY) or custom --yescrypt-param
                           yescryptr8          BitZeny (ZNY)
-                          yescryptr16         Yenten (YTN)
+                          yescryptr16         yescrypt r=16 (Yenten before yespowerr16)
                           yescryptr16v2       PPTP
                           yescryptr24         JagariCoinR
                           yescryptr32         WAVI

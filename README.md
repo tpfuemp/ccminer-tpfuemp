@@ -153,7 +153,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `x25x` | X25X (SUQA/SIN) |
 | `yescrypt` | Yescrypt / Globalboost-Y (BSTY), custom `--yescrypt-param` |
 | `yescryptr8` | BitZeny (ZNY) |
-| `yescryptr16` | Yenten (YTN) |
+| `yescryptr16` | yescrypt r=16 (Yenten before it moved to `yespowerr16`) |
 | `yescryptr16v2` | PPTP |
 | `yescryptr24` | JagariCoinR |
 | `yescryptr32` | WAVI |
