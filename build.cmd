@@ -9,4 +9,6 @@ REM environment variable appends the option to every cl invocation without
 REM overriding the per-file AdditionalOptions in the project.
 set CL=/FS
 
-msbuild ccminer.vcxproj /m /p:Configuration=Release
+REM build.cmd      release build, CUDA sm_61/75/86 -> x64\Release\ccminer.exe
+REM build.cmd 86   dev build for one arch (61, 75 or 86) -> x64\Release-sm86\ccminer-sm86.exe
+if "%~1"=="" (msbuild ccminer.vcxproj /m /p:Configuration=Release) else (msbuild ccminer.vcxproj /m /p:Configuration=Release /p:DevArch=%~1)

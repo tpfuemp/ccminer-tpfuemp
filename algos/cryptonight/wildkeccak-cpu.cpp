@@ -17,9 +17,9 @@
 #include <emmintrin.h>
 #include <openssl/opensslv.h>
 #if OPENSSL_VERSION_NUMBER < 0x10100000L
-#include "compat/bignum_ssl10.hpp"
+#include "compat/bitcoin/bignum_ssl10.hpp"
 #else
-#include "bignum.hpp"
+#include "compat/bitcoin/bignum.hpp"
 #endif
 #include "int128_c.h"
 #else

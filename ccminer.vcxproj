@@ -50,6 +50,17 @@
   <PropertyGroup Label="Configuration" Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <UseOfMfc>false</UseOfMfc>
   </PropertyGroup>
+  <!-- CUDA targets. A dev build (msbuild ... -p:DevArch=86) compiles for that one
+       arch only, into its own output dirs, so its objects never reach a release link. -->
+  <PropertyGroup>
+    <CudaArchList Condition="'$(DevArch)'==''">compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CudaArchList>
+    <CudaArchList Condition="'$(DevArch)'!=''">compute_$(DevArch),sm_$(DevArch)</CudaArchList>
+  </PropertyGroup>
+  <PropertyGroup Condition="'$(DevArch)'!=''">
+    <OutDir>$(Platform)\$(Configuration)-sm$(DevArch)\</OutDir>
+    <IntDir>$(Platform)\$(Configuration)-sm$(DevArch)\</IntDir>
+    <TargetName>ccminer-sm$(DevArch)</TargetName>
+  </PropertyGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
     <Import Project="$(VCTargetsPath)\BuildCustomizations\CUDA 11.8.props" />
@@ -93,7 +104,7 @@
       <MaxRegCount>80</MaxRegCount>
       <PtxAsOptionV>true</PtxAsOptionV>
       <Keep>true</Keep>
-      <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
+      <CodeGeneration>$(CudaArchList)</CodeGeneration>
       <Include>$(NVTOOLSEXT_PATH)\include;..\..\..\Common\C99</Include>
       <AdditionalCompilerOptions>/d1trimfile:$(ProjectDir) %(AdditionalCompilerOptions)</AdditionalCompilerOptions>
     </CudaCompile>
@@ -126,7 +137,7 @@
       <MaxRegCount>80</MaxRegCount>
       <PtxAsOptionV>true</PtxAsOptionV>
       <Keep>true</Keep>
-      <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
+      <CodeGeneration>$(CudaArchList)</CodeGeneration>
       <Include>$(NVTOOLSEXT_PATH)\include;..\..\..\Common\C99</Include>
       <TargetMachinePlatform>64</TargetMachinePlatform>
       <AdditionalCompilerOptions>/d1trimfile:$(ProjectDir) %(AdditionalCompilerOptions)</AdditionalCompilerOptions>
@@ -170,7 +181,7 @@
       <MaxRegCount>80</MaxRegCount>
       <PtxAsOptionV>true</PtxAsOptionV>
       <Keep>true</Keep>
-      <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
+      <CodeGeneration>$(CudaArchList)</CodeGeneration>
       <AdditionalOptions>--ptxas-options="-O2" --Wno-deprecated-gpu-targets %(AdditionalOptions)</AdditionalOptions>
       <Optimization>O2</Optimization>
       <AdditionalCompilerOptions>/d1trimfile:$(ProjectDir) %(AdditionalCompilerOptions)</AdditionalCompilerOptions>
@@ -214,7 +225,7 @@
       <MaxRegCount>128</MaxRegCount>
       <PtxAsOptionV>true</PtxAsOptionV>
       <Keep>true</Keep>
-      <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
+      <CodeGeneration>$(CudaArchList)</CodeGeneration>
       <Include>$(NVTOOLSEXT_PATH)\include</Include>
       <Optimization>O3</Optimization>
       <TargetMachinePlatform>64</TargetMachinePlatform>
@@ -358,8 +369,8 @@
     <ClCompile Include="sph\hmac_blake2b.c" />
     <ClCompile Include="core\util.cpp" />
     <ClCompile Include="core\bench.cpp" />
-    <ClCompile Include="bignum.cpp" />
-    <ClInclude Include="bignum.hpp" />
+    <ClCompile Include="core\bignum.cpp" />
+    <ClInclude Include="compat\bitcoin\bignum.hpp" />
     <ClCompile Include="algos\fugue\fuguecoin.cpp" />
     <ClCompile Include="algos\groestlcoin\groestlcoin.cpp" />
     <ClCompile Include="core\hashlog.cpp" />
@@ -374,7 +385,6 @@
     <ClCompile Include="core\api\api_http.c" />
     <ClCompile Include="core\api\api_routes.cpp" />
     <ClCompile Include="core\sysinfos.cpp" />
-    <ClCompile Include="crc32.c" />
     <ClCompile Include="algos\heavy\hefty1.c" />
     <ClCompile Include="algos\myriadgroestl\myriadgroestl.cpp" />
     <ClCompile Include="algos\lyra2\Lyra2.c" />
@@ -530,7 +540,7 @@
     <ClInclude Include="cuda\helper.cuh" />
     <ClInclude Include="cuda\helper_alexis.cuh" />
     <ClInclude Include="cuda\vector_uint2x4.cuh" />
-    <ClInclude Include="elist.h" />
+    <ClInclude Include="compat\elist.h" />
     <ClInclude Include="algos\heavy\heavy.h" />
     <ClInclude Include="algos\heavy\hefty1.h" />
     <ClInclude Include="algos.h" />
@@ -571,7 +581,7 @@
     <ClInclude Include="sph\sph_hamsi.h" />
     <ClInclude Include="sph\sph_types.h" />
     <ClInclude Include="sph\sph_whirlpool.h" />
-    <ClInclude Include="uint256.h" />
+    <ClInclude Include="compat\bitcoin\uint256.h" />
     <ClInclude Include="algos\lyra2\Lyra2.h" />
     <ClInclude Include="algos\lyra2\Sponge.h" />
     <ClInclude Include="algos\lyra2\Lyra2Z.h" />
@@ -795,9 +805,7 @@
     <CudaCompile Include="algos\stages\cuda_shabal512_80.cu" />
     <CudaCompile Include="algos\stages\cuda_shavite512_80.cu" />
     <CudaCompile Include="algos\stages\cuda_simd512_80.cu" />
-    <CudaCompile Include="algos\stages\cuda_echo512_64.cu">
-      <CodeGeneration>compute_61,sm_61;compute_75,sm_75;compute_86,sm_86</CodeGeneration>
-    </CudaCompile>
+    <CudaCompile Include="algos\stages\cuda_echo512_64.cu" />
     <CudaCompile Include="algos\x17\hmq1725.cu" />
     <CudaCompile Include="algos\x17\x17.cu" />
     <CudaCompile Include="algos\x17\skydoge.cu" />

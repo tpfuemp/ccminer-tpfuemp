@@ -198,9 +198,6 @@
     <ClCompile Include="core\pools.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="crc32.c">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="sph\aes_helper.c">
       <Filter>Source Files\sph</Filter>
     </ClCompile>
@@ -366,7 +363,7 @@
     <ClCompile Include="core\bench.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="bignum.cpp">
+    <ClCompile Include="core\bignum.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="core\gpu\nvapi.cpp">
@@ -570,7 +567,7 @@
     <ClInclude Include="compat.h">
       <Filter>Header Files\compat</Filter>
     </ClInclude>
-    <ClInclude Include="elist.h">
+    <ClInclude Include="compat\elist.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="core\api\api_control.h">
@@ -609,7 +606,7 @@
     <ClInclude Include="compat\ccminer-config.h">
       <Filter>Header Files\compat</Filter>
     </ClInclude>
-    <ClInclude Include="uint256.h">
+    <ClInclude Include="compat\bitcoin\uint256.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="algos\groestlcoin\cuda_groestl.h">
@@ -786,7 +783,7 @@
     <ClInclude Include="algos\heavy\hefty1.h">
       <Filter>Source Files\CUDA\heavy</Filter>
     </ClInclude>
-    <ClInclude Include="bignum.hpp">
+    <ClInclude Include="compat\bitcoin\bignum.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <CudaCompile Include="algos\quark\anime.cu">

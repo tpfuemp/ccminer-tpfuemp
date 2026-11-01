@@ -34,7 +34,7 @@ The two external consumers of the folder — `ccminer.cpp` and `core/util.cpp`, 
 `#include "crypto/xmr-rpc.h"` — were repointed to
 `"algos/cryptonight/xmr-rpc.h"`. All in-folder includes are own-folder /
 own-subdir (`cn_aes.cuh`, `cpu/c_keccak.h`, `oaes_lib.h`, ...) or
-project-include-dir (`miner.h`, `bignum.hpp`, `compat/...`), with no `../`
+project-include-dir (`miner.h`, `compat/bitcoin/bignum.hpp`, `compat/...`), with no `../`
 includes, so the rest of the move is source-transparent. GhostRider's `*_gr`
 externs are resolved by the linker and are unaffected by the path change.
 

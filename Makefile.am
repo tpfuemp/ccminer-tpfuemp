@@ -15,11 +15,11 @@ SUBDIRS = compat
 
 bin_PROGRAMS = ccminer
 
-ccminer_SOURCES	= elist.h miner.h compat.h \
+ccminer_SOURCES	= compat/elist.h miner.h compat.h \
 			  compat/inttypes.h compat/stdbool.h compat/unistd.h \
 			  compat/sys/time.h compat/getopt/getopt.h \
-			  crc32.c algos/heavy/hefty1.c \
-			  ccminer.cpp core/pools.cpp core/util.cpp core/bench.cpp bignum.cpp \
+			  algos/heavy/hefty1.c \
+			  ccminer.cpp core/pools.cpp core/util.cpp core/bench.cpp core/bignum.cpp \
 			  core/api/api.cpp core/api/api_control.cpp core/api/api_control.h core/api/api_model.cpp core/api/api_model.h core/api/api_http.c core/api/api_http.h core/api/api_metrics.c core/api/api_metrics.h core/api/api_routes.cpp core/api/api_routes.h core/hashlog.cpp core/gpu/nvml.cpp core/stats.cpp core/sysinfos.cpp core/cuda.cpp \
 			  core/gpu/nvsettings.cpp \
 			  algos/equihash/equi-stratum.cpp algos/equihash/equi.cpp algos/equihash/equi_verify_144.cpp algos/equihash/equi_verify_192.cpp algos/equihash/blake2/blake2bx.cpp \
@@ -91,7 +91,7 @@ algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh cuda/bl
 			  algos/heavy/cuda_heavy_keccak512.cu \
 			  algos/heavy/cuda_sha256.cu \
 			  algos/heavy/bastion.cu algos/heavy/cuda_bastion.cu \
-			  algos/fugue/fuguecoin.cpp algos/stages/cuda_fugue256.cu sph/fugue.c uint256.h \
+			  algos/fugue/fuguecoin.cpp algos/stages/cuda_fugue256.cu sph/fugue.c compat/bitcoin/uint256.h \
 			  algos/groestlcoin/groestlcoin.cpp algos/groestlcoin/cuda_groestl.cu algos/groestlcoin/cuda_groestl.h \
 			  algos/myriadgroestl/myriadgroestl.cpp algos/myriadgroestl/cuda_myriadgroestl.cu \
 			  algos/lyra2/Lyra2.c algos/lyra2/Sponge.c \

@@ -36,7 +36,7 @@
 #endif
 #include "miner.h"
 #include "algos.h"
-#include "elist.h"
+#include "compat/elist.h"
 
 #include "algos/cryptonight/xmr-rpc.h"
 

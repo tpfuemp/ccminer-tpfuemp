@@ -183,8 +183,13 @@ installed, and build the `Release|x64` configuration. From the command line:
 
 The executable is produced at `x64\Release\ccminer.exe`.
 
-To change the target GPU architectures, edit the CodeGeneration entries in the
-project (default `sm_61 / sm_75 / sm_86`).
+The default targets are `sm_61 / sm_75 / sm_86` (the `CudaArchList` property in
+the project). For a faster single-arch development build, pass `DevArch`:
+
+    msbuild ccminer.vcxproj /p:Configuration=Release /p:Platform=x64 /p:DevArch=86 /m
+
+(or `build.cmd 86`). It builds into `x64\Release-sm86\ccminer-sm86.exe`, separate
+from the release build, and runs only on that architecture.
 
 Building — Linux
 ----------------
@@ -201,6 +206,8 @@ source tree stays free of build artefacts.
 
 - To change the target GPU architectures, edit `nvcc_ARCH` in `Makefile.am`
   (default `sm_61 / sm_75 / sm_86`) and re-run `./build.sh`.
+- For a faster single-arch development build, run `./build.sh 86` (or `61`,
+  `75`). It builds into `build-linux-sm86/` and runs only on that architecture.
 - **WSL2:** the CUDA driver library `libcuda.so` lives in `/usr/lib/wsl/lib`
   rather than under the toolkit; `configure.sh` already adds it to `LDFLAGS`.
 
