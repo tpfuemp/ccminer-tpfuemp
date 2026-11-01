@@ -106,16 +106,23 @@ extern "C" int scanhash_whirl(int thr_id, struct work* work, uint32_t max_nonce,
 			if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
 				work->valid_nonces = 1;
 				work_set_target_ratio(work, vhash);
-				pdata[19] = work->nonces[0] + 1; // cursor
+				if (work->nonces[1] != UINT32_MAX) {
+					be32enc(&endiandata[19], work->nonces[1]);
+					wcoinhash(vhash, endiandata);
+					work_check_second_nonce(thr_id, work, vhash);
+					pdata[19] = work->nonces[1] + 1; // the kernel reports the two lowest
+				} else
+					pdata[19] = work->nonces[0] + 1; // cursor
 				return work->valid_nonces;
 			}
-			else if (vhash[7] > Htarg) {
+			if (vhash[7] > Htarg) {
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
-				gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
-				pdata[19] = work->nonces[0] + 1;
-				continue;
+					gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[0]);
 			}
+			/* also the vhash[7] <= Htarg case that fails fulltest */
+			pdata[19] = work->nonces[0] + 1;
+			continue;
 		}
 		if ((uint64_t) throughput + pdata[19] >= max_nonce) {
 			pdata[19] = max_nonce;
