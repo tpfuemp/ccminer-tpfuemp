@@ -12,7 +12,7 @@ its output (GOST R 34.11-2012).
 ## Layout
 
 Relocation only — every symbol (`scanhash_gostd`, `free_gostd`, the CPU
-references `gostd` / `gostd_hash`, and the device entry points `gostd_init` /
+references `gostd` / `gostd_hash`, and the device entry points `gostd_cpu_init` /
 `gostd_setBlock_80` / `gostd_hash_80`) is unchanged, so the dispatch wiring
 (`algos.h` `ALGO_GOSTCOIN` / `"gostcoin"`, `miner.h`, `ccminer.cpp`) is
 untouched.

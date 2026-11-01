@@ -15,7 +15,7 @@
 #include "cuda/echo512_device.cuh"
 
 __host__
-void echo512_cuda_init(int thr_id, const uint32_t threads)
+void echo512_cpu_init(int thr_id, const uint32_t threads)
 {
 	aes_cpu_init(thr_id);
 }
@@ -60,9 +60,9 @@ void echo512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_t sta
 /* Legacy forwarders — ghostrider and x21s still call these names; remove once
  * they call the bare echo512_* launchers directly. */
 __host__
-void x16_echo512_cuda_init(int thr_id, const uint32_t threads)
+void x16_echo512_cpu_init(int thr_id, const uint32_t threads)
 {
-	echo512_cuda_init(thr_id, threads);
+	echo512_cpu_init(thr_id, threads);
 }
 
 __host__

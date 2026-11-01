@@ -146,7 +146,7 @@ extern "C" void reset_host_prebuf(int thr_id)
 	host_prebuf_filled[thr_id] = 0;
 }
 
-void balloon_gpu_init(int thr_id)
+void balloon_cpu_init(int thr_id)
 {
 	CUDA_SAFE_CALL(cudaMalloc((void**)&device_prebuf_le[thr_id], (PREBUF_LEN / 8) * sizeof(uint64_t)));
 	CUDA_SAFE_CALL(cudaMalloc((void**)&device_winning_nonce[thr_id], (2 + BALLOON_SLOTS) * sizeof(uint32_t)));

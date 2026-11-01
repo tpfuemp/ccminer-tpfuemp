@@ -480,9 +480,9 @@ static void flex_stage_init_all(int thr_id, uint32_t threads)
 	fugue512_cpu_init(thr_id, threads);
 	shabal512_cpu_init(thr_id, threads);
 	whirlpool512_cpu_init(thr_id, threads, 0);
-	x16_echo512_cuda_init(thr_id, threads);        /* for x16_echo512_cuda_hash_80 */
+	x16_echo512_cpu_init(thr_id, threads);        /* for x16_echo512_cuda_hash_80 */
 	x16_fugue512_cpu_init(thr_id, threads);        /* for x16_fugue512_cuda_hash_80 */
-	x16_whirlpool512_init(thr_id, threads);        /* for x16_whirlpool512_hash_80
+	x16_whirlpool512_cpu_init(thr_id, threads);        /* for x16_whirlpool512_hash_80
 	 *
 	 * No JH: flex's pool does not contain it. */
 }

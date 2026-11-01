@@ -10,7 +10,7 @@
 
 #include <openssl/sha.h>
 
-extern void skeincoin_init(int thr_id);
+extern void skeincoin_cpu_init(int thr_id);
 extern void skeincoin_free(int thr_id);
 extern void skeincoin_setBlock_80(int thr_id, void *pdata);
 extern uint32_t skeincoin_hash_sm5(int thr_id, uint32_t threads, uint32_t startNounce, int swap, uint64_t target64, uint32_t *secNonce);
@@ -60,7 +60,7 @@ extern "C" int scanhash_skeincoin(int thr_id, struct work* work, uint32_t max_no
 		}
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
-		skeincoin_init(thr_id);
+		skeincoin_cpu_init(thr_id);
 
 		init[thr_id] = true;
 	}
@@ -75,7 +75,7 @@ extern "C" int scanhash_skeincoin(int thr_id, struct work* work, uint32_t max_no
 		// Hash with CUDA
 		*hashes_done = pdata[19] - first_nonce + throughput;
 
-		/* cuda_skeincoin.cu — the fused kernel reports up to two candidates per
+		/* cuda_skein.cu — the fused kernel reports up to two candidates per
 		 * batch, so nonces[1] must be armed before every launch (it is only
 		 * written when a second one is found). */
 		work->nonces[1] = UINT32_MAX;

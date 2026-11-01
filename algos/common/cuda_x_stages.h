@@ -13,7 +13,7 @@
  * real symbols (algos/stages/, layout B); the legacy quark_<prim>512_cpu_*
  * aliases were removed 2026-07-16 (every caller now uses the bare name).
  * quark_compactTest_* / cuda_check_hash_branch stay (genuine quark mechanisms,
- * used by quarkcoin/animecoin/jackpotcoin/jha). */
+ * used by quark/anime/jackpot/jha). */
 extern void blake512_cpu_init(int thr_id, uint32_t threads);
 extern void blake512_cpu_free(int thr_id);
 extern void blake512_cpu_setBlock_80(int thr_id, uint32_t *pdata);
@@ -217,10 +217,10 @@ void simd512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_t sta
 void x16_simd512_setBlock_80(void *pdata);
 void x16_simd512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_hash);
 
-void echo512_cuda_init(int thr_id, const uint32_t threads);
+void echo512_cpu_init(int thr_id, const uint32_t threads);
 void echo512_setBlock_80(void *pdata);
 void echo512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_hash);
-void x16_echo512_cuda_init(int thr_id, const uint32_t threads);
+void x16_echo512_cpu_init(int thr_id, const uint32_t threads);
 void x16_echo512_setBlock_80(void *pdata);
 void x16_echo512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_hash);
 
@@ -236,7 +236,7 @@ void x16_fugue512_cpu_free(int thr_id);
 void x16_fugue512_setBlock_80(void *pdata);
 void x16_fugue512_cuda_hash_80(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_hash);
 
-void x16_whirlpool512_init(int thr_id, uint32_t threads);
+void x16_whirlpool512_cpu_init(int thr_id, uint32_t threads);
 void x16_whirlpool512_setBlock_80(void* endiandata);
 void x16_whirlpool512_hash_80(int thr_id, const uint32_t threads, const uint32_t startNonce, uint32_t *d_hash);
 

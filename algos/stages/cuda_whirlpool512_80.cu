@@ -115,7 +115,7 @@ static bool wp80_device_selftest(int thr_id)
 }
 
 __host__
-void x16_whirlpool512_init(int thr_id, uint32_t threads)
+void x16_whirlpool512_cpu_init(int thr_id, uint32_t threads)
 {
 	wp80_device_selftest(thr_id);
 }

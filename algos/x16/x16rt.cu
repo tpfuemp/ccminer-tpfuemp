@@ -303,9 +303,9 @@ extern "C" int scanhash_x16rt(int thr_id, struct work* work, uint32_t max_nonce,
 		hamsi512_cpu_init(thr_id, throughput);
 		x16_fugue512_cpu_init(thr_id, throughput);
 		whirlpool512_cpu_init(thr_id, throughput, 0);
-		x16_whirlpool512_init(thr_id, throughput);
+		x16_whirlpool512_cpu_init(thr_id, throughput);
 		luffa512_cpu_init(thr_id, throughput); // 64
-		echo512_cuda_init(thr_id, throughput);
+		echo512_cpu_init(thr_id, throughput);
 		fugue512_cpu_init(thr_id, throughput);
 		x16_fugue512_cpu_init(thr_id, throughput);
 		shabal512_cpu_init(thr_id, throughput);

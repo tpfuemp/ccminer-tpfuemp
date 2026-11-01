@@ -21,7 +21,7 @@ chain kernel.
 - `jha.cu` — `-a jha` dispatcher (`scanhash_jha`, `jha_hash` CPU reference).
   Walks the branches with its own inline `jha_filter`/`jha_merge` compaction
   kernels into a second buffer `d_hash_br2`.
-- `jackpotcoin.cu` — `-a jackpot` dispatcher (`scanhash_jackpot`,
+- `jackpot.cu` — `-a jackpot` dispatcher (`scanhash_jackpot`,
   `jackpothash` CPU reference). Walks the branches with the prefix-sum
   compaction in `cuda_jha_compactionTest.cu`.
 - `cuda_jha_compactionTest.cu` — `jackpot_compactTest_*`, the scan/scatter

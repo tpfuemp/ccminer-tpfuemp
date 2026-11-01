@@ -12,7 +12,7 @@
 #include "cuda/helper.cuh"
 
 // GPU entry points (cuda_balloon.cu)
-extern void balloon_gpu_init(int thr_id);
+extern void balloon_cpu_init(int thr_id);
 extern void balloon_setBlock_80(int thr_id, void *pdata, const void *ptarget);
 uint32_t balloon_cpu_hash(int thr_id, unsigned char *input, uint32_t threads,
 	uint32_t max_nonce);
@@ -52,7 +52,7 @@ int scanhash_balloon(int thr_id, struct work *work, uint32_t max_nonce,
 			cudaDeviceReset();
 			cudaSetDeviceFlags(cudaDeviceScheduleBlockingSync);
 		}
-		balloon_gpu_init(thr_id);
+		balloon_cpu_init(thr_id);
 		// Consensus gate; fails closed inside balloon_selftest().
 		balloon_selftest(thr_id);
 		uint32_t wave = balloon_wave_threads(thr_id);

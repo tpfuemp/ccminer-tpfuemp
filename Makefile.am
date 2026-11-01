@@ -92,7 +92,7 @@ algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh cuda/bl
 			  algos/heavy/cuda_sha256.cu \
 			  algos/heavy/bastion.cu algos/heavy/cuda_bastion.cu \
 			  algos/fugue/fuguecoin.cpp algos/stages/cuda_fugue256.cu sph/fugue.c uint256.h \
-			  algos/groestlcoin/groestlcoin.cpp algos/groestlcoin/cuda_groestlcoin.cu algos/groestlcoin/cuda_groestlcoin.h \
+			  algos/groestlcoin/groestlcoin.cpp algos/groestlcoin/cuda_groestl.cu algos/groestlcoin/cuda_groestl.h \
 			  algos/myriadgroestl/myriadgroestl.cpp algos/myriadgroestl/cuda_myriadgroestl.cu \
 			  algos/lyra2/Lyra2.c algos/lyra2/Sponge.c \
 			  algos/lyra2/cuda_lyra2_selftest.cu algos/lyra2/lyra2RE.cu algos/stages/cuda_lyra2.cu \
@@ -114,14 +114,14 @@ algos/yespower/yespower.cu cuda/salsa_device.cuh cuda/pwxform_device.cuh cuda/bl
 			  algos/cryptonight/cryptolight.cu algos/cryptonight/cryptolight-core.cu algos/cryptonight/cryptolight-cpu.cpp \
 			  algos/cryptonight/cryptonight.cu algos/cryptonight/cryptonight-core.cu algos/cryptonight/cryptonight-extra.cu \
 			  algos/cryptonight/cryptonight-cpu.cpp algos/cryptonight/oaes_lib.cpp algos/cryptonight/aesb.cpp algos/cryptonight/cpu/c_keccak.c \
-			  algos/jha/jha.cu algos/jha/jackpotcoin.cu algos/stages/cuda_jha_keccak512.cu \
+			  algos/jha/jha.cu algos/jha/jackpot.cu algos/stages/cuda_jha_keccak512.cu \
 			  algos/jha/cuda_jha_compactionTest.cu algos/common/cuda_checkhash.cu \
 			  algos/stages/cuda_jh512.cu algos/stages/cuda_blake512.cu algos/stages/cuda_groestl512.cu algos/stages/cuda_skein512.cu \
 			  algos/stages/cuda_bmw512.cu algos/stages/cuda_keccak512.cu \
-			  algos/quark/animecoin.cu algos/quark/nist5.cu \
-			  algos/quark/quarkcoin.cu algos/stages/cuda_quark_compactionTest.cu \
+			  algos/quark/anime.cu algos/quark/nist5.cu \
+			  algos/quark/quark.cu algos/stages/cuda_quark_compactionTest.cu \
 			  algos/neoscrypt/neoscrypt.cpp algos/neoscrypt/neoscrypt-cpu.c algos/neoscrypt/cuda_neoscrypt.cu \
-			  algos/pentablake/pentablake.cu algos/skein/skein.cu algos/skein/cuda_skeincoin.cu algos/skein/skein2.cpp algos/zr5/zr5.cu \
+			  algos/pentablake/pentablake.cu algos/skein/skein.cu algos/skein/cuda_skein.cu algos/skein/skein2.cpp algos/zr5/zr5.cu \
 			  algos/skunk/skunk.cu algos/skunk/cuda_skunk.cu algos/stages/cuda_streebog.cu \
 			  algos/sha256d/sha256d.cu algos/sha256d/cuda_sha256d.cu algos/sha256d/sha256t.cu algos/sha256d/cuda_sha256t.cu \
 			  algos/sha256d/cuda_sha256_selftest.cu cuda/sha256_device.cuh \
@@ -317,7 +317,7 @@ algos/neoscrypt/cuda_neoscrypt.o: algos/neoscrypt/cuda_neoscrypt.cu
 algos/pentablake/pentablake.o: algos/pentablake/pentablake.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=80 -o $@ -c $<
 
-algos/skein/cuda_skeincoin.o: algos/skein/cuda_skeincoin.cu
+algos/skein/cuda_skein.o: algos/skein/cuda_skein.cu
 	$(NVCC) $(nvcc_FLAGS) --maxrregcount=48 -o $@ -c $<
 
 algos/skunk/cuda_skunk.o: algos/skunk/cuda_skunk.cu

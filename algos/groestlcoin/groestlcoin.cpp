@@ -4,7 +4,7 @@
 #include <openssl/sha.h>
 
 #include "sph/sph_groestl.h"
-#include "cuda_groestlcoin.h"
+#include "cuda_groestl.h"
 
 #include "miner.h"
 

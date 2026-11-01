@@ -275,13 +275,13 @@ extern "C" int scanhash_x16r(int thr_id, struct work* work, uint32_t max_nonce, 
 		luffa512_cpu_init(thr_id, throughput); // 64
 		shavite512_cpu_init(thr_id, throughput);
 		simd512_cpu_init(thr_id, throughput); // 64
-		echo512_cuda_init(thr_id, throughput);
+		echo512_cpu_init(thr_id, throughput);
 		hamsi512_cpu_init(thr_id, throughput);
 		fugue512_cpu_init(thr_id, throughput);
 		x16_fugue512_cpu_init(thr_id, throughput);
 		shabal512_cpu_init(thr_id, throughput);
 		whirlpool512_cpu_init(thr_id, throughput, 0);
-		x16_whirlpool512_init(thr_id, throughput);
+		x16_whirlpool512_cpu_init(thr_id, throughput);
 		sha512_cpu_init(thr_id, throughput);
 
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput), 0);

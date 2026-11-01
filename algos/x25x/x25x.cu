@@ -444,7 +444,7 @@ extern "C" int scanhash_x25x(int thr_id, struct work* work, uint32_t max_nonce, 
 		luffa512_cpu_init(thr_id, throughput);
 		shavite512_cpu_init(thr_id, throughput);
 		simd512_cpu_init(thr_id, throughput);
-		x16_echo512_cuda_init(thr_id, throughput);
+		x16_echo512_cpu_init(thr_id, throughput);
 		hamsi512_cpu_init(thr_id, throughput);
 		fugue512_cpu_init(thr_id, throughput);
 		shabal512_cpu_init(thr_id, throughput);

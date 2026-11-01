@@ -15,7 +15,7 @@ untouched.
 - `cuda_myriadgroestl.cu` — the GPU kernels (`myriadgroestl_gpu_hash_quad` +
   `_gpu_hash_sha`) and launchers (`myriadgroestl_cpu_init/setBlock/hash/free`).
 
-It is self-contained and **not** coupled to `cuda_groestlcoin.cu` — its symbols
+It is self-contained and **not** coupled to `cuda_groestl.cu` — its symbols
 are its own (`myriadgroestl_*`). The GPU Groestl core comes from the shared
 `cuda/groestl512_x2_device.cuh` (two hashes per thread, bitsliced), included via the
 project include path. Includes are project-include-dir (`miner.h`,

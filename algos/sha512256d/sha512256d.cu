@@ -13,7 +13,7 @@
 #include "sph/sph_sha2.h"
 
 static bool init[MAX_GPUS] = { 0 };
-extern void sha512256d_init(int thr_id);
+extern void sha512256d_cpu_init(int thr_id);
 extern void sha512256d_free(int thr_id);
 extern void sha512256d_setBlock_80(const uint32_t *pdata);
 extern void sha512256d_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, uint64_t targ_q3, uint32_t *resNonces);
@@ -113,7 +113,7 @@ extern "C" int scanhash_sha512256d(int thr_id, struct work* work, uint32_t max_n
 		}
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
-		sha512256d_init(thr_id);
+		sha512256d_cpu_init(thr_id);
 
 		init[thr_id] = true;
 	}

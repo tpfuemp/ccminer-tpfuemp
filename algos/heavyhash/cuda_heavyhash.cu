@@ -456,7 +456,7 @@ void heavyhash_debug_differential(int thr_id, const uint32_t *pdata, uint32_t st
 }
 
 __host__
-void heavyhash_init(int thr_id)
+void heavyhash_cpu_init(int thr_id)
 {
     cudaMalloc(&d_GNonces[thr_id], 2*sizeof(uint32_t));
 	cudaMallocHost(&h_GNonces[thr_id], 2*sizeof(uint32_t));

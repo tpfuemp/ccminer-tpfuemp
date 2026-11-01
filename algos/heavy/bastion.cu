@@ -35,7 +35,7 @@ extern void whirlpool512_cpu_free(int thr_id);
 
 extern void echo512_cpu_hash_64(int thr_id, uint32_t threads, uint32_t *d_hash); // alexis 64-byte echo (no cpu_init)
 
-extern void bastion_init(const int thr_id, const uint32_t threads);
+extern void bastion_cpu_init(const int thr_id, const uint32_t threads);
 extern void bastion_free(const int thr_id);
 
 extern uint32_t bastion_filter2(const int thr_id, const uint32_t threads, const uint32_t *inpHashes, uint32_t* d_branch);
@@ -202,7 +202,7 @@ int scanhash_bastion(int thr_id, struct work *work, uint32_t max_nonce, unsigned
 		CUDA_SAFE_CALL(cudaMalloc(&d_hash[thr_id], (size_t) 64 * throughput));
 		CUDA_SAFE_CALL(cudaMalloc(&d_hash_br[thr_id], (size_t) 64 * throughput));
 
-		bastion_init(thr_id, throughput);
+		bastion_cpu_init(thr_id, throughput);
 		hefty_cpu_init_tables(thr_id);
 		luffa512_cpu_init(thr_id, throughput);
 

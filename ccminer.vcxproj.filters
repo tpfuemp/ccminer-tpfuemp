@@ -612,7 +612,7 @@
     <ClInclude Include="uint256.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="algos\groestlcoin\cuda_groestlcoin.h">
+    <ClInclude Include="algos\groestlcoin\cuda_groestl.h">
       <Filter>Header Files\CUDA</Filter>
     </ClInclude>
     <ClInclude Include="sph\blake2b.h">
@@ -789,7 +789,7 @@
     <ClInclude Include="bignum.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <CudaCompile Include="algos\quark\animecoin.cu">
+    <CudaCompile Include="algos\quark\anime.cu">
       <Filter>Source Files\CUDA\quark</Filter>
     </CudaCompile>
     <ClInclude Include="algos\sia\sia-rpc.h">
@@ -896,7 +896,7 @@
     <CudaCompile Include="core\cuda.cpp">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\groestlcoin\cuda_groestlcoin.cu">
+    <CudaCompile Include="algos\groestlcoin\cuda_groestl.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\stages\cuda_jha_keccak512.cu">
@@ -905,7 +905,7 @@
     <CudaCompile Include="algos\jha\jha.cu">
       <Filter>Source Files\CUDA\JHA</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\jha\jackpotcoin.cu">
+    <CudaCompile Include="algos\jha\jackpot.cu">
       <Filter>Source Files\CUDA\JHA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\myriadgroestl\cuda_myriadgroestl.cu">
@@ -965,7 +965,7 @@
     <CudaCompile Include="algos\quark\nist5.cu">
       <Filter>Source Files\CUDA\quark</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\quark\quarkcoin.cu">
+    <CudaCompile Include="algos\quark\quark.cu">
       <Filter>Source Files\CUDA\quark</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\qubit\deep.cu">
@@ -1175,7 +1175,7 @@
     <CudaCompile Include="algos\skein\skein.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
-    <CudaCompile Include="algos\skein\cuda_skeincoin.cu">
+    <CudaCompile Include="algos\skein\cuda_skein.cu">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\scrypt\blake.cu">

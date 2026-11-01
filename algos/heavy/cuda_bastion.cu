@@ -59,7 +59,7 @@ void bastion_merge2_gpu(const uint32_t threads, uint32_t* d_hash, const uint32_t
 
 
 __host__
-void bastion_init(const int thr_id, const uint32_t threads)
+void bastion_cpu_init(const int thr_id, const uint32_t threads)
 {
 	CUDA_SAFE_CALL(cudaMalloc(&d_slot[thr_id], sizeof(uint32_t) * threads));
 	CUDA_SAFE_CALL(cudaMalloc(&d_brcount1[thr_id], sizeof(uint32_t)));

@@ -27,7 +27,7 @@ extern "C" void sha256csm_hash(void *output, const void *input)
 }
 
 static bool init[MAX_GPUS] = { 0 };
-extern void sha256csm_init(int thr_id);
+extern void sha256csm_cpu_init(int thr_id);
 extern void sha256csm_free(int thr_id);
 extern void sha256csm_setBlock_80(uint32_t *pdata, uint32_t *ptarget);
 extern void sha256csm_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *resNonces);
@@ -55,7 +55,7 @@ extern "C" int scanhash_sha256csm(int thr_id, struct work* work, uint32_t max_no
 		}
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
-		sha256csm_init(thr_id);
+		sha256csm_cpu_init(thr_id);
 
 		init[thr_id] = true;
 	}

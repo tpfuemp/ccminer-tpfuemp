@@ -80,7 +80,7 @@ void sha256csm_gpu_hash_shared(const uint32_t threads, const uint32_t startNonce
 }
 
 __host__
-void sha256csm_init(int thr_id)
+void sha256csm_cpu_init(int thr_id)
 {
 	cuda_get_arch(thr_id);
 	sha256_device_selftest(thr_id);

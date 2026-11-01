@@ -36,7 +36,7 @@ extern "C" void gostd(void *output, const void *input, size_t len)
 #include "cuda/debug.cuh"
 
 static bool init[MAX_GPUS] = { 0 };
-extern void gostd_init(int thr_id);
+extern void gostd_cpu_init(int thr_id);
 extern void gostd_free(int thr_id);
 extern void gostd_setBlock_80(uint32_t *pdata, uint32_t *ptarget);
 extern void gostd_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, uint32_t *resNonces);
@@ -65,7 +65,7 @@ extern "C" int scanhash_gostd(int thr_id, struct work* work, uint32_t max_nonce,
 		}
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
-		gostd_init(thr_id);
+		gostd_cpu_init(thr_id);
 
 		init[thr_id] = true;
 	}

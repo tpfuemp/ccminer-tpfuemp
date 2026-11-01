@@ -316,13 +316,13 @@ extern "C" int scanhash_x21s(int thr_id, struct work* work, uint32_t max_nonce, 
 		luffa512_cpu_init(thr_id, throughput); // 64
 		shavite512_cpu_init(thr_id, throughput);
 		simd512_cpu_init(thr_id, throughput); // 64
-		x16_echo512_cuda_init(thr_id, throughput);
+		x16_echo512_cpu_init(thr_id, throughput);
 		hamsi512_cpu_init(thr_id, throughput);
 		fugue512_cpu_init(thr_id, throughput);
 		x16_fugue512_cpu_init(thr_id, throughput);
 		shabal512_cpu_init(thr_id, throughput);
 		whirlpool512_cpu_init(thr_id, throughput, 0);
-		x16_whirlpool512_init(thr_id, throughput);
+		x16_whirlpool512_cpu_init(thr_id, throughput);
 		sha512_cpu_init(thr_id, throughput);
         haval256_cpu_init(thr_id, throughput);
         lyra2v2_cpu_init(thr_id, throughput, d_matrix[thr_id]);

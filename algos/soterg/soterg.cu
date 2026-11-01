@@ -268,7 +268,7 @@ static void init_soterg(const int thr_id, const int dev_id)
     keccak512_cpu_init(thr_id, throughput);
     simd512_cpu_init(thr_id, throughput);
     hamsi512_cpu_init(thr_id, throughput);
-    x16_echo512_cuda_init(thr_id, throughput);
+    x16_echo512_cpu_init(thr_id, throughput);
     x11_echo512_cpu_init(thr_id, throughput);
     qubit_luffa512_cpu_init(thr_id, throughput);
     luffa512_cpu_init(thr_id, throughput); // 64

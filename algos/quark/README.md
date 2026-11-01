@@ -4,10 +4,10 @@ Guideline: `docs/coding-guideline.md`
 
 ## Provenance
 
-- `quarkcoin.cu` (`-a quark`) — tpruvot/ccminer Quark: a 9-effective-stage chain
+- `quark.cu` (`-a quark`) — tpruvot/ccminer Quark: a 9-effective-stage chain
   with **per-nonce branching** (blake(80) → bmw → {groestl|skein} → groestl → jh
   → {blake|bmw} → keccak → skein → {keccak|jh}, each fork chosen by `hash[0] & 0x8`).
-- `animecoin.cu` (`-a anime`) — Animecoin: the same branching family, different
+- `anime.cu` (`-a anime`) — Animecoin: the same branching family, different
   fork layout.
 - `nist5.cu` (`-a nist5`) — Talkcoin/NIST5: the fixed 5-stage chain
   blake(80) → groestl → jh → keccak → skein.
@@ -80,7 +80,7 @@ became `jh(keccak(skein))` instead of `jh(skein)`. Those ~half-of-branch3 nonces
 hashed wrong, surfacing as a flood of `result … does not validate on CPU!`
 (GPU false-positives caught by the host re-hash — never submitted, but wasteful
 and it hid half the real search space). Fixed by running the final keccak on
-**branch1 only** (`nrm1`, `d_branch1Nonces`), exactly as `quarkcoin.cu` does;
+**branch1 only** (`nrm1`, `d_branch1Nonces`), exactly as `quark.cu` does;
 branch1 is unchanged (still keccak), branch2 now correctly gets `jh(skein)`.
 Confirmed with a temporarily-loosened benchmark target: does-not-validate went
 740→0 in 30 s, and quark (already branch1-only) measured 0. quark was not

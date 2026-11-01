@@ -10,7 +10,7 @@
 #include "cuda/sha256_device.cuh"
 
 static bool init[MAX_GPUS] = { 0 };
-extern void sha256d_init(int thr_id);
+extern void sha256d_cpu_init(int thr_id);
 extern void sha256d_free(int thr_id);
 extern void sha256d_hash_80(int thr_id, uint32_t threads, uint32_t startNonce, const uint32_t* const ms, uint32_t merkle, uint32_t time, uint32_t compacttarget, uint32_t* resNonces);
 
@@ -72,7 +72,7 @@ extern "C" int scanhash_sha256d(int thr_id, struct work* work, uint32_t max_nonc
 		}
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g, %u cuda threads", throughput2intensity(throughput), throughput);
 
-		sha256d_init(thr_id);
+		sha256d_cpu_init(thr_id);
 
 		init[thr_id] = true;
 	}

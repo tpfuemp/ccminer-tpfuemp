@@ -501,7 +501,7 @@ extern "C" int scanhash_mike(int thr_id, struct work* work, uint32_t max_nonce, 
 		x11_shavite512_cpu_init(thr_id, max_throughput);
 		simd512_cpu_init(thr_id, max_throughput);
 		x11_echo512_cpu_init(thr_id, max_throughput);
-		x16_echo512_cuda_init(thr_id, max_throughput);     // needed by x16_echo512_cuda_hash_80
+		x16_echo512_cpu_init(thr_id, max_throughput);     // needed by x16_echo512_cuda_hash_80
 
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_hash[thr_id], (size_t)64 * max_throughput), -1);
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_long_state[thr_id], budget), -1);

@@ -17,8 +17,8 @@ Guideline: `docs/coding-guideline.md`
   (`sha256_transform_full` / `sha256_final_to_target`) instead of private
   round-body copies.
 - `cuda_sha256_selftest.cu` — init-time unit test of the shared header against
-  OpenSSL (guideline §7 layer 1), called from `sha256d_init`/`sha256t_init`/
-  `sha256csm_init`.
+  OpenSSL (guideline §7 layer 1), called from `sha256d_cpu_init`/`sha256t_cpu_init`/
+  `sha256csm_cpu_init`.
 - SHA256Dv (Veil) is a distinct algo and lives in `algos/sha256dv/`.
 
 ## Optimization state (2026-07)

@@ -933,7 +933,7 @@ void gostd_gpu_hash_80(const uint32_t threads, const uint32_t startNonce, uint32
 }
 
 __host__
-void gostd_init(int thr_id)
+void gostd_cpu_init(int thr_id)
 {
 	cuda_get_arch(thr_id);
 	CUDA_SAFE_CALL(cudaMalloc(&d_resNonces[thr_id], 2*sizeof(uint32_t)));

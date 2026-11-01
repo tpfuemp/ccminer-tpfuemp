@@ -49,7 +49,7 @@ extern bool sha512256d_device_selftest(int thr_id);
 // ------------------------------------------------------------------------------------------------
 
 __host__
-void sha512256d_init(int thr_id)
+void sha512256d_cpu_init(int thr_id)
 {
 	cuda_get_arch(thr_id);
 

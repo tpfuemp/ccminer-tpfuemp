@@ -1468,7 +1468,7 @@ static __thread uint32_t *Trans2 = NULL; // 2 streams
 static __thread uint32_t *Trans3 = NULL; // 2 streams
 
 __host__
-void neoscrypt_init(int thr_id, uint32_t threads)
+void neoscrypt_cpu_init(int thr_id, uint32_t threads)
 {
 	cuda_get_arch(thr_id);
 

@@ -6,7 +6,7 @@
 
 extern void neoscrypt_setBlockTarget(uint32_t* const data, uint32_t* const ptarget);
 
-extern void neoscrypt_init(int thr_id, uint32_t threads);
+extern void neoscrypt_cpu_init(int thr_id, uint32_t threads);
 extern void neoscrypt_free(int thr_id);
 extern void neoscrypt_hash_k4(int thr_id, uint32_t threads, uint32_t startNounce, uint32_t *resNonces, bool stratum);
 
@@ -47,7 +47,7 @@ int scanhash_neoscrypt(int thr_id, struct work* work, uint32_t max_nonce, unsign
 		}
 		gpulog(LOG_INFO, thr_id, "Intensity set to %g (+5), %u cuda threads", throughput2intensity(throughput), throughput);
 
-		neoscrypt_init(thr_id, throughput);
+		neoscrypt_cpu_init(thr_id, throughput);
 
 		init[thr_id] = true;
 	}

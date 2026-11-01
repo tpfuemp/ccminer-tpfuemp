@@ -691,7 +691,7 @@ static void precalc(uint64_t* message)
 }
 
 __host__
-void skeincoin_init(int thr_id)
+void skeincoin_cpu_init(int thr_id)
 {
 	cuda_get_arch(thr_id);
 	CUDA_SAFE_CALL(cudaMalloc(&d_found[thr_id], 2 * sizeof(uint32_t)));

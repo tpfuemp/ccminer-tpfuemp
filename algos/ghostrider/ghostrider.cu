@@ -729,9 +729,9 @@ extern "C" int scanhash_ghostrider(int thr_id, struct work* work, uint32_t max_n
 		fugue512_cpu_init(thr_id, max_throughput);
 		shabal512_cpu_init(thr_id, max_throughput);
 		whirlpool512_cpu_init(thr_id, max_throughput, 0);
-		x16_echo512_cuda_init(thr_id, max_throughput);     // needed by x16_echo512_cuda_hash_80
+		x16_echo512_cpu_init(thr_id, max_throughput);     // needed by x16_echo512_cuda_hash_80
 		x16_fugue512_cpu_init(thr_id, max_throughput);     // needed by x16_fugue512_cuda_hash_80
-		x16_whirlpool512_init(thr_id, max_throughput);     // needed by x16_whirlpool512_hash_80
+		x16_whirlpool512_cpu_init(thr_id, max_throughput);     // needed by x16_whirlpool512_hash_80
 
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_hash[thr_id], (size_t)64 * max_throughput), -1);
 		CUDA_CALL_OR_RET_X(cudaMalloc(&d_long_state[thr_id], budget), -1);

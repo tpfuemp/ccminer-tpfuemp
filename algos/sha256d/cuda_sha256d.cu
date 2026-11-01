@@ -22,7 +22,7 @@ extern bool sha256_device_selftest(int thr_id);
 // ------------------------------------------------------------------------------------------------
 
 __host__
-void sha256d_init(int thr_id)
+void sha256d_cpu_init(int thr_id)
 {
 	cuda_get_arch(thr_id);
 	sha256_device_selftest(thr_id);

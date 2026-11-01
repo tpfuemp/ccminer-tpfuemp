@@ -95,7 +95,7 @@ void sha256t_gpu_hash_shared(const uint32_t threads, const uint32_t startNonce, 
 }
 
 __host__
-void sha256t_init(int thr_id)
+void sha256t_cpu_init(int thr_id)
 {
 	cuda_get_arch(thr_id);
 	sha256_device_selftest(thr_id);

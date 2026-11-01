@@ -43,7 +43,7 @@ still call it:
   (`cuda_whirlpool_tables.cuh`, now host-side only; the device code is
   `cuda/whirlpool512_x4_device.cuh`).
 - `cuda_whirlpool512_80.cu` (was `cuda_x15_whirlpool_sm3.cu`): the **80-byte**
-  entry points the x16-family chains consume, `x16_whirlpool512_init` /
+  entry points the x16-family chains consume, `x16_whirlpool512_cpu_init` /
   `x16_whirlpool512_setBlock_80` / `x16_whirlpool512_hash_80` (x16r/rv2/s, x21s,
   ghostrider, flex), on the same bitsliced device code. The `x16_whirlpool512_*`
   names are kept until the x16 family migrates.
