@@ -85,8 +85,7 @@ int scanhash_myriad(int thr_id, struct work *work, uint32_t max_nonce, unsigned 
 				if (work->nonces[1] != UINT32_MAX) {
 					endiandata[19] = swab32(work->nonces[1]);
 					myriadhash(vhash, endiandata);
-					bn_set_target_ratio(work, vhash, 1);
-					work->valid_nonces = 2;
+					work_check_second_nonce(thr_id, work, vhash);
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				} else {
 					pdata[19] = work->nonces[0] + 1; // cursor

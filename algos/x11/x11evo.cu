@@ -426,10 +426,9 @@ extern "C" int scanhash_x11evo(int thr_id, struct work* work, uint32_t max_nonce
 				if (work->nonces[1] != UINT32_MAX) {
 					be32enc(&endiandata[19], work->nonces[1]);
 					x11evo_hash(vhash, endiandata);
-					bn_set_target_ratio(work, vhash, 1);
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 					gpulog(LOG_DEBUG, thr_id, "second nonce %08x! cursor %08x", work->nonces[1], pdata[19]);
-					work->valid_nonces++;
+					work_check_second_nonce(thr_id, work, vhash);
 				}
 				return work->valid_nonces;
 			} else if (vhash[7] > Htarg) {

@@ -100,9 +100,8 @@ int scanhash_skein2(int thr_id, struct work* work, uint32_t max_nonce, unsigned 
 				if (work->nonces[1] != UINT32_MAX) {
 					endiandata[19] = swab32(work->nonces[1]);
 					skein2hash(vhash, endiandata);
-					work->valid_nonces++;
-					bn_set_target_ratio(work, vhash, 1);
-					gpulog(LOG_DEBUG, thr_id, "found second nonce %08x!", endiandata[19]);
+					if (work_check_second_nonce(thr_id, work, vhash))
+						gpulog(LOG_DEBUG, thr_id, "found second nonce %08x!", endiandata[19]);
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				} else {
 					pdata[19] = work->nonces[0] + 1; // cursor for next scan

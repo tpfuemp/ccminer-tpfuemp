@@ -856,6 +856,20 @@ bool fulltest(const uint32_t *hash, const uint32_t *target)
 	return rc;
 }
 
+/* second GPU nonce, already hashed by the caller: count it only if it passes the full target */
+bool work_check_second_nonce(int thr_id, struct work *work, uint32_t *vhash)
+{
+	if (vhash[7] <= work->target[7] && fulltest(vhash, work->target)) {
+		bn_set_target_ratio(work, vhash, 1);
+		work->valid_nonces++;
+		return true;
+	}
+	gpu_increment_reject(thr_id);
+	if (!opt_quiet)
+		gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", work->nonces[1]);
+	return false;
+}
+
 // Only used by stratum pools
 void diff_to_target(uint32_t *target, double diff)
 {

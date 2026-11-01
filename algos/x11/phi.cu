@@ -158,8 +158,7 @@ extern "C" int scanhash_phi(int thr_id, struct work* work, uint32_t max_nonce, u
 					work->nonces[1] += startNonce;
 					be32enc(&endiandata[19], work->nonces[1]);
 					phihash(vhash, endiandata);
-					bn_set_target_ratio(work, vhash, 1);
-					work->valid_nonces++;
+					work_check_second_nonce(thr_id, work, vhash);
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				}
 				else {
