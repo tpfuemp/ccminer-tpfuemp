@@ -290,9 +290,8 @@ int cuda_gpu_info(struct cgpu_info *gpu)
 	return -1;
 }
 
-// Zeitsynchronisations-Routine von cudaminer mit CPU sleep
+// stream sync with a CPU sleep calibrated per situation (from cudaminer)
 // Note: if you disable all of these calls, CPU usage will hit 100%
-typedef struct { double value[8]; } tsumarray;
 cudaError_t MyStreamSynchronize(cudaStream_t stream, int situation, int thr_id)
 {
 	cudaError_t result = cudaSuccess;
@@ -300,13 +299,14 @@ cudaError_t MyStreamSynchronize(cudaStream_t stream, int situation, int thr_id)
 		return result;
 	if (situation >= 0)
 	{
-		static std::map<int, tsumarray> tsum;
+		// one table per miner thread: no shared map, no thr_id-indexed array
+		static thread_local std::map<int, double> tsum;
 
 		double a = 0.95, b = 0.05;
 		if (tsum.find(situation) == tsum.end()) { a = 0.5; b = 0.5; } // faster initial convergence
 
 		double tsync = 0.0;
-		double tsleep = 0.95 * tsum[situation].value[thr_id];
+		double tsleep = 0.95 * tsum[situation];
 		if (cudaStreamQuery(stream) == cudaErrorNotReady)
 		{
 			usleep((useconds_t)(1e6*tsleep));
@@ -316,7 +316,7 @@ cudaError_t MyStreamSynchronize(cudaStream_t stream, int situation, int thr_id)
 			gettimeofday(&tv_end, NULL);
 			tsync = 1e-6 * (tv_end.tv_usec-tv_start.tv_usec) + (tv_end.tv_sec-tv_start.tv_sec);
 		}
-		if (tsync >= 0) tsum[situation].value[thr_id] = a * tsum[situation].value[thr_id] + b * (tsleep+tsync);
+		if (tsync >= 0) tsum[situation] = a * tsum[situation] + b * (tsleep+tsync);
 	}
 	else
 		result = cudaStreamSynchronize(stream);
