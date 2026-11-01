@@ -63,12 +63,26 @@ extern "C" char *pearl_proof_take(uint32_t id)
 }
 
 /* ------------------------------------------------------------ per-GPU state */
+#define PEARL_HITS_BYTES	((1 + 2 * PEARL_MAX_HITS) * 4)
+
+/* one queued trial (scanhash keeps one trial ahead of the one it waits for) */
+struct pearl_slot {
+	uint32_t trial;
+	uint8_t as[32], bs[32];
+	uint8_t chunk[BLAKE3_CHUNK_LEN];
+	uint32_t *hits;				/* pinned, filled by an async copy */
+	cudaEvent_t done;
+};
+
 struct pearl_state {
 	bool imma;
 	const uint32_t *rows, *cols;
+	uint32_t h, w;				/* pattern sizes: 8 x 8 dp4a, 8 x 16 IMMA */
+	bool dp4a_local;			/* dp4a jackpot window in local memory (sm_6x) */
 	pearl_config cfg;
-	uint32_t *dU, *dP, *dApan, *dBpan, *dBbp, *dHits, *dChunk;
-	uint32_t *hChunk;			/* pinned 1 KB staging for the nonce chunk */
+	uint32_t *dU, *dP, *dApan, *dBpan, *dHits, *dChunk;
+	uint32_t *hChunk;			/* pinned 2 x 1 KB staging for the nonce chunk, per slot */
+	pearl_slot slot[2];
 	double t_host, t_gpu, t_hit;		/* -D timing: seconds since the last log */
 	uint32_t t_trials;
 	time_t t_last;
@@ -94,9 +108,11 @@ static void pearl_nonce_chunk(uint8_t *chunk, uint32_t trial, uint64_t salt, int
 	for (int i = 0; i < 2; i++) chunk[p++] = (uint8_t)(int8_t)((int)(((uint32_t)thr_id >> (6 * i)) & 63) - 32);
 }
 
-/* One trial on the GPU from given seeds: noise, prepass, kernel. dbg may be NULL. */
+/* One trial on the GPU from given seeds: noise, prepass, kernel. B^T is zero except the
+ * 1024-byte chunk_b (device) at the start of row 0, which is added after the noise.
+ * dbg may be NULL. */
 static void pearl_gpu_trial(pearl_state &s, uint32_t m, uint32_t n, const uint8_t a_seed[32],
-	const uint8_t b_seed[32], const uint32_t bound[8], const uint32_t *base_b, uint32_t *dbg)
+	const uint8_t b_seed[32], const uint32_t bound[8], const uint32_t *chunk_b, uint32_t *dbg)
 {
 	const uint32_t k = s.cfg.k, r = s.cfg.r;
 	pearl_key8 ka, kb;
@@ -107,10 +123,20 @@ static void pearl_gpu_trial(pearl_state &s, uint32_t m, uint32_t n, const uint8_
 	const dim3 gb(n / PEARL_BT, (k / 4 + PEARL_PREP_KW - 1) / PEARL_PREP_KW);
 	pearl_noise_uniform_kernel <<<(m * r / 32 + 255) / 256, 256>>> (ka, 'A', m * r / 32, s.dU);
 	pearl_noise_perm_kernel <<<(k / 8 + 127) / 128, 128>>> (ka, 'A', k, r, s.dP);
-	pearl_operand_panel_fast_kernel <<<ga, 256, smem>>> (NULL, (int8_t *)s.dU, s.dP, k, r, s.dApan);
+	if (s.imma)	/* IMMA reads its own panel layout (pearl_panel_slot) */
+		pearl_operand_panel_fast_t<PEARL_PERM_IMMA_A> <<<ga, 256, smem>>> (NULL, (int8_t *)s.dU, s.dP, k, r, s.dApan);
+	else
+		pearl_operand_panel_fast_kernel <<<ga, 256, smem>>> (NULL, (int8_t *)s.dU, s.dP, k, r, s.dApan);
 	pearl_noise_uniform_kernel <<<(n * r / 32 + 255) / 256, 256>>> (kb, 'B', n * r / 32, s.dU);
 	pearl_noise_perm_kernel <<<(k / 8 + 127) / 128, 128>>> (kb, 'B', k, r, s.dP);
-	pearl_operand_panel_fast_kernel <<<gb, 256, smem>>> (base_b, (int8_t *)s.dU, s.dP, k, r, s.dBpan);
+	if (s.imma)
+		pearl_operand_panel_fast_t<PEARL_PERM_IMMA_B64> <<<gb, 256, smem>>> (NULL, (int8_t *)s.dU, s.dP, k, r, s.dBpan);
+	else
+		pearl_operand_panel_fast_kernel <<<gb, 256, smem>>> (NULL, (int8_t *)s.dU, s.dP, k, r, s.dBpan);
+	if (s.imma)
+		pearl_add_row0_t<PEARL_PERM_IMMA_B64> <<<1, BLAKE3_CHUNK_LEN / 4>>> (chunk_b, s.dBpan);
+	else
+		pearl_add_row0_kernel <<<1, BLAKE3_CHUNK_LEN / 4>>> (chunk_b, s.dBpan);
 
 	pearl_gemm_params gp;
 	gp.m = m; gp.n = n; gp.k = k; gp.r = r; gp.a_seed = ka;
@@ -118,9 +144,13 @@ static void pearl_gpu_trial(pearl_state &s, uint32_t m, uint32_t n, const uint8_
 	cudaMemsetAsync(s.dHits, 0, (1 + 2 * PEARL_MAX_HITS) * 4);
 	const uint32_t blocks = (m / PEARL_BT) * (n / PEARL_BT);
 	if (s.imma)
-		pearl_tiles_imma_kernel <<<blocks, 256>>> (gp, (const uint4 *)s.dApan, (const uint4 *)s.dBpan, dbg, s.dHits);
+		pearl_tiles_imma_w_t<PEARL_IMMA_WN, PEARL_IMMA_W_STAGES, PEARL_IMMA_W_GM> <<<blocks, 64 * PEARL_IMMA_WN, PEARL_IMMA_W_SMEM>>>
+			(gp, (const uint4 *)s.dApan, (const uint4 *)s.dBpan, dbg, s.dHits);
 	else
-		pearl_tiles_dp4a_kernel <<<blocks, 256>>> (gp, (const uint4 *)s.dApan, (const uint4 *)s.dBpan, dbg, s.dHits);
+		if (s.dp4a_local)
+			pearl_tiles_dp4a_t<PEARL_WIN_LOCAL> <<<blocks, 256>>> (gp, (const uint4 *)s.dApan, (const uint4 *)s.dBpan, dbg, s.dHits);
+		else
+			pearl_tiles_dp4a_kernel <<<blocks, 256>>> (gp, (const uint4 *)s.dApan, (const uint4 *)s.dBpan, dbg, s.dHits);
 }
 
 /* CPU re-verify of one tile; true if it meets the bound */
@@ -129,19 +159,22 @@ static bool pearl_cpu_tile(const pearl_state &s, const uint8_t *A, const uint8_t
 	const uint32_t bound[8], uint32_t jp_out[16], uint32_t hash_out[8])
 {
 	const uint32_t k = s.cfg.k, r = s.cfg.r;
-	uint32_t tr[8], tc[8], loc[8];
-	for (int i = 0; i < 8; i++) { tr[i] = ro + s.rows[i]; tc[i] = co + s.cols[i]; loc[i] = i; }
-	int8_t *na = (int8_t *)malloc(8 * (size_t)k), *nb = (int8_t *)malloc(8 * (size_t)k);
-	pearl_noise_rows(a_seed, 'A', tr, 8, k, r, na);
-	pearl_noise_rows(b_seed, 'B', tc, 8, k, r, nb);
-	for (int i = 0; i < 8; i++)
-		for (uint32_t l = 0; l < k; l++) {
+	uint32_t tr[16], tc[16], loc[16];
+	for (uint32_t i = 0; i < s.h; i++) tr[i] = ro + s.rows[i];
+	for (uint32_t i = 0; i < s.w; i++) tc[i] = co + s.cols[i];
+	for (int i = 0; i < 16; i++) loc[i] = i;
+	int8_t *na = (int8_t *)malloc(s.h * (size_t)k), *nb = (int8_t *)malloc(s.w * (size_t)k);
+	pearl_noise_rows(a_seed, 'A', tr, s.h, k, r, na);
+	pearl_noise_rows(b_seed, 'B', tc, s.w, k, r, nb);
+	for (uint32_t i = 0; i < s.h; i++)
+		for (uint32_t l = 0; l < k; l++)
 			na[(size_t)i * k + l] = (int8_t)((int8_t)A[(size_t)tr[i] * k + l] + na[(size_t)i * k + l]);
+	for (uint32_t i = 0; i < s.w; i++)
+		for (uint32_t l = 0; l < k; l++)
 			nb[(size_t)i * k + l] = (int8_t)((int8_t)Bt[(size_t)tc[i] * k + l] + nb[(size_t)i * k + l]);
-		}
 	uint32_t jp[16];
 	uint8_t hb[32];
-	pearl_tile_jackpot(na, nb, k, r, loc, 8, loc, 8, jp);
+	pearl_tile_jackpot(na, nb, k, r, loc, s.h, loc, s.w, jp);
 	pearl_jackpot_hash(jp, a_seed, hb);
 	free(na); free(nb);
 	if (jp_out) memcpy(jp_out, jp, 64);
@@ -211,11 +244,13 @@ static bool pearl_host_kats(int fault)
 static bool pearl_gpu_differential(int thr_id, pearl_state &s, int fault, bool *ran)
 {
 	const uint32_t m = 256, n = 256, k = s.cfg.k, r = s.cfg.r;
-	const uint32_t ntile = (m / 8) * (n / 8);
+	const uint32_t ntile = (m / s.h) * (n / s.w);
 	*ran = false;
 	uint8_t *A = (uint8_t *)calloc((size_t)m * k, 1), *Bt = (uint8_t *)malloc((size_t)n * k);
+	/* the miner's shape: A = 0, B^T = 0 except a random first chunk of row 0 */
+	memset(Bt, 0, (size_t)n * k);
 	uint32_t lcg = 0x9e3779b9u;
-	for (size_t i = 0; i < (size_t)n * k; i++) {
+	for (size_t i = 0; i < BLAKE3_CHUNK_LEN; i++) {
 		lcg = lcg * 1664525u + 1013904223u;
 		Bt[i] = (uint8_t)(int8_t)((int)(lcg >> 25) - 64);
 	}
@@ -228,21 +263,20 @@ static bool pearl_gpu_differential(int thr_id, pearl_state &s, int fault, bool *
 	pearl_seeds(jk, ha, hb, m, n, bs, as);
 	uint32_t bound[8] = { 0, 0, 0, 0, 0, 0, 0, 0x08000000u };	/* ~1/32 tickets */
 
-	uint32_t *d_bt = NULL, *d_btp = NULL, *d_dbg = NULL;
+	uint32_t *d_chunk = NULL, *d_dbg = NULL;
 	uint32_t *dbg = (uint32_t *)malloc((size_t)ntile * 96), *dbg2 = (uint32_t *)malloc((size_t)ntile * 96);
 	bool ok = false;
-	if (cudaMalloc(&d_bt, (size_t)n * k) != cudaSuccess || cudaMalloc(&d_btp, (size_t)n * k) != cudaSuccess ||
+	if (cudaMalloc(&d_chunk, BLAKE3_CHUNK_LEN) != cudaSuccess ||
 	    cudaMalloc(&d_dbg, (size_t)ntile * 96) != cudaSuccess) {
 		cudaGetLastError();
 		goto done;
 	}
-	cudaMemcpy(d_bt, Bt, (size_t)n * k, cudaMemcpyHostToDevice);
-	pearl_to_panel_kernel <<<(n * k / 4 + 255) / 256, 256>>> ((const int8_t *)d_bt, n, k, d_btp);
+	cudaMemcpy(d_chunk, Bt, BLAKE3_CHUNK_LEN, cudaMemcpyHostToDevice);
 	{
 		uint8_t as_gpu[32];
 		memcpy(as_gpu, as, 32);
 		if (fault == 2) as_gpu[3] ^= 0x40;
-		pearl_gpu_trial(s, m, n, as_gpu, bs, bound, d_btp, d_dbg);
+		pearl_gpu_trial(s, m, n, as_gpu, bs, bound, d_chunk, d_dbg);
 	}
 	if (cudaDeviceSynchronize() != cudaSuccess) { cudaGetLastError(); goto done; }
 	uint32_t hits[1 + 2 * PEARL_MAX_HITS];
@@ -259,10 +293,11 @@ static bool pearl_gpu_differential(int thr_id, pearl_state &s, int fault, bool *
 		for (uint32_t o = 0; o < n; o++) if (pearl_offset_is_valid(&s.cfg.cols, o)) coff.push_back(o);
 		uint32_t bad = 0, ref_hits = 0;
 		for (uint32_t t = 0; t < ntile; t++) {
-			uint32_t tr[8], tc[8], jp[16], hw[8];
+			uint32_t tr[16], tc[16], jp[16], hw[8];
 			uint8_t hh[32];
-			for (int i = 0; i < 8; i++) { tr[i] = roff[t / (n / 8)] + s.rows[i]; tc[i] = coff[t % (n / 8)] + s.cols[i]; }
-			pearl_tile_jackpot(na, nb, k, r, tr, 8, tc, 8, jp);
+			for (uint32_t i = 0; i < s.h; i++) tr[i] = roff[t / (n / s.w)] + s.rows[i];
+			for (uint32_t i = 0; i < s.w; i++) tc[i] = coff[t % (n / s.w)] + s.cols[i];
+			pearl_tile_jackpot(na, nb, k, r, tr, s.h, tc, s.w, jp);
 			pearl_jackpot_hash(jp, as, hh);
 			pearl_key_words(hh, hw);
 			ref_hits += pearl_meets(hh, bound);
@@ -278,7 +313,7 @@ static bool pearl_gpu_differential(int thr_id, pearl_state &s, int fault, bool *
 		uint8_t as_bad[32];
 		memcpy(as_bad, as, 32);
 		as_bad[17] ^= 1;
-		pearl_gpu_trial(s, m, n, as_bad, bs, bound, d_btp, d_dbg);
+		pearl_gpu_trial(s, m, n, as_bad, bs, bound, d_chunk, d_dbg);
 		if (cudaDeviceSynchronize() != cudaSuccess) { cudaGetLastError(); ok = false; *ran = false; goto done; }
 		cudaMemcpy(dbg2, d_dbg, (size_t)ntile * 96, cudaMemcpyDeviceToHost);
 		if (!memcmp(dbg, dbg2, (size_t)ntile * 96)) {
@@ -287,7 +322,7 @@ static bool pearl_gpu_differential(int thr_id, pearl_state &s, int fault, bool *
 		}
 	}
 done:
-	cudaFree(d_bt); cudaFree(d_btp); cudaFree(d_dbg);
+	cudaFree(d_chunk); cudaFree(d_dbg);
 	free(A); free(Bt); free(dbg); free(dbg2);
 	return ok;
 }
@@ -307,8 +342,8 @@ static bool pearl_selftest(int thr_id, pearl_state &s)
 		gpulog(LOG_ERR, thr_id, "pearlhash self-test FAILED (host KATs %s, GPU differential %s)",
 			kat ? "ok" : "FAIL", diff ? "ok" : (ran ? "FAIL" : "not run"));
 	else
-		gpulog(LOG_INFO, thr_id, "pearlhash self-test passed (seed/noise/ticket KATs, %s kernel == oracle on 1024 tiles, negative control)",
-			s.imma ? "IMMA" : "dp4a");
+		gpulog(LOG_INFO, thr_id, "pearlhash self-test passed (seed/noise/ticket KATs, %s kernel == oracle on %u tiles, negative control)",
+			s.imma ? "IMMA" : "dp4a", (256 / s.h) * (256 / s.w));
 	return selftest_gate(thr_id, "pearlhash", passed);
 }
 
@@ -332,22 +367,28 @@ static void pearl_init(int thr_id)
 	if (opt_cudaschedule < 0) pearl_blocking_sync(thr_id);
 
 	s.imma = device_sm[dev] >= 800;
+	/* sm_6x spills the register window inside the loop; sm_75 spills the local one */
+	s.dp4a_local = device_sm[dev] < 700;
 	s.rows = s.imma ? PEARL_IMMA_ROWS : PEARL_DP4A_PATTERN;
-	s.cols = s.imma ? PEARL_IMMA_COLS : PEARL_DP4A_PATTERN;
+	s.cols = s.imma ? PEARL_IMMA_W_COLS : PEARL_DP4A_PATTERN;
+	s.h = 8;
+	s.w = s.imma ? 16 : 8;
 	s.cfg.k = PEARL_K;
 	s.cfg.r = PEARL_R;
-	pearl_pattern_from_list(s.rows, 8, &s.cfg.rows);
-	pearl_pattern_from_list(s.cols, 8, &s.cfg.cols);
+	pearl_pattern_from_list(s.rows, s.h, &s.cfg.rows);
+	pearl_pattern_from_list(s.cols, s.w, &s.cfg.cols);
 
 	CUDA_SAFE_CALL(cudaMalloc(&s.dU, (size_t)PEARL_M * PEARL_R));
 	CUDA_SAFE_CALL(cudaMalloc(&s.dP, (size_t)PEARL_K * 4));
 	CUDA_SAFE_CALL(cudaMalloc(&s.dApan, (size_t)PEARL_M * PEARL_K));
 	CUDA_SAFE_CALL(cudaMalloc(&s.dBpan, (size_t)PEARL_N * PEARL_K));
-	CUDA_SAFE_CALL(cudaMalloc(&s.dBbp, (size_t)PEARL_N * PEARL_K));
 	CUDA_SAFE_CALL(cudaMalloc(&s.dHits, (1 + 2 * PEARL_MAX_HITS) * 4));
-	CUDA_SAFE_CALL(cudaMemset(s.dBbp, 0, (size_t)PEARL_N * PEARL_K));
 	CUDA_SAFE_CALL(cudaMalloc(&s.dChunk, BLAKE3_CHUNK_LEN));
-	CUDA_SAFE_CALL(cudaMallocHost(&s.hChunk, BLAKE3_CHUNK_LEN));
+	CUDA_SAFE_CALL(cudaMallocHost(&s.hChunk, 2 * BLAKE3_CHUNK_LEN));
+	for (int b = 0; b < 2; b++) {
+		CUDA_SAFE_CALL(cudaMallocHost(&s.slot[b].hits, PEARL_HITS_BYTES));
+		CUDA_SAFE_CALL(cudaEventCreateWithFlags(&s.slot[b].done, cudaEventDisableTiming | cudaEventBlockingSync));
+	}
 	s.A = (uint8_t *)calloc((size_t)PEARL_M * PEARL_K, 1);
 	s.Bt = (uint8_t *)calloc((size_t)PEARL_N * PEARL_K, 1);
 	s.have_job = false;
@@ -355,7 +396,7 @@ static void pearl_init(int thr_id)
 	pearl_selftest(thr_id, s);
 	gpulog(LOG_INFO, thr_id, "pearlhash: %s kernel, m=n=%u k=%u rank %u, %u tickets of %u MAC per trial",
 		s.imma ? "IMMA (sm_80+)" : "dp4a", PEARL_M, PEARL_K, PEARL_R,
-		(PEARL_M / 8) * (PEARL_N / 8), 64 * PEARL_K);
+		(PEARL_M / s.h) * (PEARL_N / s.w), s.h * s.w * PEARL_K);
 	init_done[thr_id] = true;
 }
 
@@ -422,44 +463,68 @@ extern "C" int scanhash_pearlhash(int thr_id, struct work *work, uint32_t max_no
 	uint32_t trials = 0;
 	struct timeval t0, t1;
 	gettimeofday(&t0, NULL);
-	uint8_t chunk[BLAKE3_CHUNK_LEN];
-	do {
-		struct timeval ta, tb2, tc;
-		gettimeofday(&ta, NULL);
-		const uint32_t trial = *cursor;
-		pearl_nonce_chunk(chunk, trial, s.salt, thr_id);
-		memcpy(s.Bt, chunk, BLAKE3_CHUNK_LEN);
-		pearl_merkle_update_leaf(&s.tb, 0, chunk);
-		memcpy(s.hChunk, chunk, BLAKE3_CHUNK_LEN);
-		cudaMemcpyAsync(s.dChunk, s.hChunk, BLAKE3_CHUNK_LEN, cudaMemcpyHostToDevice);
-		pearl_patch_row0_kernel <<<1, BLAKE3_CHUNK_LEN / 4>>> (s.dChunk, s.dBbp);
 
-		uint8_t bs[32], as[32];
-		pearl_seeds(s.job_key, s.ta.root, s.tb.root, PEARL_M, PEARL_N, bs, as);
-		pearl_gpu_trial(s, PEARL_M, PEARL_N, as, bs, bound, s.dBbp, NULL);
+	/* One trial is queued ahead: trial t+1's host work and kernels are issued before
+	 * waiting for trial t. s.Bt / s.tb hold the newest trial's chunk; a hit of the older
+	 * trial swaps its chunk back for the re-verify and proof. */
+	pearl_slot *q = s.slot;
+	int newest = -1;
+	auto set_chunk = [&](int b) {
+		memcpy(s.Bt, q[b].chunk, BLAKE3_CHUNK_LEN);
+		pearl_merkle_update_leaf(&s.tb, 0, q[b].chunk);
+	};
+	auto enqueue = [&](int b, uint32_t trial) {
+		struct timeval ta, tb2;
+		gettimeofday(&ta, NULL);
+		q[b].trial = trial;
+		pearl_nonce_chunk(q[b].chunk, trial, s.salt, thr_id);
+		set_chunk(b);
+		newest = b;
+		pearl_seeds(s.job_key, s.ta.root, s.tb.root, PEARL_M, PEARL_N, q[b].bs, q[b].as);
+		uint8_t *hc = (uint8_t *)s.hChunk + (size_t)b * BLAKE3_CHUNK_LEN;
+		memcpy(hc, q[b].chunk, BLAKE3_CHUNK_LEN);
+		cudaMemcpyAsync(s.dChunk, hc, BLAKE3_CHUNK_LEN, cudaMemcpyHostToDevice);
+		pearl_gpu_trial(s, PEARL_M, PEARL_N, q[b].as, q[b].bs, bound, s.dChunk, NULL);
+		cudaMemcpyAsync(q[b].hits, s.dHits, PEARL_HITS_BYTES, cudaMemcpyDeviceToHost);
+		cudaEventRecord(q[b].done);
 		gettimeofday(&tb2, NULL);
-		uint32_t hits[1 + 2 * PEARL_MAX_HITS];
-		CUDA_SAFE_CALL(cudaMemcpy(hits, s.dHits, sizeof(hits), cudaMemcpyDeviceToHost));
+		s.t_host += (tb2.tv_sec - ta.tv_sec) + 1e-6 * (tb2.tv_usec - ta.tv_usec);
+	};
+
+	int cur = 0;
+	bool more = true;
+	enqueue(cur, *cursor);
+	for (;;) {
+		const uint32_t next = q[cur].trial + 1;
+		const bool ahead = more && (bench || next < max_nonce);
+		if (ahead) enqueue(cur ^ 1, next);
+
+		struct timeval tb2, tc;
+		gettimeofday(&tb2, NULL);
+		CUDA_SAFE_CALL(cudaEventSynchronize(q[cur].done));
 		gettimeofday(&tc, NULL);
+		const uint32_t trial = q[cur].trial;
+		const uint32_t *hits = q[cur].hits;
 		*cursor = trial + 1;
 		trials++;
-		s.t_host += (tb2.tv_sec - ta.tv_sec) + 1e-6 * (tb2.tv_usec - ta.tv_usec);
 		s.t_gpu += (tc.tv_sec - tb2.tv_sec) + 1e-6 * (tc.tv_usec - tb2.tv_usec);
 		s.t_trials++;
 
 		const uint32_t nh = min(hits[0], (uint32_t)PEARL_MAX_HITS);
+		if (nh && newest != cur) set_chunk(cur);
 		for (uint32_t h = 0; h < nh && work->valid_nonces < MAX_NONCES; h++) {
 			const uint32_t ro = hits[1 + 2 * h], co = hits[2 + 2 * h];
-			if (!pearl_cpu_tile(s, s.A, s.Bt, as, bs, ro, co, bound, NULL, NULL)) {
+			if (!pearl_cpu_tile(s, s.A, s.Bt, q[cur].as, q[cur].bs, ro, co, bound, NULL, NULL)) {
 				gpu_increment_reject(thr_id);
 				if (!opt_quiet)
 					gpulog(LOG_WARNING, thr_id, "pearlhash: tile %u,%u of trial %08x does not validate on CPU!", ro, co, trial);
 				continue;
 			}
-			uint32_t tr[8], tc[8];
-			for (int i = 0; i < 8; i++) { tr[i] = ro + s.rows[i]; tc[i] = co + s.cols[i]; }
+			uint32_t tr[16], tc[16];
+			for (uint32_t i = 0; i < s.h; i++) tr[i] = ro + s.rows[i];
+			for (uint32_t i = 0; i < s.w; i++) tc[i] = co + s.cols[i];
 			pearl_buf b = { 0, 0, 0 };
-			pearl_plain_proof(&b, PEARL_M, PEARL_N, PEARL_K, PEARL_R, &s.ta, s.A, tr, 8, &s.tb, s.Bt, tc, 8);
+			pearl_plain_proof(&b, PEARL_M, PEARL_N, PEARL_K, PEARL_R, &s.ta, s.A, tr, s.h, &s.tb, s.Bt, tc, s.w);
 			/* PEARLHASH_DUMP=<dir>: write the first share as header76.hex + proof.bin */
 			static bool dumped[MAX_GPUS];
 			const char *dump = getenv("PEARLHASH_DUMP");
@@ -485,6 +550,7 @@ extern "C" int scanhash_pearlhash(int thr_id, struct work *work, uint32_t max_no
 			work->sharediff[work->valid_nonces] = work->targetdiff;
 			work->valid_nonces++;
 		}
+		if (nh && newest != cur) set_chunk(newest);
 		if (nh) {
 			struct timeval td;
 			gettimeofday(&td, NULL);
@@ -495,10 +561,15 @@ extern "C" int scanhash_pearlhash(int thr_id, struct work *work, uint32_t max_no
 				s.t_trials, 1e3 * s.t_host / s.t_trials, 1e3 * s.t_gpu / s.t_trials, 1e3 * s.t_hit / s.t_trials);
 			s.t_host = s.t_gpu = s.t_hit = 0; s.t_trials = 0; s.t_last = time(NULL);
 		}
-		if (work->valid_nonces) break;
+		/* stop queueing on a share, the time budget or a restart; the queued trial is
+		 * still drained, so the cursor stays exact */
 		gettimeofday(&t1, NULL);
-		if ((t1.tv_sec - t0.tv_sec) + 1e-6 * (t1.tv_usec - t0.tv_usec) >= PEARL_CALL_SECONDS) break;
-	} while (!work_restart[thr_id].restart && (bench || pdata[19] < max_nonce));
+		if (work->valid_nonces || work_restart[thr_id].restart ||
+		    (t1.tv_sec - t0.tv_sec) + 1e-6 * (t1.tv_usec - t0.tv_usec) >= PEARL_CALL_SECONDS)
+			more = false;
+		if (!ahead) break;
+		cur ^= 1;
+	}
 
 	*hashes_done = (unsigned long)trials * PEARL_TRIAL_UNITS;
 	return work->valid_nonces;
@@ -509,8 +580,9 @@ extern "C" void free_pearlhash(int thr_id)
 	if (!init_done[thr_id]) return;
 	pearl_state &s = st[thr_id];
 	cudaSetDevice(device_map[thr_id]);
-	cudaFree(s.dU); cudaFree(s.dP); cudaFree(s.dApan); cudaFree(s.dBpan); cudaFree(s.dBbp); cudaFree(s.dHits);
+	cudaFree(s.dU); cudaFree(s.dP); cudaFree(s.dApan); cudaFree(s.dBpan); cudaFree(s.dHits);
 	cudaFree(s.dChunk); cudaFreeHost(s.hChunk);
+	for (int b = 0; b < 2; b++) { cudaFreeHost(s.slot[b].hits); cudaEventDestroy(s.slot[b].done); }
 	free(s.A); free(s.Bt);
 	if (s.have_job) { pearl_merkle_free(&s.ta); pearl_merkle_free(&s.tb); }
 	s.have_job = false;

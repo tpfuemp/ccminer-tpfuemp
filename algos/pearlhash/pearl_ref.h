@@ -118,6 +118,8 @@ static void pearl_pattern_bytes(const pearl_pattern *p, uint8_t out[6])
 static const uint32_t PEARL_DP4A_PATTERN[8] = { 0, 1, 2, 3, 64, 65, 66, 67 };	/* rows == cols */
 static const uint32_t PEARL_IMMA_ROWS[8] = { 0, 8, 16, 24, 32, 40, 48, 56 };
 static const uint32_t PEARL_IMMA_COLS[8] = { 0, 1, 8, 9, 16, 17, 24, 25 };
+/* wide IMMA kernel (64 x 64 warp tile): rows PEARL_IMMA_ROWS x these 16 cols */
+static const uint32_t PEARL_IMMA_W_COLS[16] = { 0, 1, 8, 9, 16, 17, 24, 25, 32, 33, 40, 41, 48, 49, 56, 57 };
 
 /* --- MiningConfiguration (dense: e = top_k = 0) ------------------------------ */
 typedef struct {

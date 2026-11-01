@@ -64,23 +64,28 @@ C        = (A + E_A)(B + E_B)        int7 x int7 -> int32, A, B in [-64, 63]
   (trial, a per-job salt, GPU id) as int7 digits.
 - **Per trial (2^37 MAC):** the host updates hash_b along one Merkle path (14
   BLAKE3 nodes) and derives the seeds. The GPU then runs the noise kernels, the
-  operand prepass, and one fused GEMM + jackpot + ticket-hash kernel.
+  operand prepass (B is built from noise alone, then the nonce chunk is added to
+  row 0), and one fused GEMM + jackpot + ticket-hash kernel.
+- **Overlap:** one trial is always queued ahead, so the host work of the next
+  trial runs while the GPU works on the current one.
 - **Kernel by architecture:**
 
 | arch | kernel | pattern (rows x cols) | one thread's tile |
 |---|---|---|---|
-| sm_80+ | `pearl_tiles_imma_kernel` (mma.sync m16n8k32 s8, 3-stage cp.async) | `[0,8,...,56]` x `[0,1,8,9,16,17,24,25]` | its 4x4 MMA accumulators |
-| sm_61, sm_75 | `pearl_tiles_dp4a_kernel` (8x8 register blocking, dp4a) | `[0,1,2,3,64..67]` x same | its 8x8 register block |
+| sm_80+ | `pearl_tiles_imma_w_t` (mma.sync m16n8k32 s8, 64x64 warp tile, 3-stage cp.async, pipelined fragments) | `[0,8,...,56]` x `[0,1,8,9,...,56,57]` (8 x 16) | its 4x8 MMA accumulators |
+| sm_61, sm_75 | `pearl_tiles_dp4a_t` (8x8 register blocking, dp4a) | `[0,1,2,3,64..67]` x same (8 x 8) | its 8x8 register block |
 
 Each kernel's pattern is exactly one thread's register block, so the jackpot fold
 needs no communication between threads. Both patterns are accepted by the
 reference verifier.
 
-- **Re-verify:** every reported tile is recomputed on the CPU (only its 8 + 8
+- **Re-verify:** every reported tile is recomputed on the CPU (only its h + w
   rows) before its proof is built. A kernel defect can only cause a local
   reject, never a bad share.
-- **Proof size:** a share is about 34 KB, or 46 KB of base64.
-- **Memory:** about 100 MB of GPU memory and about 33 MB of host memory per GPU.
+- **Proof size:** a share is about 52 KB (IMMA, 8 x 16 tile) or 34 KB (dp4a,
+  8 x 8), plus a third for base64.
+- **Memory:** about 33 MB of GPU buffers (plus the CUDA context) and about 33 MB
+  of host memory per GPU.
 
 ## Pool protocol
 
@@ -108,8 +113,9 @@ At startup:
 
 - **Host KATs** pinned from the Rust reference: the seed chain, noise bytes, and
   one jackpot -> ticket hash.
-- **GPU differential:** the kernel against the host reference on all 1024
-  tiles of a 256 x 256 trial.
+- **GPU differential:** the kernel against the host reference on every tile of
+  a 256 x 256 trial in the miner's own shape (A = 0, B^T zero except the nonce
+  chunk): 512 tiles (IMMA) or 1024 (dp4a).
 - **Negative control:** a changed seed must change every tile.
 
 A mismatch refuses to start. For testing only, `PEARLHASH_SELFTEST_FAULT=1`
@@ -129,6 +135,8 @@ CUDA 11.8, default settings. Rates in int8 MAC/s.
 | 2026-10-25 | GTX 1080 Ti (sm_61), Linux | 15.3-15.6 T | `--benchmark` (power-capped, 280 W) |
 | 2026-10-25 | GTX 1080 Ti (sm_61), Linux | ~15.5 T | live-validated on a Pearl pool: accepted 7/7, 30 min |
 | 2026-10-25 | RTX 3060 (sm_86), Windows | ~30 T | live-validated on a Pearl pool: accepted 2/2, 3 min (desktop in use) |
+| 2026-11-01 | RTX 3060 (sm_86), Windows | ~34 T | `--benchmark`; live-validated: accepted 1/1, 10 min, 34.4 T average |
+| 2026-11-01 | GTX 1080 Ti (sm_61), Linux | 17-18.5 T | `--benchmark` at the card's thermal limit (89 C); live-validated: accepted 2/2, 40 min |
 
 ## Limits
 

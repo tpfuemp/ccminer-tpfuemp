@@ -135,8 +135,55 @@ __global__ void pearl_tiles_naive_kernel(pearl_tile_params p, const int8_t *An, 
 #define PEARL_SUB		16	/* k-words per pipeline step */
 #define PEARL_GROUP_M		8	/* grouped rasterization for L2 reuse */
 
+/* Panels: blocks of PEARL_SUB k-words x 128 rows (8 KB, one pipeline step);
+ * pearl_panel_slot gives the word of (kw, row) inside its block.
+ * PEARL_PERM_ID: [kw][row] (dp4a). IMMA layouts: one 16-byte quad holds one thread's
+ * fragment registers and the quad index is the lane, so a fragment is one LDS.128.
+ * With sl = kw / 8, t = kw & 3, kh = (kw >> 2) & 1 inside the block:
+ *   A quad (sl, wm, i, lane)   = rows {g, g+8} + 16i of 64-row block wm, k-words {t, t+4}
+ *   B64 quad (sl, wn, jp, lane) = cols g + 8j, j = 2jp + {0, 1}, of 64-col block wn */
+#define PEARL_PERM_ID		0
+#define PEARL_PERM_IMMA_A	1
+#define PEARL_PERM_IMMA_B64	3
+
+__host__ __device__ __forceinline__ uint32_t pearl_panel_slot(uint32_t perm, uint32_t kw, uint32_t row)
+{
+	const uint32_t ks = kw & (PEARL_SUB - 1), sl = ks >> 3, t = ks & 3, kh = (ks >> 2) & 1;
+	if (perm == PEARL_PERM_IMMA_A) {
+		const uint32_t wm = row >> 6, g = row & 7, h = (row >> 3) & 1, i = (row >> 4) & 3;
+		return ((((sl * 2 + wm) * 4 + i) * 32 + g * 4 + t) << 2) + h + 2 * kh;
+	}
+	if (perm == PEARL_PERM_IMMA_B64) {
+		const uint32_t wn = row >> 6, g = row & 7, j = (row >> 3) & 7;
+		return ((((sl * 2 + wn) * 4 + (j >> 1)) * 32 + g * 4 + t) << 2) + kh + 2 * (j & 1);
+	}
+	return ks * PEARL_BT + row;
+}
+
+/* inverse of pearl_panel_slot for the IMMA layouts: slot (< 2048) -> k-word in block, row */
+__host__ __device__ __forceinline__ void pearl_panel_word(uint32_t perm, uint32_t slot, uint32_t *ks, uint32_t *row)
+{
+	const uint32_t e = slot & 3, q = slot >> 2, g = (q >> 2) & 7, t = q & 3, rest = q >> 5;
+	const uint32_t sub = rest & 3, w = (rest >> 2) & 1, sl = rest >> 3;
+	if (perm == PEARL_PERM_IMMA_A) {	/* e = h + 2 kh, sub = i */
+		*ks = sl * 8 + (e >> 1) * 4 + t;
+		*row = w * 64 + sub * 16 + (e & 1) * 8 + g;
+	} else {				/* B64: e = kh + 2 (j & 1), sub = j >> 1 */
+		*ks = sl * 8 + (e & 1) * 4 + t;
+		*row = w * 64 + (sub * 2 + (e >> 1)) * 8 + g;
+	}
+}
+
+/* word index of (row block rb, k-word kw, row within block) in a panel of KW k-words */
+__host__ __device__ __forceinline__ size_t pearl_panel_index(uint32_t perm, uint32_t rb, uint32_t KW, uint32_t kw, uint32_t row)
+{
+	if (perm == PEARL_PERM_ID) return ((size_t)rb * KW + kw) * PEARL_BT + row;
+	return ((size_t)rb * KW + (kw & ~(uint32_t)(PEARL_SUB - 1))) * PEARL_BT + pearl_panel_slot(perm, kw, row);
+}
+
 /* panel layout of X' = X + E_U[p0] - E_U[p1]; rows must be a multiple of 128 */
-__global__ void pearl_operand_panel_kernel(const int8_t *base, const int8_t *U, const uint32_t *P,
+template <uint32_t perm>
+__global__ void pearl_operand_panel_t(const int8_t *base, const int8_t *U, const uint32_t *P,
 	uint32_t rows, uint32_t k, uint32_t r, uint32_t *panel)
 {
 	uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -154,7 +201,7 @@ __global__ void pearl_operand_panel_kernel(const int8_t *base, const int8_t *U, 
 		if (base) v += base[(size_t)i * k + l0 + b];
 		res |= (uint32_t)(uint8_t)(int8_t)v << (8 * b);
 	}
-	panel[idx] = res;
+	panel[perm == PEARL_PERM_ID ? idx : pearl_panel_index(perm, rb, KW, kw, rr)] = res;
 }
 
 /* Panel prepass: one block = one 128-row panel x PEARL_PREP_KW k-words. U rows are
@@ -162,8 +209,9 @@ __global__ void pearl_operand_panel_kernel(const int8_t *base, const int8_t *U, 
  * Needs r <= 256. */
 #define PEARL_PREP_KW		64
 
+template <uint32_t perm>
 __global__ void __launch_bounds__(256)
-pearl_operand_panel_fast_kernel(const uint32_t *base_panel, const int8_t *U, const uint32_t *P,
+pearl_operand_panel_fast_t(const uint32_t *base_panel, const int8_t *U, const uint32_t *P,
 	uint32_t k, uint32_t r, uint32_t *panel)
 {
 	extern __shared__ uint32_t prep_smem[];
@@ -182,11 +230,40 @@ pearl_operand_panel_fast_kernel(const uint32_t *base_panel, const int8_t *U, con
 	}
 	__syncthreads();
 
+	if (perm != PEARL_PERM_ID) {
+		/* one 16-byte output quad per step: consecutive threads write consecutive quads */
+		const uint32_t kwn = min((uint32_t)PEARL_PREP_KW, KW - kw0), blk_q = PEARL_SUB * PEARL_BT / 4;
+		const size_t o0 = ((size_t)rb * KW + kw0) * PEARL_BT;
+		for (uint32_t qi = threadIdx.x; qi < kwn * PEARL_BT / 4; qi += blockDim.x) {
+			const uint32_t blk = qi / blk_q, s0 = (qi % blk_q) * 4;
+			const size_t o = o0 + (size_t)blk * PEARL_SUB * PEARL_BT + s0;
+			const uint4 bq = base_panel ? *(const uint4 *)(base_panel + o) : make_uint4(0, 0, 0, 0);
+			const uint32_t bw[4] = { bq.x, bq.y, bq.z, bq.w };
+			uint32_t ow[4];
+			#pragma unroll
+			for (int e = 0; e < 4; e++) {
+				uint32_t ks, wrow;
+				pearl_panel_word(perm, s0 + e, &ks, &wrow);
+				const uint32_t kk = blk * PEARL_SUB + ks;
+				const int8_t *uu = Us + wrow * ustride;
+				uint32_t out = 0;
+				#pragma unroll
+				for (int b = 0; b < 4; b++) {
+					const uint32_t pp = Ps[kk * 4 + b];
+					const int v = (int)(int8_t)(bw[e] >> (8 * b)) + (int)uu[pp & 0xffff] - (int)uu[pp >> 16];
+					out |= (uint32_t)(uint8_t)(int8_t)v << (8 * b);
+				}
+				ow[e] = out;
+			}
+			*(uint4 *)(panel + o) = make_uint4(ow[0], ow[1], ow[2], ow[3]);
+		}
+		return;
+	}
 	const uint32_t row = threadIdx.x % PEARL_BT;
 	const int8_t *u = Us + row * ustride;
 	for (uint32_t kk = threadIdx.x / PEARL_BT; kk < PEARL_PREP_KW && kw0 + kk < KW; kk += blockDim.x / PEARL_BT) {
 		const uint32_t kw = kw0 + kk;
-		const size_t o = ((size_t)rb * KW + kw) * PEARL_BT + row;
+		const size_t o = pearl_panel_index(perm, rb, KW, kw, row);
 		uint32_t res = base_panel ? base_panel[o] : 0;
 		uint32_t out = 0;
 		#pragma unroll
@@ -200,21 +277,39 @@ pearl_operand_panel_fast_kernel(const uint32_t *base_panel, const int8_t *U, con
 }
 
 /* write the first 1024 bytes of B^T row 0 into the base panel (stride 128 words) */
-__global__ void pearl_patch_row0_kernel(const uint32_t *chunk, uint32_t *panel)
+template <uint32_t perm>
+__global__ void pearl_patch_row0_t(const uint32_t *chunk, uint32_t *panel)
 {
-	panel[(size_t)threadIdx.x * PEARL_BT] = chunk[threadIdx.x];
+	panel[pearl_panel_index(perm, 0, 0, threadIdx.x, 0)] = chunk[threadIdx.x];
+}
+
+/* add the first 1024 bytes of B^T row 0 into a noised panel, per byte mod 256: with a base
+ * that is zero elsewhere this equals building the panel from that base (miner per trial) */
+template <uint32_t perm>
+__global__ void pearl_add_row0_t(const uint32_t *chunk, uint32_t *panel)
+{
+	uint32_t *w = panel + pearl_panel_index(perm, 0, 0, threadIdx.x, 0);
+	*w = __vadd4(*w, chunk[threadIdx.x]);
 }
 
 /* base (rows x k, row-major int8) -> panel layout, once per job */
-__global__ void pearl_to_panel_kernel(const int8_t *base, uint32_t rows, uint32_t k, uint32_t *panel)
+template <uint32_t perm>
+__global__ void pearl_to_panel_t(const int8_t *base, uint32_t rows, uint32_t k, uint32_t *panel)
 {
 	uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
 	uint32_t KW = k >> 2;
 	if (idx >= rows * KW) return;
 	uint32_t rr = idx % PEARL_BT, rest = idx / PEARL_BT;
 	uint32_t kw = rest % KW, rb = rest / KW;
-	panel[idx] = *(const uint32_t *)(base + (size_t)(rb * PEARL_BT + rr) * k + kw * 4);
+	panel[perm == PEARL_PERM_ID ? idx : pearl_panel_index(perm, rb, KW, kw, rr)] = *(const uint32_t *)(base + (size_t)(rb * PEARL_BT + rr) * k + kw * 4);
 }
+
+/* identity-layout (dp4a) instances under their original names */
+#define pearl_operand_panel_kernel	pearl_operand_panel_t<PEARL_PERM_ID>
+#define pearl_operand_panel_fast_kernel	pearl_operand_panel_fast_t<PEARL_PERM_ID>
+#define pearl_patch_row0_kernel		pearl_patch_row0_t<PEARL_PERM_ID>
+#define pearl_add_row0_kernel		pearl_add_row0_t<PEARL_PERM_ID>
+#define pearl_to_panel_kernel		pearl_to_panel_t<PEARL_PERM_ID>
 
 typedef struct {
 	uint32_t m, n, k, r;		/* m, n multiples of 128; k multiple of 64; r multiple of 64 */
@@ -223,9 +318,15 @@ typedef struct {
 } pearl_gemm_params;
 
 /* hits[0] = count; hits[1 + 2s] = tile row offset, hits[2 + 2s] = tile col offset.
- * dbg (optional): 24 words per tile in reference tile order (ri * n/8 + ci). */
+ * dbg (optional): 24 words per tile in reference tile order (ri * n/8 + ci).
+ * WIN: the 16-word jackpot window in registers (shifted every chunk, word 0 next) or in a
+ * local array indexed by chunk & 15. */
+#define PEARL_WIN_REG		0
+#define PEARL_WIN_LOCAL		1
+
+template <int WIN>
 __global__ void __launch_bounds__(256, 2)
-pearl_tiles_dp4a_kernel(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, uint32_t *dbg, uint32_t *hits)
+pearl_tiles_dp4a_t(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, uint32_t *dbg, uint32_t *hits)
 {
 	__shared__ uint4 As[2][PEARL_SUB][PEARL_BT / 4];
 	__shared__ uint4 Bs[2][PEARL_SUB][PEARL_BT / 4];
@@ -252,9 +353,13 @@ pearl_tiles_dp4a_kernel(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, u
 	for (int i = 0; i < 8; i++)
 		#pragma unroll
 		for (int j = 0; j < 8; j++) acc[i][j] = 0;
-	uint32_t win[16];
+	uint32_t win[16], jl[16], chunk = 0;
 	#pragma unroll
 	for (int i = 0; i < 16; i++) win[i] = 0;
+	if (WIN == PEARL_WIN_LOCAL) {
+		#pragma unroll
+		for (int i = 0; i < 16; i++) jl[i] = 0;
+	}
 
 	uint4 ra0 = ga[tid], ra1 = ga[tid + 256], rb0 = gb[tid], rb1 = gb[tid + 256];
 	sa0[tid] = ra0; sa0[tid + 256] = ra1; sb0[tid] = rb0; sb0[tid + 256] = rb1;
@@ -285,10 +390,16 @@ pearl_tiles_dp4a_kernel(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, u
 			for (int i = 0; i < 8; i++)
 				#pragma unroll
 				for (int j = 0; j < 8; j++) x ^= (uint32_t)acc[i][j];
-			const uint32_t nw = ((win[0] << 13) | (win[0] >> 19)) ^ x;
-			#pragma unroll
-			for (int i = 0; i < 15; i++) win[i] = win[i + 1];
-			win[15] = nw;
+			if (WIN == PEARL_WIN_REG) {
+				const uint32_t nw = ((win[0] << 13) | (win[0] >> 19)) ^ x;
+				#pragma unroll
+				for (int i = 0; i < 15; i++) win[i] = win[i + 1];
+				win[15] = nw;
+			} else {
+				const uint32_t q = chunk & 15;
+				jl[q] = ((jl[q] << 13) | (jl[q] >> 19)) ^ x;
+			}
+			chunk++;
 		}
 		if (s + 1 < steps) {
 			uint4 *da = sa0 + (cur ^ 1) * buf_stride, *db = sb0 + (cur ^ 1) * buf_stride;
@@ -297,13 +408,19 @@ pearl_tiles_dp4a_kernel(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, u
 		__syncthreads();
 	}
 
-	/* after C chunks win[q] holds word (C + q) % 16: rotate right by C % 16 */
-	const uint32_t rot = (steps / steps_per_chunk) & 15;
-	for (uint32_t t = 0; t < rot; t++) {
-		const uint32_t last = win[15];
+	if (WIN == PEARL_WIN_LOCAL) {
 		#pragma unroll
-		for (int i = 15; i > 0; i--) win[i] = win[i - 1];
-		win[0] = last;
+		for (int i = 0; i < 16; i++) win[i] = jl[i];
+	}
+	/* after C chunks win[q] holds word (C + q) % 16: rotate right by C % 16 */
+	if (WIN == PEARL_WIN_REG) {
+		const uint32_t rot = (steps / steps_per_chunk) & 15;
+		for (uint32_t t = 0; t < rot; t++) {
+			const uint32_t last = win[15];
+			#pragma unroll
+			for (int i = 15; i > 0; i--) win[i] = win[i - 1];
+			win[0] = last;
+		}
 	}
 
 	uint32_t hw[8];
@@ -325,15 +442,9 @@ pearl_tiles_dp4a_kernel(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, u
 	}
 }
 
-/* ===========================================================================
- * IMMA kernel (mma.sync.m16n8k32.s8). Block tile 128 x 128, 8 warps as 2 x 4, warp
- * tile 64 x 32 = 4 x 4 fragments. A thread's accumulators (rows {g, g+8} + 16i,
- * cols {2t, 2t+1} + 8j) are one hash tile of PEARL_IMMA_ROWS x PEARL_IMMA_COLS.
- * smem word (kw, row) is stored at row ^ ((kw & 3) << 3), conflict-free for the
- * fragment loads. 3-stage cp.async pipeline, 48 KB static smem.
- */
-#define PEARL_IMMA_STAGES	3
+#define pearl_tiles_dp4a_kernel pearl_tiles_dp4a_t<PEARL_WIN_REG>
 
+/* 16-byte global -> shared async copy (sm_80+) */
 __device__ __forceinline__ void pearl_cp_async16(void *smem, const void *gmem)
 {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
@@ -342,46 +453,65 @@ __device__ __forceinline__ void pearl_cp_async16(void *smem, const void *gmem)
 #endif
 }
 
-__global__ void __launch_bounds__(256, 2)
-pearl_tiles_imma_kernel(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, uint32_t *dbg, uint32_t *hits)
+/* ===========================================================================
+ * Wide IMMA kernel: warp tile 64 x 64 (4 x 8 m16n8k32 fragments), block 128 x 64*WN,
+ * 2 x WN warps. A thread's accumulators (rows {g, g+8} + 16i, cols {2t, 2t+1} + 8j) are
+ * one hash tile of PEARL_IMMA_ROWS x PEARL_IMMA_W_COLS. Panels in PEARL_PERM_IMMA_A /
+ * _B64, copied straight to smem, one panel block per pipeline stage. The next slice's
+ * fragments load while the current slice's MMAs run; the barrier sits before the last
+ * slice. GM: row blocks per raster group.
+ */
+#define PEARL_IMMA_W_STEP_U4	(PEARL_SUB * PEARL_BT / 4)	/* 512 uint4 = one panel block step */
+
+__host__ __device__ constexpr uint32_t pearl_imma_w_smem(int WN, int STAGES)
+{
+	return (uint32_t)STAGES * (1 + WN / 2) * PEARL_IMMA_W_STEP_U4 * 16;
+}
+
+template <int WN, int STAGES, int GM>
+__global__ void __launch_bounds__(64 * WN, WN == 4 ? 1 : 2)
+pearl_tiles_imma_w_t(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, uint32_t *dbg, uint32_t *hits)
 {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
-	__shared__ uint4 As[PEARL_IMMA_STAGES][PEARL_SUB][PEARL_BT / 4];
-	__shared__ uint4 Bs[PEARL_IMMA_STAGES][PEARL_SUB][PEARL_BT / 4];
+	extern __shared__ uint4 pearl_w_smem[];
+	constexpr uint32_t T = 64 * WN, BN = 64 * WN, NPB = WN / 2;
+	constexpr uint32_t STEP = PEARL_IMMA_W_STEP_U4, STAGE = STEP * (1 + NPB), CPT = STEP / T;
 
 	const uint32_t tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
 	const uint32_t g = lane >> 2, t = lane & 3;
-	const uint32_t wm = warp >> 2, wn = warp & 3;		/* 2 x 4 warps */
-	const uint32_t nbm = p.m / PEARL_BT, nbn = p.n / PEARL_BT;
-	const uint32_t in_group = PEARL_GROUP_M * nbn, pid = blockIdx.x;
-	const uint32_t first = (pid / in_group) * PEARL_GROUP_M;
-	const uint32_t gsz = min(nbm - first, (uint32_t)PEARL_GROUP_M);
+	const uint32_t wm = warp / WN, wn = warp % WN;
+	const uint32_t nbm = p.m / PEARL_BT, nbn = p.n / BN;
+	const uint32_t in_group = GM * nbn, pid = blockIdx.x;	/* GM row blocks per raster group */
+	const uint32_t first = (pid / in_group) * GM;
+	const uint32_t gsz = min(nbm - first, (uint32_t)GM);
 	const uint32_t bm = first + (pid % in_group) % gsz;
 	const uint32_t bn = (pid % in_group) / gsz;
 
 	const uint32_t KW = p.k >> 2;
 	const uint32_t steps = KW / PEARL_SUB;
 	const uint32_t steps_per_chunk = (p.r >> 2) / PEARL_SUB;
-	const uint32_t step_u4 = PEARL_SUB * PEARL_BT / 4;	/* 512 uint4 per operand per step */
-	const uint4 *ga = Ap + (size_t)bm * KW * (PEARL_BT / 4);
-	const uint4 *gb = Bp + (size_t)bn * KW * (PEARL_BT / 4);
+	const size_t panel_u4 = (size_t)KW * (PEARL_BT / 4);	/* one 128-row panel */
+	const uint4 *ga = Ap + bm * panel_u4 + tid;
+	const uint4 *gb = Bp + bn * NPB * panel_u4 + tid;
 
-	/* this thread's two copy slots per operand: flat uint4 index q -> (kw, row4) */
 	auto issue = [&](uint32_t s, uint32_t stage) {
+		uint4 *d = pearl_w_smem + stage * STAGE + tid;
+		const size_t so = (size_t)s * STEP;
 		#pragma unroll
-		for (int h = 0; h < 2; h++) {
-			const uint32_t q = tid + 256 * h, kwi = q >> 5, r4 = q & 31;
-			const uint32_t sw = r4 ^ ((kwi & 3) << 1);
-			pearl_cp_async16(&As[stage][kwi][sw], ga + (size_t)s * step_u4 + q);
-			pearl_cp_async16(&Bs[stage][kwi][sw], gb + (size_t)s * step_u4 + q);
-		}
+		for (int h = 0; h < (int)CPT; h++)
+			pearl_cp_async16(d + T * h, ga + so + T * h);
+		#pragma unroll
+		for (int pb = 0; pb < (int)NPB; pb++)
+			#pragma unroll
+			for (int h = 0; h < (int)CPT; h++)
+				pearl_cp_async16(d + (1 + pb) * STEP + T * h, gb + pb * panel_u4 + so + T * h);
 	};
 
-	int acc[4][4][4];	/* [i m-frag][j n-frag][d0..d3] */
+	int acc[4][8][4];	/* [i m-frag][j n-frag][d0..d3] */
 	#pragma unroll
 	for (int i = 0; i < 4; i++)
 		#pragma unroll
-		for (int j = 0; j < 4; j++)
+		for (int j = 0; j < 8; j++)
 			#pragma unroll
 			for (int e = 0; e < 4; e++) acc[i][j][e] = 0;
 	uint32_t win[16];
@@ -389,59 +519,21 @@ pearl_tiles_imma_kernel(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, u
 	for (int i = 0; i < 16; i++) win[i] = 0;
 
 	#pragma unroll
-	for (uint32_t s = 0; s < PEARL_IMMA_STAGES - 1; s++) {
+	for (uint32_t s = 0; s < STAGES - 1; s++) {
 		if (s < steps) issue(s, s);
 		asm volatile("cp.async.commit_group;");
 	}
 
-	const uint32_t *Aw = (const uint32_t *)&As[0][0][0];
-	const uint32_t *Bw = (const uint32_t *)&Bs[0][0][0];
-	const uint32_t arow = wm * 64 + g, bcol = wn * 32 + g;
-	uint32_t chunk_step = 0;
-	for (uint32_t s = 0; s < steps; s++) {
-		asm volatile("cp.async.wait_group %0;" :: "n"(PEARL_IMMA_STAGES - 2));
-		__syncthreads();
-		if (s + PEARL_IMMA_STAGES - 1 < steps) issue(s + PEARL_IMMA_STAGES - 1, (s + PEARL_IMMA_STAGES - 1) % PEARL_IMMA_STAGES);
-		asm volatile("cp.async.commit_group;");
-
-		const uint32_t stage = s % PEARL_IMMA_STAGES;
-		const uint32_t *sa = Aw + stage * PEARL_SUB * PEARL_BT, *sb = Bw + stage * PEARL_SUB * PEARL_BT;
-		#pragma unroll
-		for (int sl = 0; sl < 2; sl++) {		/* two k32 slices per stage */
-			const uint32_t k0 = sl * 8 + t, k1 = k0 + 4;	/* word t and t+4 of the slice */
-			const uint32_t x0 = (k0 & 3) << 3, x1 = (k1 & 3) << 3;
-			uint32_t af[4][4], bf[4][2];
-			#pragma unroll
-			for (int i = 0; i < 4; i++) {
-				const uint32_t r0 = arow + 16 * i, r1 = r0 + 8;
-				af[i][0] = sa[k0 * PEARL_BT + (r0 ^ x0)];
-				af[i][1] = sa[k0 * PEARL_BT + (r1 ^ x0)];
-				af[i][2] = sa[k1 * PEARL_BT + (r0 ^ x1)];
-				af[i][3] = sa[k1 * PEARL_BT + (r1 ^ x1)];
-			}
-			#pragma unroll
-			for (int j = 0; j < 4; j++) {
-				const uint32_t c = bcol + 8 * j;
-				bf[j][0] = sb[k0 * PEARL_BT + (c ^ x0)];
-				bf[j][1] = sb[k1 * PEARL_BT + (c ^ x1)];
-			}
-			#pragma unroll
-			for (int i = 0; i < 4; i++)
-				#pragma unroll
-				for (int j = 0; j < 4; j++)
-					asm volatile("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 "
-						"{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};"
-						: "+r"(acc[i][j][0]), "+r"(acc[i][j][1]), "+r"(acc[i][j][2]), "+r"(acc[i][j][3])
-						: "r"(af[i][0]), "r"(af[i][1]), "r"(af[i][2]), "r"(af[i][3]),
-						  "r"(bf[j][0]), "r"(bf[j][1]));
-		}
+	const uint32_t aq = wm * 128 + lane, bq = (1 + (wn >> 1)) * STEP + (wn & 1) * 128 + lane;
+	uint32_t rd = 0, wr = STAGES - 1, chunk_step = 0;
+	auto fold = [&]() {
 		if (++chunk_step == steps_per_chunk) {
 			chunk_step = 0;
 			uint32_t x = 0;
 			#pragma unroll
 			for (int i = 0; i < 4; i++)
 				#pragma unroll
-				for (int j = 0; j < 4; j++)
+				for (int j = 0; j < 8; j++)
 					#pragma unroll
 					for (int e = 0; e < 4; e++) x ^= (uint32_t)acc[i][j][e];
 			const uint32_t nw = ((win[0] << 13) | (win[0] >> 19)) ^ x;
@@ -449,6 +541,50 @@ pearl_tiles_imma_kernel(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, u
 			for (int i = 0; i < 15; i++) win[i] = win[i + 1];
 			win[15] = nw;
 		}
+	};
+	uint4 fa[2][4];
+	uint32_t fb[2][8][2];
+	auto load = [&](int slot, const uint4 *sq, int sl) {
+		#pragma unroll
+		for (int jp = 0; jp < 4; jp++) {
+			const uint4 v = sq[bq + sl * 256 + 32 * jp];
+			fb[slot][2 * jp][0] = v.x; fb[slot][2 * jp][1] = v.y;
+			fb[slot][2 * jp + 1][0] = v.z; fb[slot][2 * jp + 1][1] = v.w;
+		}
+		#pragma unroll
+		for (int i = 0; i < 4; i++) fa[slot][i] = sq[aq + sl * 256 + 32 * i];
+	};
+	asm volatile("cp.async.wait_group %0;" :: "n"(STAGES - 2));
+	__syncthreads();
+	load(0, pearl_w_smem, 0);
+	for (uint32_t s = 0; s < steps; s++) {
+		const uint4 *sq = pearl_w_smem + rd * STAGE;
+		rd = rd == STAGES - 1 ? 0 : rd + 1;
+		const uint4 *sn = pearl_w_smem + rd * STAGE;
+		/* stage wr held step s - 1, whose last fragments were loaded before the last barrier */
+		if (s + STAGES - 1 < steps) issue(s + STAGES - 1, wr);
+		asm volatile("cp.async.commit_group;");
+		wr = wr == STAGES - 1 ? 0 : wr + 1;
+		#pragma unroll
+		for (int sl = 0; sl < 2; sl++) {
+			const int cur = sl & 1;
+			if (sl == 1) {
+				asm volatile("cp.async.wait_group %0;" :: "n"(STAGES - 2));	/* step s + 1 landed */
+				__syncthreads();
+				load(cur ^ 1, sn, 0);	/* harmless past the last step */
+			} else
+				load(cur ^ 1, sq, sl + 1);
+			#pragma unroll
+			for (int i = 0; i < 4; i++)
+				#pragma unroll
+				for (int j = 0; j < 8; j++)
+					asm volatile("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 "
+						"{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};"
+						: "+r"(acc[i][j][0]), "+r"(acc[i][j][1]), "+r"(acc[i][j][2]), "+r"(acc[i][j][3])
+						: "r"(fa[cur][i].x), "r"(fa[cur][i].y), "r"(fa[cur][i].z), "r"(fa[cur][i].w),
+						  "r"(fb[cur][j][0]), "r"(fb[cur][j][1]));
+		}
+		fold();
 	}
 	asm volatile("cp.async.wait_group 0;");
 
@@ -463,10 +599,10 @@ pearl_tiles_imma_kernel(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, u
 	uint32_t hw[8];
 	blake3_keyed_block(p.a_seed.w, win, hw);
 	const uint32_t ro = bm * PEARL_BT + wm * 64 + g;	/* tile row offset (pattern min) */
-	const uint32_t co = bn * PEARL_BT + wn * 32 + 2 * t;	/* tile col offset */
+	const uint32_t co = bn * BN + wn * 64 + 2 * t;		/* tile col offset */
 	if (dbg) {
-		const uint32_t ri = (ro / 64) * 8 + ro % 64, ci = (co / 32) * 4 + (co % 32) / 2;
-		uint32_t *d = dbg + ((size_t)ri * (p.n / 8) + ci) * 24;
+		const uint32_t ri = (ro / 64) * 8 + ro % 64, ci = (co / 64) * 4 + (co % 64) / 2;
+		uint32_t *d = dbg + ((size_t)ri * (p.n / 16) + ci) * 24;
 		#pragma unroll
 		for (int i = 0; i < 16; i++) d[i] = win[i];
 		#pragma unroll
@@ -478,5 +614,13 @@ pearl_tiles_imma_kernel(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, u
 	}
 #endif
 }
+
+/* shipping shape: 128 x 128 block, 4 warps, 2 CTAs/SM, 3 stages, pipelined; 48 KB of
+ * dynamic smem, so no opt-in attribute is needed */
+#define PEARL_IMMA_WN		2
+#define PEARL_IMMA_W_STAGES	3
+#define PEARL_IMMA_W_GM		4
+#define PEARL_IMMA_W_SMEM	pearl_imma_w_smem(PEARL_IMMA_WN, PEARL_IMMA_W_STAGES)
+static_assert(pearl_imma_w_smem(PEARL_IMMA_WN, PEARL_IMMA_W_STAGES) <= 48 * 1024, "needs cudaFuncAttributeMaxDynamicSharedMemorySize");
 
 #endif /* PEARL_DEVICE_CUH */
