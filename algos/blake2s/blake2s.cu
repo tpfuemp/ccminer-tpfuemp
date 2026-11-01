@@ -540,53 +540,47 @@ extern "C" int scanhash_blake2s(int thr_id, struct work *work, uint32_t max_nonc
 				resNonces[0] = maxResults-1;
 			}
 
-			uint32_t vhashcpu[8];
-			uint32_t nonce = sph_bswap32(resNonces[1]);
-			be32enc(&endiandata[19], nonce);
-			blake2s_hash(vhashcpu, endiandata);
-
 			*hashes_done = pdata[19] - first_nonce + throughput;
 
-			if (fulltest(vhashcpu, ptarget))
+			/* CPU-check every slot and keep the two lowest valid nonces. The GPU
+			 * screens word 7 only: h7 <= ptarget[7] failing fulltest is no reject. */
+			uint32_t valid[2], vhash[2][8];
+			int nvalid = 0;
+			for (uint32_t j = 1; j <= resNonces[0]; j++)
 			{
-				work_set_target_ratio(work, vhashcpu);
-				work->nonces[0] = nonce;
-				rc = work->valid_nonces = 1;
-
-				// search for 2nd best nonce
-				for(uint32_t j=2; j <= resNonces[0]; j++)
-				{
-					nonce = sph_bswap32(resNonces[j]);
-					be32enc(&endiandata[19], nonce);
-					blake2s_hash(vhashcpu, endiandata);
-					if (fulltest(vhashcpu, ptarget))
-					{
-						gpulog(LOG_DEBUG, thr_id, "Multiple nonces: 1/%08x - %u/%08x", work->nonces[0], j, nonce);
-
-						work->nonces[1] = nonce;
-						if (bn_hash_target_ratio(vhashcpu, ptarget) > work->shareratio[0]) {
-							work->shareratio[1] = work->shareratio[0];
-							work->sharediff[1] = work->sharediff[0];
-							xchg(work->nonces[1], work->nonces[0]);
-							work_set_target_ratio(work, vhashcpu);
-						} else if (work->valid_nonces == 1) {
-							bn_set_target_ratio(work, vhashcpu, 1);
-						}
-
-						work->valid_nonces++;
-						rc = 2;
-						break;
+				uint32_t vhashcpu[8];
+				const uint32_t nonce = sph_bswap32(resNonces[j]);
+				be32enc(&endiandata[19], nonce);
+				blake2s_hash(vhashcpu, endiandata);
+				if (fulltest(vhashcpu, ptarget)) {
+					if (nvalid == 0 || nonce < valid[0]) {
+						valid[1] = valid[0]; memcpy(vhash[1], vhash[0], 32);
+						valid[0] = nonce; memcpy(vhash[0], vhashcpu, 32);
+					} else if (nvalid == 1 || nonce < valid[1]) {
+						valid[1] = nonce; memcpy(vhash[1], vhashcpu, 32);
 					}
+					nvalid++;
+				} else if (vhashcpu[7] > ptarget[7]) {
+					gpu_increment_reject(thr_id);
+					if (!opt_quiet)
+						gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", nonce);
 				}
-				if (work->valid_nonces > 1)
-					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1; // next scan start
-				else
-					pdata[19] = work->nonces[0] + 1;
+			}
+
+			if (nvalid) {
+				if (nvalid > 2)
+					gpulog(LOG_DEBUG, thr_id, "%d valid nonces, reporting the two lowest", nvalid);
+				work->nonces[0] = valid[0];
+				work_set_target_ratio(work, vhash[0]);
+				rc = work->valid_nonces = 1;
+				if (nvalid > 1) {
+					work->nonces[1] = valid[1];
+					bn_set_target_ratio(work, vhash[1], 1);
+					rc = work->valid_nonces = 2;
+				}
+				// the rest lie above the resume point and are found again
+				pdata[19] = valid[rc - 1] + 1;
 				return rc;
-			} else {
-				gpu_increment_reject(thr_id);
-				if (!opt_quiet)
-					gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", nonce);
 			}
 		}
 
