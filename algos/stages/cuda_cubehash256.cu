@@ -1,4 +1,4 @@
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #define CUBEHASH_ROUNDS 16 /* this is r for CubeHashr/b */
 #define CUBEHASH_BLOCKBYTES 32 /* this is b for CubeHashr/b */

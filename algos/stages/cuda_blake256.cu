@@ -9,7 +9,7 @@ extern "C" {
 #include "sph/sph_blake.h"
 }
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #include <memory.h>
 

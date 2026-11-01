@@ -11,7 +11,7 @@
 #define SPH_C32(x)    ((uint32_t)(x ## U))
 #define SPH_T32(x)    (x)
 #define ROTR(x, n)    (((x) >> (n)) | ((x) << (32 - (n))))
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 
 static __constant__ const uint32_t H256[8] = {

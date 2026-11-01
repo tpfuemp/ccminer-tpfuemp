@@ -12,7 +12,7 @@ extern "C"
 #include "miner.h"
 }
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 extern void sha3d_cpu_init(int thr_id);
 extern void sha3d_cpu_free(int thr_id);

@@ -2,7 +2,7 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdint.h>
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "balloon.h"
 #include "sha256.h"
 // The mined header is always 80 bytes; compile-time so the copies fold.

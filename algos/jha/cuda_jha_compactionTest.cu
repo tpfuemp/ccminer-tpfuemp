@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <memory.h>
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include <sm_30_intrinsics.h>
 
 #ifdef __INTELLISENSE__

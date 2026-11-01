@@ -7,7 +7,7 @@
 #include "sph/sph_skein.h"
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 static uint32_t *d_hash[MAX_GPUS];
 

@@ -4,7 +4,7 @@ extern "C" {
 }
 
 #include <miner.h>
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 extern void heavyhash_cpu_setBlock_80(uint32_t *pdata);
 extern void heavyhash_cpu_setTarget(const void *pTargetIn);

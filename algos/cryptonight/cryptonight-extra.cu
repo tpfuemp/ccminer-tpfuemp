@@ -6,7 +6,7 @@
 #endif
 
 #include <miner.h>
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 #include "cryptonight.h"
 
 typedef uint8_t BitSequence;

@@ -10,7 +10,7 @@
  * Transcribed from algos/x22/x25x.c (X25X_SHUFFLE_ROUNDS / _BLOCKS loop).
  */
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #define X25X_SHUF_WORDS  (24 * 64 / 2)   /* 768 */
 #define X25X_SHUF_ROUNDS 12

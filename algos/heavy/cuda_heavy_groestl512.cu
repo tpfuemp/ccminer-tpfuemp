@@ -4,7 +4,7 @@
 #define SPH_C32(x) ((uint32_t)(x ## U))
 #define SPH_T32(x) ((x) & SPH_C32(0xFFFFFFFF))
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 // globaler Speicher für alle HeftyHashes aller Threads
 extern uint32_t *heavy_heftyHashes[MAX_GPUS];

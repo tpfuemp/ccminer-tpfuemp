@@ -29,7 +29,7 @@ It consumes the shared x-family stage library and the migrated Lyra2:
   `lyra2_cuda_hash_64` — co-owned with the lyra2 family.
 
 All includes are project-include-dir (`.`) relative (`sph/*`, `miner.h`,
-`cuda_helper.h`) or already repo-root-relative (`algos/...`), and the folder has
+`cuda/helper.cuh`) or already repo-root-relative (`algos/...`), and the folder has
 no local headers, so the move is source-transparent — no include edits were
 needed.
 

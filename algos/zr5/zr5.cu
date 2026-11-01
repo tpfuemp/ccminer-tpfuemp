@@ -9,7 +9,7 @@ extern "C" {
 }
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #include <stdio.h>
 #include <memory.h>

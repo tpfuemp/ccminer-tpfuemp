@@ -2045,7 +2045,7 @@ static bool stratum_get_algo(struct stratum_ctx *sctx, json_t *id, json_t *param
 	return ret;
 }
 
-#include "nvml.h"
+#include "core/gpu/nvml.h"
 extern char driver_version[32];
 extern int cuda_arch[MAX_GPUS];
 

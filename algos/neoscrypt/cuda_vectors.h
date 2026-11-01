@@ -9,7 +9,7 @@
 #define __LDG_PTR   "r"
 #endif
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 //typedef __device_builtin__ struct ulong16 ulong16;
 

@@ -20,7 +20,7 @@
 
 #include <algorithm>
 #include <miner.h>
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 #include "cuda/bc3_hashes_device.cuh"
 #include "cuda/bc3_mix_device.cuh"

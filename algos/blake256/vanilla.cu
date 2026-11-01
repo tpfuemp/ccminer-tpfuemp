@@ -21,7 +21,7 @@ extern "C" {
 #include "sph/sph_blake.h"
 }
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "cuda/candidate_report.cuh"
 
 #ifdef __INTELLISENSE__

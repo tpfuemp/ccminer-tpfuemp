@@ -14,7 +14,7 @@ extern "C" {
 #include <sph/sph_ripemd.h>
 }
 
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 #include <miner.h>
 
 #define A 64

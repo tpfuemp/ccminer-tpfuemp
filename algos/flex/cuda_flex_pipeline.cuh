@@ -24,7 +24,7 @@
 #include <string.h>
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "algos/common/cuda_x_stages.h"
 #include "algos/flex/flex.h"
 #include "algos/flex/cuda_flex_sha3.cuh"

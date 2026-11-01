@@ -42,7 +42,7 @@
 
 #include "miner.h"
 #include "algos.h"
-#include "api_control.h"
+#include "core/api/api_control.h"
 #include "algos/sia/sia-rpc.h"
 #include "algos/cryptonight/xmr-rpc.h"
 #include "sph/sph_sha3d.h"
@@ -62,7 +62,7 @@ BOOL WINAPI ConsoleHandler(DWORD);
 #define HEAVYCOIN_BLKHDR_SZ		84
 #define MNR_BLKHDR_SZ 80
 
-#include "nvml.h"
+#include "core/gpu/nvml.h"
 #ifdef USE_WRAPNVML
 nvml_handle *hnvml = NULL;
 #endif

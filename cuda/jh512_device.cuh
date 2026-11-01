@@ -24,7 +24,7 @@
 #define CUDA_JH512_DEVICE_CUH
 
 #include <stdint.h>
-#include <cuda_helper.h>  // xchg, __byte_perm
+#include "cuda/helper.cuh"  // xchg, __byte_perm
 
 #ifdef __CUDACC__
 

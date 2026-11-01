@@ -10,7 +10,7 @@
  */
 #include <stdio.h>
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 typedef unsigned char uchar;
 

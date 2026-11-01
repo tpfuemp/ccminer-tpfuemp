@@ -8,7 +8,7 @@
 #define __LDG_PTR   "r"
 #endif
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 typedef struct __align__(16) uint2x4 {
 	uint2 x, y, z, w;

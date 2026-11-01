@@ -19,9 +19,9 @@ ccminer_SOURCES	= elist.h miner.h compat.h \
 			  compat/inttypes.h compat/stdbool.h compat/unistd.h \
 			  compat/sys/time.h compat/getopt/getopt.h \
 			  crc32.c algos/heavy/hefty1.c \
-			  ccminer.cpp pools.cpp util.cpp bench.cpp bignum.cpp \
-			  api.cpp api_control.cpp api_control.h api_model.cpp api_model.h api_http.c api_http.h api_metrics.c api_metrics.h api_routes.cpp api_routes.h hashlog.cpp nvml.cpp stats.cpp sysinfos.cpp cuda.cpp \
-			  nvsettings.cpp \
+			  ccminer.cpp core/pools.cpp core/util.cpp core/bench.cpp bignum.cpp \
+			  core/api/api.cpp core/api/api_control.cpp core/api/api_control.h core/api/api_model.cpp core/api/api_model.h core/api/api_http.c core/api/api_http.h core/api/api_metrics.c core/api/api_metrics.h core/api/api_routes.cpp core/api/api_routes.h core/hashlog.cpp core/gpu/nvml.cpp core/stats.cpp core/sysinfos.cpp core/cuda.cpp \
+			  core/gpu/nvsettings.cpp \
 			  algos/equihash/equi-stratum.cpp algos/equihash/equi.cpp algos/equihash/equi_verify_144.cpp algos/equihash/equi_verify_192.cpp algos/equihash/blake2/blake2bx.cpp \
 			  algos/equihash/equihash.cpp algos/equihash/cuda_equi.cu \
 			  algos/equihash/cuda_equi24b.cu algos/equihash/cuda_equi24b_192.cu \

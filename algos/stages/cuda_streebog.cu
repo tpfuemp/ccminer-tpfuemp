@@ -21,9 +21,9 @@
 #include <string.h>
 
 #include <miner.h>
-#include <cuda_helper.h>
-#include <cuda_vectors.h>
-#include <cuda_vector_uint2x4.h>
+#include "cuda/helper.cuh"
+#include "cuda/vectors.cuh"
+#include "cuda/vector_uint2x4.cuh"
 
 #include "cuda/selftest_gate.cuh"
 

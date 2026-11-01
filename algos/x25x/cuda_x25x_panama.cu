@@ -11,7 +11,7 @@
  * padding block) followed by 32 pull rounds, then emits state[9..16] LE.
  */
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 // GAMMA -> PI -> THETA core: a[17] -> t[17]. Does not modify a[].
 __device__ __forceinline__

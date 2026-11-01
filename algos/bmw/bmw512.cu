@@ -7,7 +7,7 @@ extern "C" {
 #include "sph/sph_bmw.h"
 }
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "cuda/selftest_gate.cuh"
 
 #define NBN 2

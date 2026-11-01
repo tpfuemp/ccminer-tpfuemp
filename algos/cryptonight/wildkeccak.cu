@@ -10,8 +10,8 @@ extern "C" {
 }
 
 #include <miner.h>
-#include <cuda_helper.h>
-#include <cuda_vector_uint2x4.h> // todo
+#include "cuda/helper.cuh"
+#include "cuda/vector_uint2x4.cuh" // todo
 
 #include "wildkeccak.h"
 

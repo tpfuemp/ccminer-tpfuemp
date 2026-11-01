@@ -8,7 +8,7 @@
  * re-hashed on the host before submit. */
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "algos.h"
 
 extern "C" {

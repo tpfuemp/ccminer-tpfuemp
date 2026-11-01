@@ -17,7 +17,7 @@
 #include <stdint.h>
 
 #include <miner.h>
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 #include "cuda/selftest_gate.cuh"
 

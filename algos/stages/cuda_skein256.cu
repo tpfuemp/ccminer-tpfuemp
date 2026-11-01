@@ -1,6 +1,6 @@
 #include <memory.h>
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 static __forceinline__ __device__
 void Round512v35(uint2 &p0, uint2 &p1, uint2 &p2, uint2 &p3, uint2 &p4, uint2 &p5, uint2 &p6, uint2 &p7,

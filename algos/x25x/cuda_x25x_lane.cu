@@ -12,7 +12,7 @@
  * output-transform block, ctr=0), emitting h[0..15] big-endian.
  */
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #define T8(x) ((x) & 0xff)
 #define B0(x) (T8((x)))

@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 // Branch compaction: both branches share one buffer of `threads` records, branch 1
 // filling it from the start and branch 2 from the end; d_slot remembers each record's slot.

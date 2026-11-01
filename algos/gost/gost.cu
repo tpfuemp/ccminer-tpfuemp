@@ -3,7 +3,7 @@ extern "C" {
 }
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #include <stdio.h>
 #include <memory.h>
@@ -33,7 +33,7 @@ extern "C" void gostd(void *output, const void *input, size_t len)
 
 //#define _DEBUG
 #define _DEBUG_PREFIX "gost"
-#include "cuda_debug.cuh"
+#include "cuda/debug.cuh"
 
 static bool init[MAX_GPUS] = { 0 };
 extern void gostd_init(int thr_id);

@@ -13,7 +13,7 @@
 
 #include "miner.h"
 #include "algos.h"
-#include "nvml.h"
+#include "core/gpu/nvml.h"
 #include "api_control.h"
 #include "api_model.h"
 

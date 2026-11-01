@@ -12,8 +12,8 @@
  */
 
 #include "miner.h"
-#include "cuda_helper_alexis.h"
-#include "cuda_vectors_alexis.h"
+#include "cuda/helper_alexis.cuh"
+#include "cuda/vectors_alexis.cuh"
 
 #ifdef __INTELLISENSE__
 /* just for vstudio code colors */

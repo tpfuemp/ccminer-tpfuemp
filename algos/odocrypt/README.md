@@ -19,7 +19,7 @@ to this fork. `odo_hash_host()` is validated against DigiByte Core.
 - `odocrypt_jit.cpp` / `.h` - optional per-epoch NVRTC recompile (below).
 - `odocrypt.h` - shared definitions.
 
-Includes use the include-path forms (`"miner.h"`, `"cuda_helper.h"`); the
+Includes use the include-path forms (`"miner.h"`, `"cuda/helper.cuh"`); the
 parent-relative forms that predate the move into `algos/` would not resolve.
 
 ## Kernel notes

@@ -12,10 +12,10 @@
 #define CUDA_CUBEHASH512_DEVICE_CUH
 
 #include <stdint.h>
-#include <cuda_helper.h>  // ROTL32
+#include "cuda/helper.cuh"  // ROTL32
 #ifndef CUDA_LYRA_VECTOR_H   /* alexis stack provides uint2x4 + __ldg4; else pull tpruvot pair */
-#include <cuda_vectors.h>
-#include <cuda_vector_uint2x4.h>
+#include "cuda/vectors.cuh"
+#include "cuda/vector_uint2x4.cuh"
 #endif
 
 #ifdef __CUDACC__

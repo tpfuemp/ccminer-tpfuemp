@@ -10,7 +10,7 @@
 #define __LDG_PTR   "r"
 #endif
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #define __shfl2(var, srcLane) __shfl_sync(0xFFFFFFFFu, var, srcLane)
 

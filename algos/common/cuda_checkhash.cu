@@ -6,7 +6,7 @@
 
 #include "miner.h"
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 __constant__ uint32_t pTarget[8]; // 32 bytes
 

@@ -3,9 +3,9 @@
  *
  *  final touch by tpruvot for tribus - 09 2017
  */
-#include <cuda_helper.h>
-#include <cuda_vector_uint2x4.h>
-#include <cuda_vectors.h>
+#include "cuda/helper.cuh"
+#include "cuda/vector_uint2x4.cuh"
+#include "cuda/vectors.cuh"
 
 #define INTENSIVE_GMF
 #include "algos/stages/cuda_echo512_aes.cuh"

@@ -31,7 +31,12 @@ cuda/                      # shared DEVICE headers (the device library)
                            # blake512_device.cuh, keccak_device.cuh, groestl512_x2_device.cuh,
                            # aes_device.cuh, lyra2_device.cuh, … (23 headers, 2026-08-13)
   selftest_gate.cuh        # shared fail-closed gate for init-time device self-tests
-compat/, util/, api/, ...  # unchanged infrastructure
+  helper.cuh, vectors.cuh  # math/type helpers (+ helper_alexis, vectors_alexis, vector_uint2x4,
+                           # debug); moved from the repo root, include as "cuda/helper.cuh"
+core/                      # miner runtime: util, pools, stats, hashlog, bench, sysinfos, cuda.cpp
+  gpu/                     # telemetry: nvml, nvapi, nvsettings
+  api/                     # HTTP/REST + JSON API (api_*.c/.cpp/.h)
+compat/, api/ ...          # unchanged: vendored libs; api/ holds API samples + tests
 ```
 
 **The `cuda/` listing is descriptive; the directory is the authoritative list.** An earlier
@@ -81,7 +86,7 @@ Error handling:
 The three-level gate from the plan family applies unchanged. It selects between kernel variants (including still-working legacy variants on sm_61+); only code failing the CUDA 11.8 removal criterion (§6) drops out of the gate entirely.
 
 1. **Compile time:** `__CUDA_ARCH__` guards for genuinely arch-specific instructions (e.g., `cp.async` ≥ sm_80) and, where the plans specify it, a build option (e.g., `--enable-legacy-sm`) for retained legacy variants. No branches for arches below the sm_61 build floor.
-2. **Runtime:** the selector reads the globals declared in `cuda_helper.h` — `device_sm[]` (compute capability × 100), `device_mpcount[]`, and `cuda_arch[]` via `cuda_get_arch(thr_id)` — directly in the algo's host code, to pick a kernel variant, a default intensity or an allocation size. Per-card tuning tables (e.g. the NeoScrypt card detection) live in the algo folder. Throughput is a runtime knob (`-i/--intensity`, through `cuda_default_throughput()`); block size is not — it is a compile-time `TPB` constant with a matching `__launch_bounds__`.
+2. **Runtime:** the selector reads the globals declared in `cuda/helper.cuh` — `device_sm[]` (compute capability × 100), `device_mpcount[]`, and `cuda_arch[]` via `cuda_get_arch(thr_id)` — directly in the algo's host code, to pick a kernel variant, a default intensity or an allocation size. Per-card tuning tables (e.g. the NeoScrypt card detection) live in the algo folder. Throughput is a runtime knob (`-i/--intensity`, through `cuda_default_throughput()`); block size is not — it is a compile-time `TPB` constant with a matching `__launch_bounds__`.
 
    **There is no `cuda/dispatch.cuh`, and there never has been** — an earlier revision of this section required routing launch configuration through one, and it was planned against for a year. The mechanism is real (`device_sm[]` in ~50 files, `cuda_arch[]` in ~34); only that header was fictional. The paragraph above is the rule. Consolidating these globals behind one header is possible future work, not a requirement in force.
 3. **API level:** `scanhash_<algo>`, `<algo>_setBlock_*`, and init/free entry points remain **signature-stable**. Renames or signature changes require touching `ccminer.cpp`/`algos.h` in the same commit and a changelog entry.

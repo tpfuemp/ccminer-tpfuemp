@@ -39,7 +39,7 @@
 extern "C" {
 #include "sph/sph_whirlpool.h"
 }
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 #include <miner.h>
 #include "cuda_whirlpool_tables.cuh"
 #include "cuda/whirlpool512_x4_device.cuh"

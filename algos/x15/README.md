@@ -22,7 +22,7 @@ whirlpool (WHC):  Whirlpool ×4 (80-byte header then 3×64)
   whirlpool stage's 80-byte fused-compare path (`whirlpool512_setBlock_80` +
   `whirlpool512_cpu_hash_80`, best nonce found on-device).
 - `whirlpoolx.cu` + `cuda_whirlpoolx.cu` — `-a whirlpoolx`, **currently
-  disabled** (commented out in `ccminer.cpp`, skipped in `bench.cpp`, not in the
+  disabled** (commented out in `ccminer.cpp`, skipped in `core/bench.cpp`, not in the
   build). Relocated here for tidiness but not compiled; `whirlpoolx_*` names
   kept (single, dormant consumer).
 

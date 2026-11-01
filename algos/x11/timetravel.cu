@@ -33,7 +33,7 @@ extern "C" {
 }
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "algos/common/cuda_x_stages.h"
 
 static uint32_t *d_hash[MAX_GPUS];
@@ -237,7 +237,7 @@ static uint32_t get_next_time(uint32_t ntime, char* curOrder)
 
 //#define _DEBUG
 #define _DEBUG_PREFIX "tt-"
-#include "cuda_debug.cuh"
+#include "cuda/debug.cuh"
 
 /* timetravel's stage enum differs from the shared fused kernel's (timetravel has
  * SKEIN=3,JH=4,KECCAK=5 vs the fused kernel's JH=3,KECCAK=4,SKEIN=5); map

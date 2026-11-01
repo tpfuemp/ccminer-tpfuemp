@@ -30,7 +30,7 @@ extern "C" {
 }
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "algos/common/cuda_x_stages.h"
 
 static uint32_t *d_hash[MAX_GPUS];
@@ -235,7 +235,7 @@ static bool use_compat_kernels[MAX_GPUS] = { 0 };
 
 //#define _DEBUG
 #define _DEBUG_PREFIX "x16s-"
-#include "cuda_debug.cuh"
+#include "cuda/debug.cuh"
 
 extern "C" int scanhash_x16s(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done)
 {

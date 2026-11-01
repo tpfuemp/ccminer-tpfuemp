@@ -30,7 +30,7 @@
 #include <stdio.h>
 #include <memory.h>
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #define F1(x6, x5, x4, x3, x2, x1, x0) \
 	(((x1) & ((x0) ^ (x4))) ^ ((x2) & (x5)) ^ ((x3) & (x6)) ^ (x0))

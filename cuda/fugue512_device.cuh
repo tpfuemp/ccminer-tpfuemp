@@ -21,7 +21,7 @@
 #define CUDA_FUGUE512_DEVICE_CUH
 
 #include <stdint.h>
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 #ifdef __CUDACC__
 

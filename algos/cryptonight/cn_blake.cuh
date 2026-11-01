@@ -1,4 +1,4 @@
-//#include <cuda_helper.h>
+//#include "cuda/helper.cuh"
 
 typedef struct {
   uint32_t h[8], s[4], t[2];

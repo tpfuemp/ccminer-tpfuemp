@@ -6,7 +6,7 @@
  * register-resident fused-run API (cuda_x_fused.cu). Any migrated x-family
  * algo includes this one header instead of a per-algo branded aggregate. */
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 /* core quark/blake-family launcher prototypes (folded in from the retired
  * algos/stages/cuda_quark.h 2026-07-16). The bare <prim>512_cpu_* names are the

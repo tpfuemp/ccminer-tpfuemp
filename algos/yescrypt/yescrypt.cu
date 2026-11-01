@@ -1,5 +1,5 @@
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 extern "C" {
 #include "sph/yescrypt.h"
 }

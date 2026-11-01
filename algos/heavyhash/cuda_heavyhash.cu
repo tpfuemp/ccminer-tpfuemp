@@ -3,8 +3,8 @@ extern "C" {
 #include "heavyhash-gate.h"
 }
 
-#include "cuda_helper.h"
-#include "cuda_vectors.h"
+#include "cuda/helper.cuh"
+#include "cuda/vectors.cuh"
 #include "miner.h"
 #include "cuda/selftest_gate.cuh"
 

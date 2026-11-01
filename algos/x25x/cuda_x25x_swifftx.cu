@@ -13,7 +13,7 @@
  * residues stored in 32-bit slots), matching the CPU reference.
  */
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include <stdint.h>
 
 typedef int32_t swift_int16_t;

@@ -1,6 +1,6 @@
 #include <memory.h>
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "cuda/groestl512_x2_device.cuh"   /* bitsliced S-box, GF(2^8) doubling, plane transpose */
 
 /* Groestl-256 of a 32-byte hash, four hashes per thread, bitsliced in registers: the

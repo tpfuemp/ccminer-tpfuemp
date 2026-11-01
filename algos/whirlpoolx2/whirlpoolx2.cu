@@ -11,7 +11,7 @@ extern "C" {
 }
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 extern void whirlpoolx2_cpu_init(int thr_id, uint32_t threads);
 extern void whirlpoolx2_cpu_free(int thr_id);

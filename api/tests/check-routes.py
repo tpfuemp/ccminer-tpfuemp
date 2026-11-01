@@ -16,7 +16,7 @@ import re
 import sys
 
 DOC = "docs/api-rest.md"
-SRC = "api_routes.cpp"
+SRC = "core/api/api_routes.cpp"
 
 # The contract's endpoint table. A row may name several paths in one cell, and the
 # fourth column is the capability that carries them -- not a per-kind availability

@@ -19,8 +19,8 @@
  * consumers); 16 = tiger192.
  */
 
-#include <cuda_helper_alexis.h>
-#include <cuda_vectors_alexis.h>
+#include "cuda/helper_alexis.cuh"
+#include "cuda/vectors_alexis.cuh"
 #include <miner.h>
 #include <string.h>
 

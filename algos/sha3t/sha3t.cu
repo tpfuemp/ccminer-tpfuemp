@@ -13,7 +13,7 @@ extern "C" {
 }
 
 #undef ROTL64
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 extern void sha3t_cpu_init(int thr_id);
 extern void sha3t_cpu_free(int thr_id);

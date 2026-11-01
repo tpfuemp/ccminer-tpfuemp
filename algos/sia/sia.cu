@@ -12,8 +12,8 @@
 
 #include <sph/blake2b.h>
 
-#include <cuda_helper.h>
-#include <cuda_vector_uint2x4.h>
+#include "cuda/helper.cuh"
+#include "cuda/vector_uint2x4.cuh"
 
 #define TPB 512
 #define NBN 2

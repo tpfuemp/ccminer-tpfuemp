@@ -13,7 +13,7 @@
 #define CUDA_SHABAL512_DEVICE_CUH
 
 #include <stdint.h>
-#include <cuda_helper.h>  // SPH_C32/SPH_T32/SPH_ROTL32
+#include "cuda/helper.cuh"  // SPH_C32/SPH_T32/SPH_ROTL32
 
 #ifdef __CUDACC__
 

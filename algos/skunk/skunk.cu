@@ -12,7 +12,7 @@ extern "C" {
 }
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 // krnlx merged skein+cubehash+fugue kernel (algos/skunk/cuda_skunk.cu)
 extern void skunk_cpu_init(int thr_id, uint32_t threads);

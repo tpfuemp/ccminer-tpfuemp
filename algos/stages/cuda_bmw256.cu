@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <memory.h>
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #undef SPH_ROTL32
 #define SPH_ROTL32 ROTL32

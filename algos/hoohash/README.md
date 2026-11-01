@@ -4,7 +4,7 @@ Relocated from the top-level `hoohash/` into `algos/hoohash/` (layout B). This w
 a **relocation-only** migration: hoohash is a self-contained standalone algo with
 its own device library, not part of any shared-stage family, and nothing outside
 this folder consumes its symbols (only the usual `scanhash_hoohash` / `free_hoohash`
-dispatcher wiring in `ccminer.cpp` / `bench.cpp` / `miner.h` / `algos.h`).
+dispatcher wiring in `ccminer.cpp` / `core/bench.cpp` / `miner.h` / `algos.h`).
 
 ## Files
 
@@ -37,4 +37,4 @@ resolve via the root include dir, not source-relative):
 - `cuda_hoohashv110.cu`: `"hoohash/hoohash_device.cuh"` → `"algos/hoohash/hoohash_device.cuh"`
 - `hoohash_device.cuh`: `"hoohash/blake3_hoo_device.cuh"` → `"algos/hoohash/blake3_hoo_device.cuh"`
 
-`hoohash.cu` uses only search-path includes (`miner.h`, `cuda_helper.h`) — no edit.
+`hoohash.cu` uses only search-path includes (`miner.h`, `cuda/helper.cuh`) — no edit.

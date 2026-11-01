@@ -39,7 +39,7 @@ the C++ standard-library headers ethash requires, so the two never share a TU.
 - **Stratum** — ethproxy/KawPoW dialect, implemented from the yiimp pool server
   reference (`mining.subscribe` nonce prefix; 7-param `mining.notify`
   header_hash/seed_hash/target/height/nbits; 5-param `mining.submit`
-  worker/job/nonce/header_hash/mixhash). Wiring: `util.cpp`
+  worker/job/nonce/header_hash/mixhash). Wiring: `core/util.cpp`
   (`kawpow_stratum_notify`, subscribe) + `ccminer.cpp` (submit / gen_work).
 
 ## Correctness

@@ -10,7 +10,7 @@
 #include <map>
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #include "keccak.h"
 #include "salsa_kernel.h"

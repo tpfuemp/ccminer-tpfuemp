@@ -15,10 +15,10 @@
 #ifndef CUDA_ECHO512_DEVICE_CUH
 #define CUDA_ECHO512_DEVICE_CUH
 
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 #ifndef CUDA_LYRA_VECTOR_H
-#include <cuda_vectors.h>
-#include <cuda_vector_uint2x4.h>
+#include "cuda/vectors.cuh"
+#include "cuda/vector_uint2x4.cuh"
 #endif
 #include "cuda/aes_device.cuh"
 

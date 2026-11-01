@@ -22,7 +22,7 @@
 #define CUDA_KECCAK_DEVICE_CUH
 
 #include <stdint.h>
-#include <cuda_helper.h>  // ROL2/ROR2/ROL8/ROR8, xor3x, vectorize/devectorize
+#include "cuda/helper.cuh"  // ROL2/ROR2/ROL8/ROR8, xor3x, vectorize/devectorize
 
 /* Shared initializers so the host copy and the per-TU device copies can
  * never drift apart. */

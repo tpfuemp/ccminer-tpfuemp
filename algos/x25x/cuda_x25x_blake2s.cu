@@ -7,7 +7,7 @@
  * blake2s(out, in, NULL, 32, 1536, 0). 1536 = 24 * 64 = exactly 24 blocks.
  */
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 __device__ __constant__ static const uint32_t blake2s_IV[8] = {
 	0x6A09E667u, 0xBB67AE85u, 0x3C6EF372u, 0xA54FF53Au,

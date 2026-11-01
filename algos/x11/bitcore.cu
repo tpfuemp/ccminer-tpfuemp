@@ -41,7 +41,7 @@ extern "C" {
 }
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "algos/common/cuda_x_stages.h"
 
 static uint32_t *d_hash[MAX_GPUS];
@@ -255,7 +255,7 @@ extern "C" void bitcore_hash(void *output, const void *input)
 
 //#define _DEBUG
 #define _DEBUG_PREFIX "tt-"
-#include "cuda_debug.cuh"
+#include "cuda/debug.cuh"
 
 static bool init[MAX_GPUS] = { 0 };
 

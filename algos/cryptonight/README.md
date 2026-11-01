@@ -30,7 +30,7 @@ cryptolight-core), 255 (cryptonight-extra), 128 (wildkeccak); and the autotools
 
 ## Move fixes
 
-The two external consumers of the folder — `ccminer.cpp` and `util.cpp`, each
+The two external consumers of the folder — `ccminer.cpp` and `core/util.cpp`, each
 `#include "crypto/xmr-rpc.h"` — were repointed to
 `"algos/cryptonight/xmr-rpc.h"`. All in-folder includes are own-folder /
 own-subdir (`cn_aes.cuh`, `cpu/c_keccak.h`, `oaes_lib.h`, ...) or

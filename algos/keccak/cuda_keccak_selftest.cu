@@ -12,7 +12,7 @@
 #include <string.h>
 
 #include <miner.h>
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 extern "C" {
 #include "sph/sph_keccak.h"  /* sph_keccak256* — 0x01 padding */

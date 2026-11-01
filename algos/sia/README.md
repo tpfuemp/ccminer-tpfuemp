@@ -12,7 +12,7 @@ Relocation only — every symbol is unchanged, so the dispatch wiring (`algos.h`
   a distinct header layout and submission format, handled here).
 
 All includes are project-include-dir (`miner.h`, `sph/blake2b.h`,
-`cuda_helper.h`, `cuda_vector_uint2x4.h`, `curl/curl.h`, `ccminer-config.h`) or
+`cuda/helper.cuh`, `cuda/vector_uint2x4.cuh`, `curl/curl.h`, `ccminer-config.h`) or
 own-folder (`sia-rpc.h`); there were no parent-relative (`../`) includes.
 
 ## Move fix

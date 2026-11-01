@@ -16,7 +16,7 @@
 #ifndef CUDA_SHAVITE512_DEVICE_CUH
 #define CUDA_SHAVITE512_DEVICE_CUH
 
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 #define AESx(x) (x ##UL) /* SPH_C32(x) */
 

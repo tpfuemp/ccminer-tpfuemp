@@ -22,7 +22,7 @@
 #define CUDA_BMW512_DEVICE_CUH
 
 #include <stdint.h>
-#include <cuda_helper_alexis.h>  // ROL2/SHL2/SHR2/ROTL64/xor3x/vectorize/devectorize
+#include "cuda/helper_alexis.cuh"  // ROL2/SHL2/SHR2/ROTL64/xor3x/vectorize/devectorize
 
 #ifdef __CUDACC__
 

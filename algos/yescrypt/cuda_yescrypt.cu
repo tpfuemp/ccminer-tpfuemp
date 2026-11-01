@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <memory.h>
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #ifdef __INTELLISENSE__
 /* just for vstudio code colors */

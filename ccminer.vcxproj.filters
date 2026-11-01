@@ -189,13 +189,13 @@
     <ClCompile Include="compat\gettimeofday.c">
       <Filter>Source Files\gettimeofday</Filter>
     </ClCompile>
-    <ClCompile Include="util.cpp">
+    <ClCompile Include="core\util.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="ccminer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="pools.cpp">
+    <ClCompile Include="core\pools.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="crc32.c">
@@ -282,13 +282,13 @@
     <ClCompile Include="compat\winansi.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="hashlog.cpp">
+    <ClCompile Include="core\hashlog.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="stats.cpp">
+    <ClCompile Include="core\stats.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="api.cpp">
+    <ClCompile Include="core\api\api.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="algos\scrypt\scrypt.cpp">
@@ -297,25 +297,25 @@
     <ClCompile Include="algos\scrypt\scrypt-jane.cpp">
       <Filter>Source Files\CUDA\scrypt</Filter>
     </ClCompile>
-    <ClCompile Include="api_control.cpp">
+    <ClCompile Include="core\api\api_control.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="api_metrics.c">
+    <ClCompile Include="core\api\api_metrics.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="api_model.cpp">
+    <ClCompile Include="core\api\api_model.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="api_http.c">
+    <ClCompile Include="core\api\api_http.c">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="api_routes.cpp">
+    <ClCompile Include="core\api\api_routes.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="nvml.cpp">
+    <ClCompile Include="core\gpu\nvml.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="sysinfos.cpp">
+    <ClCompile Include="core\sysinfos.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="compat\jansson\memory.c">
@@ -363,16 +363,16 @@
     <ClCompile Include="algos\heavy\hefty1.c">
       <Filter>Source Files\CUDA\heavy</Filter>
     </ClCompile>
-    <ClCompile Include="bench.cpp">
+    <ClCompile Include="core\bench.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="bignum.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="nvapi.cpp">
+    <ClCompile Include="core\gpu\nvapi.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
-    <ClCompile Include="nvsettings.cpp">
+    <ClCompile Include="core\gpu\nvsettings.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="algos\sia\sia-rpc.cpp">
@@ -573,19 +573,19 @@
     <ClInclude Include="elist.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="api_control.h">
+    <ClInclude Include="core\api\api_control.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="api_metrics.h">
+    <ClInclude Include="core\api\api_metrics.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="api_model.h">
+    <ClInclude Include="core\api\api_model.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="api_http.h">
+    <ClInclude Include="core\api\api_http.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="api_routes.h">
+    <ClInclude Include="core\api\api_routes.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="miner.h">
@@ -663,13 +663,13 @@
     <ClInclude Include="algos\heavy\heavy.h">
       <Filter>Header Files\CUDA</Filter>
     </ClInclude>
-    <ClInclude Include="cuda_helper.h">
+    <ClInclude Include="cuda\helper.cuh">
       <Filter>Header Files\CUDA</Filter>
     </ClInclude>
-    <ClInclude Include="cuda_helper_alexis.h">
+    <ClInclude Include="cuda\helper_alexis.cuh">
       <Filter>Header Files\CUDA</Filter>
     </ClInclude>
-    <ClInclude Include="cuda_vector_uint2x4.h">
+    <ClInclude Include="cuda\vector_uint2x4.cuh">
       <Filter>Header Files\CUDA</Filter>
     </ClInclude>
     <ClInclude Include="sph\sph_hamsi.h">
@@ -696,7 +696,7 @@
     <ClInclude Include="compat\winansi.h">
       <Filter>Header Files\compat</Filter>
     </ClInclude>
-    <ClInclude Include="nvml.h">
+    <ClInclude Include="core\gpu\nvml.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="compat\nvapi\nvapi_ccminer.h">
@@ -893,7 +893,7 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <CudaCompile Include="cuda.cpp">
+    <CudaCompile Include="core\cuda.cpp">
       <Filter>Source Files\CUDA</Filter>
     </CudaCompile>
     <CudaCompile Include="algos\groestlcoin\cuda_groestlcoin.cu">

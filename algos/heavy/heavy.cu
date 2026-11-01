@@ -36,7 +36,7 @@ void free_heavy(int thr_id) {}
 #endif
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "heavy.h"   /* hefty/sha256/keccak512/groestl512 _cpu_* prototypes */
 
 // nonce array also used in other algos

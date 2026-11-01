@@ -21,7 +21,7 @@ untouched.
 - `cuda_gosthash.cu` — the GOST/Streebog GPU kernels.
 
 All includes are from the project include dirs (`sph/sph_streebog.h`,
-`miner.h`, `cuda_helper.h`, `cuda_debug.cuh`) — no parent-relative (`../`)
+`miner.h`, `cuda/helper.cuh`, `cuda/debug.cuh`) — no parent-relative (`../`)
 includes and no external references to the `gost/` path — so the move is
 source-transparent.
 

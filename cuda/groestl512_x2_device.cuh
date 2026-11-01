@@ -10,7 +10,7 @@
 #ifndef CUDA_GROESTL512_X2_DEVICE_CUH
 #define CUDA_GROESTL512_X2_DEVICE_CUH
 
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 #define G512X2_SWAP(x, y, m, n) do { const uint32_t t_ = ((x) ^ ((y) << (n))) & (m); (x) ^= t_; (y) ^= t_ >> (n); } while (0)
 

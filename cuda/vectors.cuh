@@ -1,7 +1,7 @@
 #ifndef CUDA_VECTORS_H
 #define CUDA_VECTORS_H
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 /* Macros for uint2 operations (used by skein) */
 

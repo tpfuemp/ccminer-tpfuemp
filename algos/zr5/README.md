@@ -23,7 +23,7 @@ Relocation + de-brand of the shared core stages:
   its name: it is the bespoke 80-byte-with-PoK Keccak defined in the JHA folder
   (`algos/jha/cuda_jha_keccak512.cu`, shared with `-a jackpot`), not the shared
   quark Keccak — left branded until the JHA keccak is addressed.
-- Includes are `miner.h` / `cuda_helper.h` / `sph/*` (root-relative, unaffected
+- Includes are `miner.h` / `cuda/helper.cuh` / `sph/*` (root-relative, unaffected
   by the move).
 
 ## Validation

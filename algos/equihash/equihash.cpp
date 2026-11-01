@@ -44,7 +44,7 @@ extern "C" int equi_verify_sol(void * const hdr, void * const sol)
 	return res ? 1 : 0;
 }
 
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 //#define EQNONCE_OFFSET 30 /* 27:34 */
 #define NONCE_OFT EQNONCE_OFFSET

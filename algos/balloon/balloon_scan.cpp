@@ -9,7 +9,7 @@
 #include <openssl/sha.h>
 
 #include "balloon.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 // GPU entry points (cuda_balloon.cu)
 extern void balloon_gpu_init(int thr_id);

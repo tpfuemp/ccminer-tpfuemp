@@ -4,7 +4,7 @@
  */
 
 #include <miner.h>
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 #include <openssl/sha.h>
 
 #include "cuda/sha256_device.cuh"

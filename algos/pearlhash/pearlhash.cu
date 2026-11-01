@@ -13,7 +13,7 @@
 #include <vector>
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "cuda/selftest_gate.cuh"
 #include "algos/pearlhash/pearl_device.cuh"
 #include "algos/pearlhash/pearl_proof.h"

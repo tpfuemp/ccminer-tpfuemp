@@ -15,7 +15,7 @@
 #include "miner.h"
 #include "salsa_kernel.h"
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 typedef uint32_t sph_u32;
 #define SPH_ROTL32 ROTL32
 #define SPH_ROTR32 ROTR32

@@ -21,7 +21,7 @@
 #define CUDA_BLAKE512_DEVICE_CUH
 
 #include <stdint.h>
-#include <cuda_helper_alexis.h>  // ROR2/ROR16/SWAPDWORDS2/xor3x/cuda_swab64_U2/devectorize
+#include "cuda/helper_alexis.cuh"  // ROR2/ROR16/SWAPDWORDS2/xor3x/cuda_swab64_U2/devectorize
 
 #ifdef __CUDACC__
 

@@ -17,7 +17,7 @@
  */
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "algos.h"     /* ALGO_* and `opt_algo`; miner.h declares neither */
 
 extern "C" {

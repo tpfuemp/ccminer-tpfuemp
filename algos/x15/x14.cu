@@ -32,7 +32,7 @@ extern "C" {
 }
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "algos/common/cuda_x_stages.h"
 
 #include <stdio.h>
@@ -127,7 +127,7 @@ extern "C" void x14hash(void *output, const void *input)
 
 //#define _DEBUG
 #define _DEBUG_PREFIX "x14"
-#include "cuda_debug.cuh"
+#include "cuda/debug.cuh"
 
 static bool init[MAX_GPUS] = { 0 };
 static bool use_compat_kernels[MAX_GPUS] = { 0 };

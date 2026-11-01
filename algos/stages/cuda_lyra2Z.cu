@@ -20,7 +20,7 @@ static uint32_t *d_GNonces[16];
 
 #include "cuda_lyra2_vectors.h"
 #include "cuda/blake2b_device.cuh"
-//#include "cuda_vector_uint2x4.h"
+//#include "cuda/vector_uint2x4.cuh"
 
 #define Nrow 8
 #define Ncol 8

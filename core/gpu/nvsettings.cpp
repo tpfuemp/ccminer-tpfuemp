@@ -14,7 +14,7 @@
 #include <sys/types.h> // pid_t
 
 #include "miner.h"
-#include "nvml.h"
+#include "core/gpu/nvml.h"
 #include "cuda_runtime.h"
 
 #ifdef __linux__

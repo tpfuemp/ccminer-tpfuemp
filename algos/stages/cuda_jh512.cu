@@ -3,7 +3,7 @@
  *
  * JH80 by tpruvot - 2017 - under GPLv3
  **/
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 // #include <stdio.h>  // printf
 // #include <unistd.h> // sleep

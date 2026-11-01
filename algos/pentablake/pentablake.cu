@@ -36,7 +36,7 @@ extern "C" void pentablakehash(void *output, const void *input)
 	memcpy(output, hash, 32);
 }
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 static uint32_t *d_hash[MAX_GPUS];
 

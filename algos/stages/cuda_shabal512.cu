@@ -1,7 +1,7 @@
 /*
  * Shabal-512 for X14/X15
  */
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 /* $Id: shabal.c 175 2010-05-07 16:03:20Z tp $ */
 /*

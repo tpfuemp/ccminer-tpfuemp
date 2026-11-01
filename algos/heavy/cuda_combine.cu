@@ -1,6 +1,6 @@
 #include <stdio.h>
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 // globaler Speicher für unsere Ergebnisse
 static uint32_t *d_hashoutput[MAX_GPUS];

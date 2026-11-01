@@ -33,7 +33,7 @@ extern "C" {
 }
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "algos/common/cuda_x_stages.h"
 
 static uint32_t *d_hash[MAX_GPUS];
@@ -243,7 +243,7 @@ static bool use_compat_kernels[MAX_GPUS] = { 0 };
 
 //#define _DEBUG
 #define _DEBUG_PREFIX "x16rv2-"
-#include "cuda_debug.cuh"
+#include "cuda/debug.cuh"
 
 //static int algo80_tests[HASH_FUNC_COUNT] = { 0 };
 //static int algo64_tests[HASH_FUNC_COUNT] = { 0 };

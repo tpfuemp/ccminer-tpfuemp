@@ -8,7 +8,7 @@
  * remains.
  */
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #include "cuda/luffa512_device.cuh"
 

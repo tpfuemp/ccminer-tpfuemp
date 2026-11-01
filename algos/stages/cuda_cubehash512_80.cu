@@ -16,8 +16,8 @@
 // Kept verbatim (behaviour-preserving) pending a host-enabled shared rrounds
 // + a dedicated 80-byte KAT.
 
-#include <cuda_helper.h>
-#include <cuda_vectors_alexis.h>
+#include "cuda/helper.cuh"
+#include "cuda/vectors_alexis.cuh"
 
 #define CUBEHASH_ROUNDS 16 /* this is r for CubeHashr/b */
 #define CUBEHASH_BLOCKBYTES 32 /* this is b for CubeHashr/b */

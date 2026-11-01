@@ -20,7 +20,7 @@
 
 #include <memory.h> // memcpy()
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #define TPB 128
 

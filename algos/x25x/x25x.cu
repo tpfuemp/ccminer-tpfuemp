@@ -51,7 +51,7 @@ extern "C" {
 }
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "algos/common/cuda_x_stages.h"
 
 // New x25x GPU stage launchers (each validated in isolation; see M2/M3).

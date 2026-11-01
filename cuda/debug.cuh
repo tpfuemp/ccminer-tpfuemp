@@ -5,7 +5,7 @@
  *
  * #define _DEBUG
  * #define _DEBUG_PREFIX "x11-"
- * #include "cuda_debug.cuh"
+ * #include "cuda/debug.cuh"
  *
  * TRACE64("luffa", d_hash);
  * or
@@ -16,7 +16,7 @@
  */
 
 #include <stdio.h>
-//#include "cuda_helper.h"
+//#include "cuda/helper.cuh"
 
 #ifndef _DEBUG_PREFIX
 #define _DEBUG_PREFIX ""

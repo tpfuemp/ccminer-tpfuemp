@@ -22,7 +22,7 @@ Both drivers use the shared Skein-512 stage launchers already in
 `algos/stages/` (`skein512_cpu_setBlock_80` / `skein512_cpu_hash_80`, and
 `quark_skein512_cpu_hash_64` for skein2) plus the shared `cuda_check_hash`.
 All includes are project-include-dir (`miner.h`, `sph/sph_skein.h`,
-`cuda_helper.h`, `openssl/sha.h`); no parent-relative (`../`) includes and no
+`cuda/helper.cuh`, `openssl/sha.h`); no parent-relative (`../`) includes and no
 `#include` of these TUs (their symbols are linked), so the move is
 source-transparent.
 

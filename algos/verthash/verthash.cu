@@ -19,7 +19,7 @@
 extern "C" {
 #include "miner.h"
 }
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "cuda/intensity_autotune.cuh"
 #include "cuda/selftest_gate.cuh"
 

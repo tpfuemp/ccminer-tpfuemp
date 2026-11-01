@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <memory.h>
 #include <miner.h>
-#include "cuda_helper.h" //
+#include "cuda/helper.cuh" //
 
 // Host re-verify: RinHash = BLAKE3-256 -> Argon2d -> SHA3-256. All three
 // primitives already exist host-side, which is why no re-verify was a choice

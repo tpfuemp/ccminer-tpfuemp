@@ -4,8 +4,8 @@ Provos Alexis - 2016
 SP - May 2018
 */
 #include "miner.h"
-#include "cuda_helper_alexis.h"
-#include "cuda_vectors_alexis.h"
+#include "cuda/helper_alexis.cuh"
+#include "cuda/vectors_alexis.cuh"
 
 #include "cuda/blake512_device.cuh"
 

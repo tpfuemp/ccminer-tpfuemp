@@ -31,7 +31,7 @@ extern "C" void blake256hash(void *output, const void *input, int8_t rounds = 14
 	memcpy(output, hash, 32);
 }
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "cuda/candidate_report.cuh"
 
 #ifdef __INTELLISENSE__

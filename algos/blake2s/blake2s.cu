@@ -15,7 +15,7 @@
 #define __byte_perm(x, y, b) x
 #endif
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #ifdef __CUDA_ARCH__
 

@@ -31,7 +31,7 @@
 #include <sys/types.h>
 
 #include "miner.h"
-#include "nvml.h"
+#include "core/gpu/nvml.h"
 #include "algos.h"
 #include "api_http.h"
 #include "api_routes.h"

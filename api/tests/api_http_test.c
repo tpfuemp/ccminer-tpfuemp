@@ -17,7 +17,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-#include "api_http.h"
+#include "core/api/api_http.h"
 
 static int failures = 0;
 static int checks = 0;

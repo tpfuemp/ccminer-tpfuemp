@@ -16,7 +16,7 @@ extern "C" {
 #include <memory.h>
 }
 
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 #include "cuda/keccak_device.cuh"
 
 extern bool keccak_device_selftest(int thr_id);

@@ -17,7 +17,7 @@ reference `heavyhash_hash`) is unchanged, so the dispatch wiring (`algos.h`
 - `keccak_tiny.c` / `keccak_tiny.h` — the compact Keccak used by both sides.
 
 All includes are own-folder-relative (`keccak_tiny.h`, `heavyhash-gate.h`) or
-from the project include dirs (`miner.h`, `cuda_helper.h`, `cuda_vectors.h`);
+from the project include dirs (`miner.h`, `cuda/helper.cuh`, `cuda/vectors.cuh`);
 there were no parent-relative (`../`) includes and no external references to the
 `heavyhash/` path, so the move is source-transparent.
 

@@ -27,8 +27,8 @@
 #ifndef CUDA_LYRA_VECTOR_H   /* cuda_vectors_alexis.h provides the same uint2 ops
                                 and uint2x4; only pull the tpruvot pair when the
                                 alexis stack isn't already loaded (its guard) */
-#include <cuda_vectors.h>
-#include <cuda_vector_uint2x4.h>
+#include "cuda/vectors.cuh"
+#include "cuda/vector_uint2x4.cuh"
 #endif
 
 #ifdef __CUDACC__

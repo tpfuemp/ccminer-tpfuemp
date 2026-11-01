@@ -17,7 +17,7 @@ if errorlevel 1 (echo vcvars failed & exit /b 1)
 cl /nologo /W3 /Od /MT /D_CRT_SECURE_NO_WARNINGS /DWIN32 ^
    /I. /Icompat /Icompat\jansson ^
    /Fe"%OUT%\api_http_test.exe" /Fo"%OUT%\\" ^
-   api\tests\api_http_test.c api_http.c ^
+   api\tests\api_http_test.c core\api\api_http.c ^
    compat\jansson\dump.c compat\jansson\error.c compat\jansson\hashtable.c ^
    compat\jansson\load.c compat\jansson\memory.c compat\jansson\pack_unpack.c ^
    compat\jansson\strbuffer.c compat\jansson\strconv.c compat\jansson\utf.c ^

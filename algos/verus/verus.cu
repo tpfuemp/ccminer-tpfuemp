@@ -21,7 +21,7 @@
  * The solution template lives in work->extra as CompactSize + bytes.
  */
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #include <string.h>
 #ifndef _WIN32

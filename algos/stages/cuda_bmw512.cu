@@ -9,8 +9,8 @@ Optimized for pascal sp - may 2018
 
 #define WANT_BMW512_80
 
-#include "cuda_helper_alexis.h"
-#include "cuda_vectors_alexis.h"
+#include "cuda/helper_alexis.cuh"
+#include "cuda/vectors_alexis.cuh"
 #include "cuda/bmw512_device.cuh"
 #include "cuda/candidate_report.cuh"
 

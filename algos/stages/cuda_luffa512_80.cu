@@ -19,7 +19,7 @@
 #include <stdint.h>
 #include <memory.h>
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "cuda/selftest_gate.cuh"
 #include "cuda/candidate_report.cuh"
 

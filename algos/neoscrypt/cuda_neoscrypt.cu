@@ -4,8 +4,8 @@
 #include <stdio.h>
 #include <memory.h>
 
-#include <cuda_helper.h>
-#include <cuda_vector_uint2x4.h>
+#include "cuda/helper.cuh"
+#include "cuda/vector_uint2x4.cuh"
 #include "cuda_vectors.h"
 
 typedef uint48 uint4x2;

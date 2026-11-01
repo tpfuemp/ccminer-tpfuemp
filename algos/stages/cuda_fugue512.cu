@@ -8,7 +8,7 @@
  * the same table from constant memory.
  */
 
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 /* 384 x 2 blocks at 80 registers */
 #define TPB 384

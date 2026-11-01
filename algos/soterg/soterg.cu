@@ -22,7 +22,7 @@ extern "C" {
 }
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "algos/common/cuda_x_stages.h"
 
 static uint32_t *d_hash[MAX_GPUS];
@@ -241,7 +241,7 @@ static bool use_compat_kernels[MAX_GPUS] = { 0 };
 
 //#define _DEBUG
 #define _DEBUG_PREFIX "x12r-"
-#include "cuda_debug.cuh"
+#include "cuda/debug.cuh"
 
 static void init_soterg(const int thr_id, const int dev_id)
 {

@@ -17,7 +17,7 @@
 #ifndef CUDA_TIGER192_DEVICE_CUH
 #define CUDA_TIGER192_DEVICE_CUH
 
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 #define TIGER_C64(x)    (x ## ULL)
 #define TIGER_C32(x)    (x ## U)

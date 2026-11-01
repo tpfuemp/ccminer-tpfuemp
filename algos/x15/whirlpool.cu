@@ -6,7 +6,7 @@ extern "C" {
 #include <miner.h>
 }
 
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 /* whirlpool 512 stage launchers (de-branded, real symbols in
  * algos/stages/cuda_whirlpool512.cu) */

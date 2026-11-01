@@ -1,7 +1,7 @@
 #include <miner.h>
 #include "argon2ref/argon2.h"
 #include "argon2d_kernel.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "cuda/selftest_gate.cuh"
 #include <cuda_runtime.h>
 

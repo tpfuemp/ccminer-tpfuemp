@@ -6,7 +6,7 @@
  * cuda/echo512_device.cuh (docs/coding-guideline.md §3).
  */
 
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 #include "cuda/echo512_device.cuh"
 

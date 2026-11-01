@@ -7,7 +7,7 @@
  * HS_FAULT_* macros are for test builds. */
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "algos.h"
 
 #include <string.h>

@@ -1,7 +1,7 @@
 #ifdef __INTELLISENSE__
 #define __byte_perm(x, y, b) x
 #define __CUDA_ARCH__ 520
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 #endif
 
 #undef ROL8

@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include <memory.h>
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #ifdef __INTELLISENSE__
 #define __CUDA_ARCH__ 500

@@ -3,7 +3,7 @@
 
 #include "sph/sph_fugue.h"
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include <host_defines.h>
 
 #include "cuda/candidate_report.cuh"

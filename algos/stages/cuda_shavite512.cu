@@ -3,8 +3,8 @@
 	Provos Alexis - 2016
 	optimized by sp - 2018/2019
 */
-#include "cuda_helper_alexis.h"
-#include "cuda_vectors_alexis.h"
+#include "cuda/helper_alexis.cuh"
+#include "cuda/vectors_alexis.cuh"
 
 #define INTENSIVE_GMF
 #include "cuda/shavite512_sp_device.cuh"

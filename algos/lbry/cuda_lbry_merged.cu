@@ -9,8 +9,8 @@
 #include <stdint.h>
 #include <memory.h>
 
-#include <cuda_helper.h>
-#include <cuda_vector_uint2x4.h>
+#include "cuda/helper.cuh"
+#include "cuda/vector_uint2x4.cuh"
 
 #include <miner.h>
 

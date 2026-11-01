@@ -12,7 +12,7 @@
 #define CUDA_SHA256_DEVICE_CUH
 
 #include <stdint.h>
-#include <cuda_helper.h> // ROTR32 (single SHF on device, shift/or on host)
+#include "cuda/helper.cuh" // ROTR32 (single SHF on device, shift/or on host)
 
 /* Shared initializers so the host copies and the per-TU device copies can
  * never drift apart. */

@@ -24,7 +24,7 @@ extern "C" {
 }
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "algos/common/cuda_x_stages.h"
 
 /* consolidated streebog stage (algos/stages/cuda_streebog.cu) */
@@ -76,7 +76,7 @@ extern "C" void phihash(void *output, const void *input)
 }
 
 #define _DEBUG_PREFIX "phi"
-#include "cuda_debug.cuh"
+#include "cuda/debug.cuh"
 
 static bool init[MAX_GPUS] = { 0 };
 

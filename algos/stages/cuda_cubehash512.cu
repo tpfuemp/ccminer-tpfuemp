@@ -18,8 +18,8 @@
  * pipeline, not a branded private copy.)
  */
 
-#include "cuda_helper_alexis.h"
-#include "cuda_vectors_alexis.h"
+#include "cuda/helper_alexis.cuh"
+#include "cuda/vectors_alexis.cuh"
 
 #include "cuda/cubehash512_device.cuh"
 

@@ -6,7 +6,7 @@
 #include "sph/sph_skein.h"
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #include <openssl/sha.h>
 

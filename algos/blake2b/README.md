@@ -13,7 +13,7 @@ so the dispatch wiring (`algos.h` `ALGO_BLAKE2B` / `"blake2b"`, `miner.h`,
 - `blake2b.cu` — the full BLAKE2b GPU driver + CPU reference.
 
 All includes are project-include-dir (`miner.h`, `sph/blake2b.h`,
-`cuda_helper.h`, `cuda_vector_uint2x4.h`); no parent-relative (`../`) includes
+`cuda/helper.cuh`, `cuda/vector_uint2x4.cuh`); no parent-relative (`../`) includes
 and no `#include` of this TU anywhere (its symbols are linked, not included), so
 the move is source-transparent.
 

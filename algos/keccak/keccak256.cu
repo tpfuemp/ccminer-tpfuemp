@@ -11,7 +11,7 @@ extern "C"
 #include "miner.h"
 }
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 extern void keccak256_cpu_init(int thr_id);
 extern void keccak256_cpu_free(int thr_id);

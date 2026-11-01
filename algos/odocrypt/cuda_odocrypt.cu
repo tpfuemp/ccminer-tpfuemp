@@ -14,7 +14,7 @@
 #include <string.h>
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "odocrypt.h"
 #include "odocrypt_jit.h"
 #include "cuda/selftest_gate.cuh"

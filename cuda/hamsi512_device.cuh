@@ -18,7 +18,7 @@
 #define CUDA_HAMSI512_DEVICE_CUH
 
 #include <stdint.h>
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 #ifdef __CUDACC__
 

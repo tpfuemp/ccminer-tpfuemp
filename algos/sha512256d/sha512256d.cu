@@ -8,7 +8,7 @@
  */
 
 #include <miner.h>
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 
 #include "sph/sph_sha2.h"
 

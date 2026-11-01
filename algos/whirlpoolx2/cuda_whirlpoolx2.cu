@@ -21,7 +21,7 @@
 #define WX2_MIN_BLOCKS 4
 #endif
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 __constant__ uint64_t c_PaddedMessage80[16]; // padded message (80 bytes + padding)
 __constant__ uint64_t c_xtra[8];

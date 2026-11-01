@@ -2,7 +2,7 @@
 #include <stdint.h>
 #include <memory.h>
 
-#include <cuda_helper.h>
+#include "cuda/helper.cuh"
 #include <miner.h>
 
 #define  F(x, y, z) (((x) ^ (y) ^ (z)))

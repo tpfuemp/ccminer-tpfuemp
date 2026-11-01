@@ -6,7 +6,7 @@
 #include <stdio.h>
 #include <memory.h>
 
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "cuda/sha256_device.cuh"   /* c_sha256_K / c_sha256_H */
 
 /* Already at full occupancy; raising this only costs registers and residency. */

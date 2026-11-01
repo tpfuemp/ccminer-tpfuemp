@@ -8,7 +8,7 @@
 #include <algorithm>
 #include <unistd.h> // usleep
 #include <ctype.h> // tolower
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #include "salsa_kernel.h"
 

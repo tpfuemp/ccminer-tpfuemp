@@ -23,7 +23,7 @@
  */
 
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 
 #include "cuda/sha256_device.cuh"
 

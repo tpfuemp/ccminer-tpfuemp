@@ -15,7 +15,7 @@ extern "C" {
 #include "sph/sph_echo.h"
 }
 #include "miner.h"
-#include "cuda_helper.h"
+#include "cuda/helper.cuh"
 #include "algos/common/cuda_x_stages.h"
 
 // to test gpu hash on a null buffer

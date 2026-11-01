@@ -13,7 +13,7 @@
 #define CUDA_SHA512_DEVICE_CUH
 
 #include <stdint.h>
-#include <cuda_helper.h> // ROTR64 (funnel shift on device, shift/or on host)
+#include "cuda/helper.cuh" // ROTR64 (funnel shift on device, shift/or on host)
 
 /* Shared initializers so the host copies and the per-TU device copies can
  * never drift apart. */

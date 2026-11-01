@@ -19,13 +19,13 @@ reference `neoscrypt()`) is unchanged, so the dispatch wiring (`algos.h`
 
 `cuda_neoscrypt.cu` includes `"cuda_vectors.h"`, which resolves **own-folder**
 to this folder's `cuda_vectors.h` (the expanded NeoScrypt fork of the header),
-not the small root `cuda_vectors.h`. That resolution is preserved because the
+not the small shared `cuda/vectors.cuh`. That resolution is preserved because the
 header moves in the same folder as its only consumer. NeoScrypt is the sole
 remaining user of this header (streebog was decoupled from it earlier, with the
 one type it needed — `ulonglong2to8` — backported into the root header).
 
-All other includes are project-include-dir (`miner.h`, `cuda_helper.h`,
-`cuda_vector_uint2x4.h`) or own-folder (`neoscrypt.h`); there were no
+All other includes are project-include-dir (`miner.h`, `cuda/helper.cuh`,
+`cuda/vector_uint2x4.cuh`) or own-folder (`neoscrypt.h`); there were no
 parent-relative (`../`) includes and no external references to the `neoscrypt/`
 path, so the move is source-transparent.
 
