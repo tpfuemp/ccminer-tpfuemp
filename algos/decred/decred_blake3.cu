@@ -184,7 +184,7 @@ extern "C" int scanhash_decred(int thr_id, struct work *work, uint32_t max_nonce
 		/* Loosen both target words and re-derive the device bound from them:
 		 * loosening only ptarget[7] leaves the lower word narrow, which makes
 		 * the accept region a strict subset of the screen's. */
-		ptarget[7] = 0x000000ffu;
+		ptarget[7] = 0x00000003u;	/* 2^-30: ~0.5 candidates per 2^29 launch, no flood */
 		ptarget[6] = 0xffffffffu;
 		targetHigh = ((uint64_t *)ptarget)[3];
 	}
@@ -253,45 +253,43 @@ extern "C" int scanhash_decred(int thr_id, struct work *work, uint32_t max_nonce
 				(count + 1) * sizeof(uint32_t), cudaMemcpyDeviceToHost);
 			resNonces[0] = count;
 
-			/* No byte swap: the nonce is a little-endian header word. */
-			hdr[DCR_NONCE_OFT32] = resNonces[1];
-			decred_hash(vhash, hdr);
-
-			if (fulltest(vhash, ptarget)) {
-				work->valid_nonces = 1;
-				work_set_target_ratio(work, vhash);
-				work->nonces[0] = resNonces[1];
-				*pnonce = resNonces[1] + 1;	/* +1: never re-scan the hit */
-
-				for (uint32_t n = 2; n <= resNonces[0]; n++) {
-					hdr[DCR_NONCE_OFT32] = resNonces[n];
-					decred_hash(vhash, hdr);
-					if (fulltest(vhash, ptarget)) {
-						work->nonces[1] = resNonces[n];
-						if (bn_hash_target_ratio(vhash, ptarget) > work->shareratio[0]) {
-							work->shareratio[1] = work->shareratio[0];
-							work->sharediff[1] = work->sharediff[0];
-							xchg(work->nonces[1], work->nonces[0]);
-							work_set_target_ratio(work, vhash);
-						} else {
-							bn_set_target_ratio(work, vhash, 1);
-						}
-						work->valid_nonces = 2;
-					} else { /* terminal: never drop a candidate silently */
-						gpu_increment_reject(thr_id);
-						if (!opt_quiet)
-							gpulog(LOG_WARNING, thr_id,
-								"result %u for %08x does not validate on CPU!",
-								n, resNonces[n]);
+			/* CPU-check every slot and keep the two lowest valid nonces. */
+			uint32_t valid[2], vh[2][8];
+			int nvalid = 0;
+			for (uint32_t n = 1; n <= resNonces[0]; n++) {
+				/* No byte swap: the nonce is a little-endian header word. */
+				const uint32_t nonce = resNonces[n];
+				hdr[DCR_NONCE_OFT32] = nonce;
+				decred_hash(vhash, hdr);
+				if (fulltest(vhash, ptarget)) {
+					if (nvalid == 0 || nonce < valid[0]) {
+						valid[1] = valid[0]; memcpy(vh[1], vh[0], 32);
+						valid[0] = nonce; memcpy(vh[0], vhash, 32);
+					} else if (nvalid == 1 || nonce < valid[1]) {
+						valid[1] = nonce; memcpy(vh[1], vhash, 32);
 					}
+					nvalid++;
+				} else if (((uint64_t *)vhash)[3] > targetHigh) {
+					/* above the device's 64-bit screen: a GPU error */
+					gpu_increment_reject(thr_id);
+					if (!opt_quiet)
+						gpulog(LOG_WARNING, thr_id,
+							"result %u for %08x does not validate on CPU!", n, nonce);
 				}
-				return work->valid_nonces;
+			}
 
-			} else { /* terminal: never drop a candidate silently */
-				gpu_increment_reject(thr_id);
-				if (!opt_quiet)
-					gpulog(LOG_WARNING, thr_id,
-						"result for %08x does not validate on CPU!", resNonces[1]);
+			if (nvalid) {
+				work->nonces[0] = valid[0];
+				work_set_target_ratio(work, vh[0]);
+				work->valid_nonces = 1;
+				if (nvalid > 1) {
+					work->nonces[1] = valid[1];
+					bn_set_target_ratio(work, vh[1], 1);
+					work->valid_nonces = 2;
+				}
+				/* resume after the higher reported one; the rest lie above it */
+				*pnonce = valid[work->valid_nonces - 1] + 1;
+				return work->valid_nonces;
 			}
 		}
 		*pnonce += throughput;
