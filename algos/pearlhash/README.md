@@ -66,6 +66,9 @@ C        = (A + E_A)(B + E_B)        int7 x int7 -> int32, A, B in [-64, 63]
   BLAKE3 nodes) and derives the seeds. The GPU then runs the noise kernels, the
   operand prepass (B is built from noise alone, then the nonce chunk is added to
   row 0), and one fused GEMM + jackpot + ticket-hash kernel.
+- **No per-trial copies:** the nonce chunk goes to the GPU as a 1 KB kernel
+  argument, and the GEMM writes its hit list straight into mapped host memory
+  (one buffer per queued trial).
 - **Overlap:** one trial is always queued ahead, so the host work of the next
   trial runs while the GPU works on the current one.
 - **Kernel by architecture:**
@@ -136,6 +139,7 @@ CUDA 11.8, default settings. Rates in int8 MAC/s.
 | 2026-10-25 | GTX 1080 Ti (sm_61), Linux | ~15.5 T | live-validated on a Pearl pool: accepted 7/7, 30 min |
 | 2026-10-25 | RTX 3060 (sm_86), Windows | ~30 T | live-validated on a Pearl pool: accepted 2/2, 3 min (desktop in use) |
 | 2026-11-01 | RTX 3060 (sm_86), Windows | ~34 T | `--benchmark`; live-validated: accepted 1/1, 10 min, 34.4 T average |
+| 2026-11-02 | RTX 3060 (sm_86), Windows | ~35.4 T | no per-trial copies, fold once per chunk; live-validated: accepted 4/4, 40 min, 35.35 T average |
 | 2026-11-01 | GTX 1080 Ti (sm_61), Linux | 17-18.5 T | `--benchmark` at the card's thermal limit (89 C); live-validated: accepted 2/2, 40 min |
 
 ## Limits

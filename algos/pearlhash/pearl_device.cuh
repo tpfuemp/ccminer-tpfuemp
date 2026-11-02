@@ -284,12 +284,22 @@ __global__ void pearl_patch_row0_t(const uint32_t *chunk, uint32_t *panel)
 }
 
 /* add the first 1024 bytes of B^T row 0 into a noised panel, per byte mod 256: with a base
- * that is zero elsewhere this equals building the panel from that base (miner per trial) */
+ * that is zero elsewhere this equals building the panel from that base */
 template <uint32_t perm>
 __global__ void pearl_add_row0_t(const uint32_t *chunk, uint32_t *panel)
 {
 	uint32_t *w = panel + pearl_panel_index(perm, 0, 0, threadIdx.x, 0);
 	*w = __vadd4(*w, chunk[threadIdx.x]);
+}
+
+/* the same add, chunk passed by value (1 KB of kernel parameters); also clears the hit count */
+struct pearl_chunk1k { uint32_t w[256]; };
+template <uint32_t perm>
+__global__ void pearl_add_row0_v_t(const pearl_chunk1k chunk, uint32_t *panel, uint32_t *hits)
+{
+	uint32_t *w = panel + pearl_panel_index(perm, 0, 0, threadIdx.x, 0);
+	*w = __vadd4(*w, chunk.w[threadIdx.x]);
+	if (threadIdx.x == 0) hits[0] = 0;
 }
 
 /* base (rows x k, row-major int8) -> panel layout, once per job */
@@ -309,6 +319,7 @@ __global__ void pearl_to_panel_t(const int8_t *base, uint32_t rows, uint32_t k, 
 #define pearl_operand_panel_fast_kernel	pearl_operand_panel_fast_t<PEARL_PERM_ID>
 #define pearl_patch_row0_kernel		pearl_patch_row0_t<PEARL_PERM_ID>
 #define pearl_add_row0_kernel		pearl_add_row0_t<PEARL_PERM_ID>
+#define pearl_add_row0_v_kernel		pearl_add_row0_v_t<PEARL_PERM_ID>
 #define pearl_to_panel_kernel		pearl_to_panel_t<PEARL_PERM_ID>
 
 typedef struct {
@@ -526,21 +537,22 @@ pearl_tiles_imma_w_t(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, uint
 
 	const uint32_t aq = wm * 128 + lane, bq = (1 + (wn >> 1)) * STEP + (wn & 1) * 128 + lane;
 	uint32_t rd = 0, wr = STAGES - 1, chunk_step = 0;
-	auto fold = [&]() {
-		if (++chunk_step == steps_per_chunk) {
-			chunk_step = 0;
-			uint32_t x = 0;
+	/* jackpot fold of the chunk that ended with the previous step; asm volatile keeps ptxas
+	 * from if-converting it into every step */
+	auto fold_now = [&]() {
+		uint32_t x = 0;
+		#pragma unroll
+		for (int i = 0; i < 4; i++)
 			#pragma unroll
-			for (int i = 0; i < 4; i++)
-				#pragma unroll
-				for (int j = 0; j < 8; j++)
-					#pragma unroll
-					for (int e = 0; e < 4; e++) x ^= (uint32_t)acc[i][j][e];
-			const uint32_t nw = ((win[0] << 13) | (win[0] >> 19)) ^ x;
-			#pragma unroll
-			for (int i = 0; i < 15; i++) win[i] = win[i + 1];
-			win[15] = nw;
-		}
+			for (int j = 0; j < 8; j++) {
+				uint32_t y;
+				asm volatile("lop3.b32 %0, %1, %2, %3, 0x96;" : "=r"(y) : "r"(acc[i][j][0]), "r"(acc[i][j][1]), "r"(acc[i][j][2]));
+				asm volatile("lop3.b32 %0, %1, %2, %3, 0x96;" : "=r"(x) : "r"(x), "r"(y), "r"(acc[i][j][3]));
+			}
+		const uint32_t nw = ((win[0] << 13) | (win[0] >> 19)) ^ x;
+		#pragma unroll
+		for (int i = 0; i < 15; i++) win[i] = win[i + 1];
+		win[15] = nw;
 	};
 	uint4 fa[2][4];
 	uint32_t fb[2][8][2];
@@ -558,6 +570,7 @@ pearl_tiles_imma_w_t(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, uint
 	__syncthreads();
 	load(0, pearl_w_smem, 0);
 	for (uint32_t s = 0; s < steps; s++) {
+		if (s != 0 && chunk_step == 0) fold_now();
 		const uint4 *sq = pearl_w_smem + rd * STAGE;
 		rd = rd == STAGES - 1 ? 0 : rd + 1;
 		const uint4 *sn = pearl_w_smem + rd * STAGE;
@@ -584,8 +597,9 @@ pearl_tiles_imma_w_t(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, uint
 						: "r"(fa[cur][i].x), "r"(fa[cur][i].y), "r"(fa[cur][i].z), "r"(fa[cur][i].w),
 						  "r"(fb[cur][j][0]), "r"(fb[cur][j][1]));
 		}
-		fold();
+		chunk_step = chunk_step + 1 == steps_per_chunk ? 0 : chunk_step + 1;
 	}
+	if (steps != 0) fold_now();	/* the last chunk (k is a multiple of r) */
 	asm volatile("cp.async.wait_group 0;");
 
 	const uint32_t rot = (steps / steps_per_chunk) & 15;
