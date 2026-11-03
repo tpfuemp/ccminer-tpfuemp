@@ -4,10 +4,8 @@
  * from the optimized path.  Constants for 1.0: PWXrounds 3, PWXgather 4,
  * PWXsimple 2, Swidth 11 -> Smask 0x7FF0, three 32 KiB boxes.
  *
- * THREAD MAPPING: T=4, one PWXgather lane per thread, so a thread owns the whole
- * 16-byte X[j] as a uint4 and the gather -> multiply -> xor chain needs no
- * shuffles, and it is faster than both the 8- and 16-thread mappings.
- * Costs 128 registers for X at r=16; r=32 needs the 8-thread mapping.
+ * THREAD MAPPING: one PWXgather lane per thread, so a thread owns the whole
+ * 16-byte X[j] and the gather -> multiply -> xor chain needs no shuffles.
  *
  * WRITE-BACK.  A call writes 8 x 16 B -- all four lanes in round 0, then only
  * lanes 0 and 1 in rounds 1 and 2 (`i == 0 || j < PWXgather/2`) -- into S0 and S1,
@@ -16,12 +14,10 @@
  * once, at the end.
  *
  * Because it writes where it gathers, THE FOUR LANES ARE A SEQUENCE: lane j must
- * see the writes of lanes < j and not those of lanes > j.  A thread-per-lane
- * mapping does not give that for free, and the divergence is invisible ~99.8% of
- * the time (a lane only notices when its gather index hits one of the <= 4 slots
- * the round writes), so a short KAT passes with it broken.  Handled by testing
- * for the collision before writing and falling back to an ordered round (~2%).
- */
+ * see the writes of lanes < j and not those of lanes > j.  A lane only notices
+ * when its gather index hits one of the <= 4 slots the round writes (~0.2%), so
+ * a short test passes with it broken.  Handled by testing for the collision
+ * before writing and falling back to an ordered round. */
 
 #ifndef CUDA_PWXFORM_DEVICE_CUH
 #define CUDA_PWXFORM_DEVICE_CUH
@@ -58,23 +54,16 @@ template<typename V> struct PwxS<PWX_S_GLOBAL, V> {
 #define PWX_ROUNDS       3
 #define PWX_GATHER       4
 
-/* Test-only fault injection: forces the parallel round unconditionally, so every
- * lane gathers before any lane writes -- the lane-forwarding defect, verbatim.
- * Used to prove the KAT catches it.  Neither build system defines this. */
+/* Test only: always take the parallel round (the lane-forwarding defect), to
+ * show the KAT catches it. No build defines it. */
 #ifdef YP_PWX_FAULT_NO_LANE_FORWARDING
 #define YP_PWX_NEED_SEQ(mask, hz) (false)
 #else
 #define YP_PWX_NEED_SEQ(mask, hz) __any_sync((mask), (hz))
 #endif
 
-/* Test-only fault injection #2: remove the intra-round barriers. The four lanes
- * then read S while their siblings are still writing it, which is a REAL race --
- * a wrong answer that varies run to run rather than a wrong answer that is
- * stable. Exists so the race harness can be shown to fire: a race detector
- * whose trigger never occurs is untested by construction. Neither build system
- * defines this. NOTE this is deliberately NOT the same defect as
- * YP_PWX_FAULT_NO_LANE_FORWARDING, which produces a STABLE wrong digest and is
- * therefore caught by the KAT and invisible to a repetition test. */
+/* Test only: drop the intra-round barriers -- a real race, so the digest varies
+ * run to run (unlike the stable wrong digest above). No build defines it. */
 #ifdef YP_PWX_FAULT_NO_SYNCWARP
 #define YP_PWX_SYNC(mask) ((void)0)
 #else
@@ -206,11 +195,8 @@ __device__ __forceinline__ void blockmix_pwxform(uint32_t *B, uint4 *S,
 	/* X <- B'_{r1-1} */
 	uint4 X = B4[(r1 - 1) * 4 + j];
 
-/* / yescrypt's shape: `r1 = 2R` is COMPILE-TIME (R is a template
- * parameter), so this bound is known and `#pragma unroll 1` is actively
- * SUPPRESSING unrolling of the hot loop -- the body runs ~218k times per hash.
- * yescrypt ships exactly this shape: templated r plus the pragma.
- * Tunable so the claim can be measured rather than argued. */
+/* Unroll factor for the 2R pwxform calls; unrolling measured no gain (the
+ * loop is dependency-bound). */
 #ifndef YP_BMX_UNROLL
 #define YP_BMX_UNROLL 1
 #endif

@@ -1,17 +1,12 @@
-/* yespower 1.0 -- the whole hash, as one inlinable device function.
+/* yespower 1.0 -- the whole hash as one inlinable device function, transcribed
+ * from sph/yespower_ref.c (yespower_ref() + smix()). The mining kernel and the
+ * self-test/differential kernel inline this same body.
  *
- * Transcribed from sph/yespower_ref.c:yespower_ref() + smix().  The KAT kernel
- * and the mining kernel both inline THIS body, so they cannot drift apart --
- * the same discipline sha512256d's differential uses.
+ * Four threads (the PWXgather lanes) compute the hash; with WIDTH > 4 the others
+ * only help move V. S is the 96 KiB box array, in shared or global memory (PLACE).
  *
- * One instance = 4 cooperating threads (PWXgather lanes).  X, B and V are plain
- * memory; S is the 96 KiB box array, expected in shared memory.
- *
- * The S-box fill is smix1 with r=1, N=Sbytes/128=768 and V aliased ONTO S
- * itself, using Salsa20 rather than pwxform (the boxes do not exist yet).  That
- * fill writes all 768 x 128 B, so S is fully initialised before the first
- * gather; it needs no separate clear.
- */
+ * The S-box fill is smix1 with r = 1, N = 768, V aliased onto S and Salsa20 in
+ * place of pwxform; it writes all of S before the first gather. */
 
 #ifndef YESPOWER_HASH_CUH
 #define YESPOWER_HASH_CUH
@@ -51,11 +46,7 @@ __device__ __forceinline__ void yespower_hash_1_0(const uint32_t *hdr, const uin
                                                   uint4 *S, uint32_t *B, uint32_t *X,
                                                   uint32_t *V, uint32_t out[8],
                                                   const int j, const unsigned mask,
- /* NO DEFAULTS. `tid` defaulting to 0 would make every
- * thread walk the SAME V indices at WIDTH == 4 -- lanes
- * 1..3 would never write their quarter, silently, and the
- * default would hide it from every caller. Required, so
- * the compiler names anyone who forgets. */
+ /* no default: every caller passes its own thread index */
                                                   const int tid, const unsigned wmask)
 {
 	static_assert(WIDTH >= 4 && WIDTH <= 32 && (WIDTH & (WIDTH - 1)) == 0,
@@ -64,10 +55,8 @@ __device__ __forceinline__ void yespower_hash_1_0(const uint32_t *hdr, const uin
 	uint32_t key[8], saved[8];
 	uint8_t  b2b_init[32], b2b_saved[32];
 
-	/* The head and the tail are 4-lane code (`j`, `mask`). With WIDTH > 4 the
- * spare threads must NOT run them: `j = tid & 3` would give threads 4..7 the
- * same lanes as 0..3 and they would race writing B. They only widen the V
- * traffic inside smix; everything else stays exactly 4 lanes wide. */
+	/* The head and tail are 4-lane code; the other threads must not run them
+	 * (j = tid & 3 would alias their lanes onto 0..3). */
 	if (tid < PWX_GATHER) {
 	if (HEAD == YP_HEAD_B2B) {
 		/* -- head: init = BLAKE2b(header); B = PBKDF2-BLAKE2b(init, pers, 1, 128r) --
@@ -107,11 +96,8 @@ __device__ __forceinline__ void yespower_hash_1_0(const uint32_t *hdr, const uin
 	yp_smix2<R, PLACE, WIDTH>(B, N, Nloop_all - Nloop_rw,  V, X, S, b0, b1, b2, w4, j, mask, tid, wmask);
 
 	/* -- tail: HMAC(key = last 64 B of B, msg = the saved 32 B) --
- *
- * Test-only ablation: -DYP_ABLATE_TAIL replaces the whole tail with a copy
- * out of B, bounding what truncating the final stage could ever save.  Keeps
- * B live so smix is not dead-code-eliminated.  Neither build system defines
- * it, and it produces a wrong digest by construction. */
+	 * Test only: -DYP_ABLATE_TAIL replaces the tail with a copy out of B (a wrong
+	 * digest by construction); no build defines it. */
 #ifdef YP_ABLATE_TAIL
 	YP_WSYNC(wmask);
 	if (tid >= PWX_GATHER) return;

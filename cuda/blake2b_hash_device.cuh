@@ -8,16 +8,13 @@
  * -- smix, pwxform and salsa are byte-identical. So this header supplies the
  * three things that head/tail needs and nothing more:
  *
- * b2b_hash256 unkeyed BLAKE2b, 32-byte digest
- * b2b_hmac256 HMAC-BLAKE2b, 128-byte block, 32-byte digest
- * b2b_pbkdf2 PBKDF2-HMAC-BLAKE2b with c == 1
+ * b2b_hash256    unkeyed BLAKE2b, 32-byte digest
+ * b2b_hmac256    HMAC-BLAKE2b with 64-byte pads, 32-byte digest
+ * b2b_pbkdf2_c1  PBKDF2-HMAC-BLAKE2b with c == 1
  *
- * /!\ SIGMA IS FULLY UNROLLED ON PURPOSE. A sigma table indexed at apparent
- * runtime is the documented trap that pins m[16] into local memory (see the
- * blake2b plan: a __constant__-indexed message array cost +9.64% in rinhash).
- * With the twelve rounds unrolled every index is a literal and nvcc folds them,
- * so this must compile to STACK 0 / LOCAL 0 -- check with cuobjdump -res-usage
- * after any edit here rather than assuming.
+ * Sigma is fully unrolled on purpose: an indexed sigma table pins m[16] into
+ * local memory. With literal indices this compiles to STACK 0 / LOCAL 0 --
+ * check with cuobjdump -res-usage after any edit.
  */
 
 #ifndef CUDA_BLAKE2B_HASH_DEVICE_CUH
@@ -27,14 +24,10 @@
 
 #define B2B_BLOCKBYTES 128
 
-/* THE HMAC PAD IS 64 BYTES, NOT THE 128-BYTE BLAKE2b BLOCK.
- * That is non-standard HMAC -- RFC 2104 pads to the hash's block size -- but it
- * is what the consensus implementation does (cpuminer-opt
- * algo/yespower/crypto/hmac-blake2b.c: `uint8_t pad[64]`, `keylen > 64`), and
- * consensus is defined by what the network accepts, not by the RFC. Using 128
- * here produces a valid-looking digest that every pool rejects.
- * NOTE the tail's key is exactly 64 bytes, i.e. right at the `> 64` threshold,
- * so it is NOT pre-hashed. */
+/* The HMAC pad is 64 bytes, not the 128-byte BLAKE2b block. Non-standard
+ * (RFC 2104 pads to the block size), but it is what the consensus code does
+ * (cpuminer-opt algo/yespower/crypto/hmac-blake2b.c); 128 gives digests every
+ * pool rejects. The tail's 64-byte key is not pre-hashed (`keylen > 64`). */
 #define B2B_HMAC_PAD   64
 
 __device__ __constant__ static const uint64_t c_b2b_iv[8] = {
@@ -168,10 +161,8 @@ __device__ __forceinline__ void b2b_hash256(uint8_t out[32],
 	b2b_final(&c, out);
 }
 
-/* HMAC-BLAKE2b, 32-byte digest. Standard ipad/opad over a 128-byte block; a
- * key longer than the block is hashed first, which cannot happen on the call
- * sites here (32 and 64 bytes) but is kept so the primitive is not a trap for
- * the next consumer. */
+/* HMAC-BLAKE2b, 32-byte digest, B2B_HMAC_PAD-byte pads. A longer key is hashed
+ * first (not reached by the call sites here: 32 and 64 bytes). */
 __device__ __forceinline__ void b2b_hmac256(uint8_t out[32],
                                             const uint8_t *key, uint32_t keylen,
                                             const uint8_t *in, uint32_t inlen)
@@ -209,10 +200,8 @@ __device__ __forceinline__ void b2b_pbkdf2_c1(uint8_t *dk, uint32_t dklen,
                                               const uint8_t *passwd, uint32_t passwdlen,
                                               const uint8_t *salt, uint32_t saltlen)
 {
-	/* The ipad/opad key blocks do not depend on the block index, so absorb them
- * ONCE and clone the resulting states per block. Rebuilding them per block
- * costs 128 extra compressions at r=32 (dklen = 4096) for no reason -- the
- * first version of this did exactly that. */
+	/* The ipad/opad blocks do not depend on the block index: absorb them once
+	 * and clone the states per block. */
 	uint8_t k[B2B_HMAC_PAD];
 	b2b_ctx ictx, octx;
 

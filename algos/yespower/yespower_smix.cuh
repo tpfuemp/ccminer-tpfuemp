@@ -10,8 +10,7 @@
 
 #include "cuda/pwxform_device.cuh"   /* also pulls in salsa_device.cuh */
 
-/* V access.  YP_V_STREAM selects evict-first (.cs) loads/stores; off by
- * default because the effect differs per arch. */
+/* V access. YP_V_STREAM selects evict-first (.cs); off, it measured no gain. */
 #ifdef YP_V_STREAM
 __device__ __forceinline__ uint4 yp_vld(const uint4 *p) { return __ldcs(p); }
 __device__ __forceinline__ void  yp_vst(uint4 *p, const uint4 v) { __stcs(p, v); }
@@ -28,8 +27,8 @@ __device__ __forceinline__ void  yp_vst(uint4 *p, const uint4 v) { *p = v; }
 #define YP_WSYNC(m) __syncwarp(m)
 #endif
 
-/* YP_VBATCH: V loads staged per thread before use (4 registers each, which
- * can change blocks/SM under __launch_bounds__). */
+/* YP_VBATCH: V loads staged per thread before use. Off: no gain at width 32,
+ * and each step costs 4 registers. */
 #ifndef YP_VBATCH
 #define YP_VBATCH 1
 #endif

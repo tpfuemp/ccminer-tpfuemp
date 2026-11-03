@@ -1,7 +1,7 @@
 /* Salsa20/ROUNDS core, 4 threads cooperating on one 64-byte block.
  *
- * Shared device header (coding guideline section 3).  Written for the yespower 1.0 port,
- * which needs Salsa20/2; yescrypt 0.5 needs /8.  The round count is the only
+ * Shared device header (coding guideline section 3).  yespower 1.0 needs
+ * Salsa20/2, yescrypt 0.5 needs /8.  The round count is the only
  * difference, so it is a template parameter rather than two copies.
  *
  * This does NOT replace algos/yescrypt's private SALSA_CORE.  That is live
@@ -17,8 +17,6 @@
  *
  *   Lane L (0..3) holds words   B[L], B[L + 4], B[L + 8], B[L + 12]
  *                          as   x0,   x1,       x2,       x3
- *
- *   Verified against the reference by an out-of-tree primitive KAT.
  */
 
 #ifndef CUDA_SALSA_DEVICE_CUH
