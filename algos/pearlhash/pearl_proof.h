@@ -131,8 +131,9 @@ static int pearl_cmp_size(const void *a, const void *b)
 
 /* MatrixMerkleProof for `rows` (sorted ascending) of a rows x cols int8 matrix `data`
  * whose tree is `t`. Appends bincode to b. */
-static void pearl_matrix_proof(pearl_buf *b, const pearl_merkle *t, const uint8_t *data, size_t data_len,
-	const uint32_t *rows, int nrows, size_t cols)
+/* cchunk != NULL: every proven leaf holds cchunk (a constant matrix; data is not read) */
+static void pearl_matrix_proof_c(pearl_buf *b, const pearl_merkle *t, const uint8_t *data, size_t data_len,
+	const uint8_t *cchunk, const uint32_t *rows, int nrows, size_t cols)
 {
 	/* compute_leaf_indices_from_rows: unique sorted chunk indices */
 	size_t *idx = (size_t *)malloc(sizeof(size_t) * (nrows * (cols / BLAKE3_CHUNK_LEN + 2)));
@@ -153,7 +154,8 @@ static void pearl_matrix_proof(pearl_buf *b, const pearl_merkle *t, const uint8_
 		size_t s = idx[i] * BLAKE3_CHUNK_LEN, e = s + BLAKE3_CHUNK_LEN;
 		if (e > data_len) e = data_len;
 		memset(chunk, 0, sizeof(chunk));
-		if (e > s) memcpy(chunk, data + s, e - s);
+		if (cchunk) memcpy(chunk, cchunk, BLAKE3_CHUNK_LEN);
+		else if (e > s) memcpy(chunk, data + s, e - s);
 		pb_u64(b, BLAKE3_CHUNK_LEN);
 		pb_put(b, chunk, BLAKE3_CHUNK_LEN);
 	}
@@ -199,6 +201,12 @@ static void pearl_matrix_proof(pearl_buf *b, const pearl_merkle *t, const uint8_
 	free(idx); free(cur); free(nxt); free(sib);
 }
 
+static void pearl_matrix_proof(pearl_buf *b, const pearl_merkle *t, const uint8_t *data, size_t data_len,
+	const uint32_t *rows, int nrows, size_t cols)
+{
+	pearl_matrix_proof_c(b, t, data, data_len, NULL, rows, nrows, cols);
+}
+
 /* Dense PlainProof. A: m x k row-major, Bt: n x k row-major; trees over each, keyed by job_key. */
 static void pearl_plain_proof(pearl_buf *b, uint32_t m, uint32_t n, uint32_t k, uint32_t r,
 	const pearl_merkle *ta, const uint8_t *A, const uint32_t *arows, int h,
@@ -207,6 +215,19 @@ static void pearl_plain_proof(pearl_buf *b, uint32_t m, uint32_t n, uint32_t k, 
 	pb_u64(b, m); pb_u64(b, n); pb_u64(b, k); pb_u64(b, r);
 	pearl_matrix_proof(b, ta, A, (size_t)m * k, arows, h, k);
 	pearl_matrix_proof(b, tb, Bt, (size_t)n * k, bcols, w, k);
+	uint8_t none = 0;
+	pb_put(b, &none, 1);
+}
+
+/* The same for constant matrices (fused geometry): every proven leaf of A holds achunk and every
+ * proven leaf of B^T holds bchunk. Only valid when no proven row touches a non-constant leaf. */
+static void pearl_plain_proof_const(pearl_buf *b, uint32_t m, uint32_t n, uint32_t k, uint32_t r,
+	const pearl_merkle *ta, const uint8_t *achunk, const uint32_t *arows, int h,
+	const pearl_merkle *tb, const uint8_t *bchunk, const uint32_t *bcols, int w)
+{
+	pb_u64(b, m); pb_u64(b, n); pb_u64(b, k); pb_u64(b, r);
+	pearl_matrix_proof_c(b, ta, NULL, (size_t)m * k, achunk, arows, h, k);
+	pearl_matrix_proof_c(b, tb, NULL, (size_t)n * k, bchunk, bcols, w, k);
 	uint8_t none = 0;
 	pb_put(b, &none, 1);
 }

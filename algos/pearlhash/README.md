@@ -58,24 +58,46 @@ C        = (A + E_A)(B + E_B)        int7 x int7 -> int32, A, B in [-64, 63]
 
 ## GPU implementation
 
-- **This miner's choices:** m = n = 8192, k = 2048, rank 128 (the consensus
-  minimum; rank 128 also means no rank penalty), and A = 0.
+The miner uses one of two trial shapes, by architecture.
+
+**sm_80+ (fused):**
+
+- **Choices:** m = n = 8192 mined, k = 65536 (the consensus maximum), rank 128, and
+  A = B = 64 in every mined entry, so each operand byte is 64 + noise.
+- **The nonce:** A is committed with one extra row (8193 rows). The first chunk of
+  that row carries (trial, a per-job salt, GPU id) as int7 digits. The row is never
+  mined, so it changes the seeds without touching the multiplied operands.
+- **Per job:** both Merkle trees (two matrices of 512 MB of constant data) are built
+  on the GPU and their layers copied to the host for the proofs.
+- **Per trial (2^42 MAC, ~115 ms on an RTX 3060):** the host updates hash_a along
+  one Merkle path and derives the seeds. The GPU runs the noise kernels, builds the
+  gather-offset table, and one fused kernel that builds the noised operands from
+  the noise inside the GEMM (no operand matrices in memory), then the jackpot fold
+  and ticket hash.
+
+**sm_61, sm_75 (dp4a):**
+
+- **Choices:** m = n = 8192, k = 2048, rank 128 (the consensus minimum; rank 128
+  also means no rank penalty), and A = 0.
 - **The nonce:** B^T is all zero except its first 1024-byte chunk, which carries
   (trial, a per-job salt, GPU id) as int7 digits.
 - **Per trial (2^37 MAC):** the host updates hash_b along one Merkle path (14
   BLAKE3 nodes) and derives the seeds. The GPU then runs the noise kernels, the
   operand prepass (B is built from noise alone, then the nonce chunk is added to
-  row 0), and one fused GEMM + jackpot + ticket-hash kernel.
-- **No per-trial copies:** the nonce chunk goes to the GPU as a 1 KB kernel
-  argument, and the GEMM writes its hit list straight into mapped host memory
-  (one buffer per queued trial).
+  row 0), and one GEMM + jackpot + ticket-hash kernel.
+
+**Both:**
+
+- **No per-trial copies:** the GEMM writes its hit list straight into mapped host
+  memory (one buffer per queued trial); dp4a passes the nonce chunk as a 1 KB kernel
+  argument.
 - **Overlap:** one trial is always queued ahead, so the host work of the next
   trial runs while the GPU works on the current one.
 - **Kernel by architecture:**
 
 | arch | kernel | pattern (rows x cols) | one thread's tile |
 |---|---|---|---|
-| sm_80+ | `pearl_tiles_imma_w_t` (mma.sync m16n8k32 s8, 64x64 warp tile, 3-stage cp.async, pipelined fragments) | `[0,8,...,56]` x `[0,1,8,9,...,56,57]` (8 x 16) | its 4x8 MMA accumulators |
+| sm_80+ | `pearl_tiles_fused_t` (mma.sync m16n8k32 s8, 256x128 block, 64x64 warp tile; operands gathered from the noise in shared memory with ldmatrix) | `[0,8,...,56]` x `[0,1,8,9,...,56,57]` (8 x 16) | its 4x8 MMA accumulators |
 | sm_61, sm_75 | `pearl_tiles_dp4a_t` (8x8 register blocking, dp4a) | `[0,1,2,3,64..67]` x same (8 x 8) | its 8x8 register block |
 
 Each kernel's pattern is exactly one thread's register block, so the jackpot fold
@@ -85,10 +107,10 @@ reference verifier.
 - **Re-verify:** every reported tile is recomputed on the CPU (only its h + w
   rows) before its proof is built. A kernel defect can only cause a local
   reject, never a bad share.
-- **Proof size:** a share is about 52 KB (IMMA, 8 x 16 tile) or 34 KB (dp4a,
-  8 x 8), plus a third for base64.
-- **Memory:** about 33 MB of GPU buffers (plus the CUDA context) and about 33 MB
-  of host memory per GPU.
+- **Proof size:** a share is about 1.6 MB (fused, 8 x 16 tile at k = 65536) or
+  34 KB (dp4a, 8 x 8), plus a third for base64.
+- **Memory:** fused about 30 MB of GPU buffers and about 70 MB of host memory per
+  GPU; dp4a about 33 MB of each (plus the CUDA context).
 
 ## Pool protocol
 
@@ -117,12 +139,14 @@ At startup:
 - **Host KATs** pinned from the Rust reference: the seed chain, noise bytes, and
   one jackpot -> ticket hash.
 - **GPU differential:** the kernel against the host reference on every tile of
-  a 256 x 256 trial in the miner's own shape (A = 0, B^T zero except the nonce
-  chunk): 512 tiles (IMMA) or 1024 (dp4a).
+  a 256 x 256 trial in the miner's own shape (fused: A = B = 64, at k = 2048;
+  dp4a: A = 0, B^T zero except the nonce chunk): 512 tiles (fused) or 1024 (dp4a).
 - **Negative control:** a changed seed must change every tile.
+- **GPU tree (fused):** the GPU Merkle builder against the host one, every layer.
 
 A mismatch refuses to start. For testing only, `PEARLHASH_SELFTEST_FAULT=1`
-(host KAT) or `2` (GPU) breaks one check on purpose, to show that it fires.
+(host KAT), `2` (GPU) or `3` (GPU tree) breaks one check on purpose, to show that
+it fires.
 `PEARLHASH_DUMP=<dir>` writes the first share as `proof.bin` + `header76.hex`,
 for checking against the reference verifier.
 
@@ -140,6 +164,7 @@ CUDA 11.8, default settings. Rates in int8 MAC/s.
 | 2026-10-25 | RTX 3060 (sm_86), Windows | ~30 T | live-validated on a Pearl pool: accepted 2/2, 3 min (desktop in use) |
 | 2026-11-01 | RTX 3060 (sm_86), Windows | ~34 T | `--benchmark`; live-validated: accepted 1/1, 10 min, 34.4 T average |
 | 2026-11-02 | RTX 3060 (sm_86), Windows | ~35.4 T | no per-trial copies, fold once per chunk; live-validated: accepted 4/4, 40 min, 35.35 T average |
+| 2026-11-03 | RTX 3060 (sm_86), Windows | ~36.5 T | fused kernel, k = 65536 (+5.5% at the power cap, from a higher clock); live-validated: accepted 7/7, 40 min, 36.9 T average |
 | 2026-11-01 | GTX 1080 Ti (sm_61), Linux | 17-18.5 T | `--benchmark` at the card's thermal limit (89 C); live-validated: accepted 2/2, 40 min |
 
 ## Limits

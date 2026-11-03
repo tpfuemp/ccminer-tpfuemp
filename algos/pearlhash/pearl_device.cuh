@@ -9,6 +9,7 @@
 #define PEARL_DEVICE_CUH
 
 #include <stdint.h>
+#include <type_traits>
 #include "algos/pearlhash/pearl_ref.h"
 
 #define PEARL_MAX_HITS		32	/* hit slots per trial; count may exceed it */
@@ -636,5 +637,276 @@ pearl_tiles_imma_w_t(pearl_gemm_params p, const uint4 *Ap, const uint4 *Bp, uint
 #define PEARL_IMMA_W_GM		4
 #define PEARL_IMMA_W_SMEM	pearl_imma_w_smem(PEARL_IMMA_WN, PEARL_IMMA_W_STAGES)
 static_assert(pearl_imma_w_smem(PEARL_IMMA_WN, PEARL_IMMA_W_STAGES) <= 48 * 1024, "needs cudaFuncAttributeMaxDynamicSharedMemorySize");
+
+/* ===========================================================================
+ * Fused IMMA path (sm_80+): the noised operands are built inside the GEMM from E^T, so no operand
+ * panels exist. Miner geometry: A = B = 64 committed in every mined entry (the nonce lives in a
+ * committed but unmined A row), so each operand byte is 64 + E[p0] - E[p1] in [1, 127].
+ * Per CTA (256 x 128 outputs, 8 warps of 64 x 64, 1 CTA/SM): E^T of its 256 A rows and 128 B rows is
+ * staged in smem as u = E + 32 in [0, 63], ET[p][row] with 16-byte row groups XOR-swizzled by
+ * p & 7. Per 32-k slice each warp builds 3 of the 24 (operand, 16-row group) fragment quads:
+ * ldmatrix.x4.trans gathers 16 rows' bytes at k positions p0 and p1 (one row address per lane),
+ * x + 0x40404040 - y per word (no cross-byte carry), PRMT 0x6420 / 0x7531 splits the row pair into
+ * a fragment quad of the PEARL_PERM_IMMA_A / _B64 layouts, one STS.128 into one of 4 slice
+ * buffers; slice s + 2 is built while slice s is multiplied. Same hash tile, fold and epilogue as
+ * pearl_tiles_imma_w_t<2, *, GM>. Requires r == 128, k % 128 == 0, m % 256 == 0, n % 128 == 0.
+ */
+#define PEARL_FU_ET_BYTES	(128 * 128)				/* one 128-row block of E^T */
+#define PEARL_FU_BT		256					/* CTA rows */
+#define PEARL_FU_SLICE_U4	768					/* A 512 + B 256 quads */
+#define PEARL_FU_SMEM		(3 * PEARL_FU_ET_BYTES + 4 * PEARL_FU_SLICE_U4 * 16)
+#define PEARL_FU_OPAD		128					/* offset table padding (entries) */
+#define PEARL_FU_GM		4					/* row blocks per raster group */
+
+/* per k: the two E^T byte offsets p * 128 | (p & 7) << 4 as 16-bit halves, A in .x, B in .y; zero
+ * past k (k + PEARL_FU_OPAD entries). Thread 0 also clears the hit count. */
+__global__ void pearl_fused_offsets(const uint32_t *PA, const uint32_t *PB, uint32_t k, uint2 *O, uint32_t *hits)
+{
+	const uint32_t l = blockIdx.x * blockDim.x + threadIdx.x;
+	if (l == 0) hits[0] = 0;
+	if (l >= k + PEARL_FU_OPAD) return;
+	uint2 v = make_uint2(0, 0);
+	if (l < k) {
+		const uint32_t a0 = PA[l] & 0xffff, a1 = PA[l] >> 16, b0 = PB[l] & 0xffff, b1 = PB[l] >> 16;
+		v.x = (a0 * 128 | (a0 & 7) << 4) | (a1 * 128 | (a1 & 7) << 4) << 16;
+		v.y = (b0 * 128 | (b0 & 7) << 4) | (b1 * 128 | (b1 & 7) << 4) << 16;
+	}
+	O[l] = v;
+}
+
+/* stage NB 128-row E^T blocks (rows from U0, U1, U2) as u = E + 32 with NT threads. A unit = rows
+ * {R, R+1, R+8, R+9} (R = grp*16 + 2cc) x 16 p: four 16-byte row loads, a 4x4 byte transpose per
+ * p-word, sixteen 4-byte stores of [R, R+8, R+1, R+9] at inner byte 4cc (rows c and c + 8 share a
+ * 16-bit lane, so the transposed gather hands a thread an m16n8k32 fragment's row pair). */
+template <int NT, int NB>
+__device__ __forceinline__ void pearl_fu_fill(uint8_t *ET, const int8_t *U0, const int8_t *U1,
+	const int8_t *U2, uint32_t tid)
+{
+	for (uint32_t i = tid; i < NB * 256; i += NT) {
+		const uint32_t ul = i & 31, op = i >> 8, pb = (i >> 5) & 7;
+		const uint32_t grp = ul >> 2, cc = ul & 3, R = grp * 16 + 2 * cc;
+		const int8_t *U = op == 0 ? U0 : op == 1 ? U1 : U2;
+		const uint32_t rr[4] = { R, R + 1, R + 8, R + 9 };
+		uint4 v[4];
+		#pragma unroll
+		for (int q = 0; q < 4; q++) {
+			v[q] = __ldg((const uint4 *)(U + (size_t)rr[q] * 128) + pb);
+			v[q].x = (v[q].x ^ 0x20202020u) & 0x3f3f3f3fu; v[q].y = (v[q].y ^ 0x20202020u) & 0x3f3f3f3fu;
+			v[q].z = (v[q].z ^ 0x20202020u) & 0x3f3f3f3fu; v[q].w = (v[q].w ^ 0x20202020u) & 0x3f3f3f3fu;
+		}
+		uint8_t *et = ET + op * PEARL_FU_ET_BYTES;
+		const uint32_t vw[4][4] = { { v[0].x, v[0].y, v[0].z, v[0].w }, { v[1].x, v[1].y, v[1].z, v[1].w },
+			{ v[2].x, v[2].y, v[2].z, v[2].w }, { v[3].x, v[3].y, v[3].z, v[3].w } };
+		#pragma unroll
+		for (int e = 0; e < 4; e++) {
+			const uint32_t lo02 = __byte_perm(vw[0][e], vw[2][e], 0x5140), lo13 = __byte_perm(vw[1][e], vw[3][e], 0x5140);
+			const uint32_t hi02 = __byte_perm(vw[0][e], vw[2][e], 0x7362), hi13 = __byte_perm(vw[1][e], vw[3][e], 0x7362);
+			const uint32_t pw[4] = { __byte_perm(lo02, lo13, 0x5410), __byte_perm(lo02, lo13, 0x7632),
+				__byte_perm(hi02, hi13, 0x5410), __byte_perm(hi02, hi13, 0x7632) };
+			#pragma unroll
+			for (int b = 0; b < 4; b++) {
+				const uint32_t pp = pb * 16 + e * 4 + b;
+				*(uint32_t *)(et + pp * 128 + (((grp ^ pp) & 7) << 4) + 4 * cc) = pw[b];
+			}
+		}
+	}
+}
+
+template <int GM>
+__global__ void __launch_bounds__(256, 1)
+pearl_tiles_fused_t(pearl_gemm_params p, const int8_t *UA, const int8_t *UB, const uint2 *O2,
+	uint32_t *dbg, uint32_t *hits)
+{
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+	extern __shared__ uint4 pearl_fu_smem[];
+	uint8_t *ET = (uint8_t *)pearl_fu_smem;					/* [A0 | A1 | B] */
+	uint4 *SL = pearl_fu_smem + 3 * PEARL_FU_ET_BYTES / 16;			/* 4 slices */
+
+	const uint32_t tid = threadIdx.x, lane = tid & 31, warp = tid >> 5;
+	const uint32_t g = lane >> 2, t = lane & 3;
+	const uint32_t wm = warp >> 1, wn = warp & 1;
+	const uint32_t nbm = p.m / PEARL_FU_BT, nbn = p.n / PEARL_BT;
+	const uint32_t in_group = GM * nbn, pid = blockIdx.x;
+	const uint32_t first = (pid / in_group) * GM;
+	const uint32_t gsz = min(nbm - first, (uint32_t)GM);
+	const uint32_t bm = first + (pid % in_group) % gsz;
+	const uint32_t bn = (pid % in_group) / gsz;
+
+	{
+		const int8_t *A0 = UA + (size_t)(bm * PEARL_FU_BT) * 128;
+		pearl_fu_fill<256, 3>(ET, A0, A0 + 128 * 128, UB + (size_t)(bn * PEARL_BT) * 128, tid);
+	}
+
+	const uint32_t lq = lane >> 3, lj = lane & 7;
+	const uint32_t kl = 16 * (lq >> 1) + 4 * (lj >> 1) + 2 * (lq & 1) + (lj & 1);
+	const uint32_t et_s = (uint32_t)__cvta_generic_to_shared(ET);
+	const uint32_t wsh = (warp << 4) | (warp << 20);			/* row group swizzle, both halves */
+	const uint32_t S = p.k >> 5;
+
+	/* piece c: 0 A rows 16 warp.., 1 A rows 16 (warp + 8).., 2 B rows 16 warp..; o = O ^ wsh */
+	auto gather = [&](int c, uint32_t o, uint32_t (&xy)[8]) {
+		const uint32_t base = et_s + c * PEARL_FU_ET_BYTES;
+		const uint32_t a0 = base + (o & 0xffff), a1 = base + (o >> 16);
+		asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];"
+			: "=r"(xy[0]), "=r"(xy[1]), "=r"(xy[2]), "=r"(xy[3]) : "r"(a0));
+		asm volatile("ldmatrix.sync.aligned.m8n8.x4.trans.shared.b16 {%0,%1,%2,%3}, [%4];"
+			: "=r"(xy[4]), "=r"(xy[5]), "=r"(xy[6]), "=r"(xy[7]) : "r"(a1));
+	};
+	auto finish = [&](int c, uint4 *dst, const uint32_t (&xy)[8]) {
+		uint32_t x[4], w[4];
+		#pragma unroll
+		for (int q = 0; q < 4; q++) x[q] = xy[q] + 0x40404040u - xy[4 + q];
+		w[0] = __byte_perm(x[0], x[1], 0x6420); w[1] = __byte_perm(x[0], x[1], 0x7531);
+		w[2] = __byte_perm(x[2], x[3], 0x6420); w[3] = __byte_perm(x[2], x[3], 0x7531);
+		if (c == 2)
+			dst[512 + warp * 32 + lane] = make_uint4(w[0], w[2], w[1], w[3]);
+		else
+			dst[(warp + 8 * c) * 32 + lane] = make_uint4(w[0], w[1], w[2], w[3]);
+	};
+	auto build = [&](uint32_t oa, uint32_t ob, uint4 *dst) {
+		#pragma unroll
+		for (int c = 0; c < 3; c++) { uint32_t xy[8]; gather(c, c == 2 ? ob : oa, xy); finish(c, dst, xy); }
+	};
+
+	int acc[4][8][4];
+	#pragma unroll
+	for (int i = 0; i < 4; i++)
+		#pragma unroll
+		for (int j = 0; j < 8; j++)
+			#pragma unroll
+			for (int e = 0; e < 4; e++) acc[i][j][e] = 0;
+	uint32_t win[16];
+	#pragma unroll
+	for (int i = 0; i < 16; i++) win[i] = 0;
+
+	const uint32_t aq = wm * 128 + lane, bq = 512 + wn * 128 + lane;
+	auto load_fb = [&](const uint4 *sq, int jp, uint32_t (&fb)[8][2]) {
+		const uint4 v = sq[bq + 32 * jp];
+		fb[2 * jp][0] = v.x; fb[2 * jp][1] = v.y; fb[2 * jp + 1][0] = v.z; fb[2 * jp + 1][1] = v.w;
+	};
+
+	uint2 o2 = make_uint2(0, 0), o3 = o2;	/* offsets of slices s + 2 (in use this step) and s + 3 (loaded this step) */
+	uint32_t xa[8], xb[8];	/* gathered, not yet finished pieces */
+	/* step J of a chunk (slice s = 4q + J): multiply s, build s + 2 into buffer (J + 2) & 3, load B
+	 * fragments of s + 1 from buffer (J + 1) & 3; oq = O2 + (4q + 4) * 32 + kl, so O(s + 4) = oq[32 J] */
+	auto step = [&](auto jc, const uint2 *oq, uint4 (&fa)[2], const uint32_t (&fb)[8][2], uint32_t (&fbn)[8][2]) {
+		constexpr int J = decltype(jc)::value;
+		const uint4 *cur = SL + J * PEARL_FU_SLICE_U4;
+		const uint4 *nxt = SL + ((J + 1) & 3) * PEARL_FU_SLICE_U4;
+		uint4 *bd = SL + ((J + 2) & 3) * PEARL_FU_SLICE_U4;
+		const uint32_t oa = o2.x ^ wsh, ob = o2.y ^ wsh;
+		o2 = o3;
+		o3 = __ldg(oq + 32 * J);
+		#pragma unroll
+		for (int i = 0; i < 4; i++) {
+			if (i == 0) gather(1, oa, xb);
+			if (i == 1) gather(2, ob, xa);
+			if (i == 3) gather(0, o2.x ^ wsh, xa);	/* o2 = O(s + 3) by now */
+			fa[(i + 1) & 1] = i < 3 ? cur[aq + 32 * (i + 1)] : nxt[aq];
+			if (i >= 2) { load_fb(nxt, 2 * (i - 2), fbn); load_fb(nxt, 2 * (i - 2) + 1, fbn); }
+			#pragma unroll
+			for (int j = 0; j < 8; j++)
+				asm volatile("mma.sync.aligned.m16n8k32.row.col.s32.s8.s8.s32 "
+					"{%0,%1,%2,%3}, {%4,%5,%6,%7}, {%8,%9}, {%0,%1,%2,%3};"
+					: "+r"(acc[i][j][0]), "+r"(acc[i][j][1]), "+r"(acc[i][j][2]), "+r"(acc[i][j][3])
+					: "r"(fa[i & 1].x), "r"(fa[i & 1].y), "r"(fa[i & 1].z), "r"(fa[i & 1].w),
+					  "r"(fb[j][0]), "r"(fb[j][1]));
+			if (i < 3) finish(i, bd, i == 1 ? xb : xa);
+		}
+		if (J == 3) {			/* end of the r = 128 chunk */
+			uint32_t xx = 0;
+			#pragma unroll
+			for (int i = 0; i < 4; i++)
+				#pragma unroll
+				for (int j = 0; j < 8; j++)
+					#pragma unroll
+					for (int e = 0; e < 4; e++) xx ^= (uint32_t)acc[i][j][e];
+			const uint32_t nw = ((win[0] << 13) | (win[0] >> 19)) ^ xx;
+			#pragma unroll
+			for (int i = 0; i < 15; i++) win[i] = win[i + 1];
+			win[15] = nw;
+		}
+		/* one basic block per step: without a branch here the 4-step body is a single block and
+		 * ptxas moves the register-only MMAs across the barriers (some steps then have no MMA to
+		 * overlap their build chains, measured ~12% slower). The barrier's OR result is always 0
+		 * and opaque, so the branch survives. */
+		if (__syncthreads_or(0)) asm volatile("trap;");
+	};
+
+	const uint2 *O = O2 + kl;
+	const uint2 o0 = __ldg(O), o1 = __ldg(O + 32);
+	o2 = __ldg(O + 64); o3 = __ldg(O + 96);
+	__syncthreads();				/* E^T staged */
+	build(o0.x ^ wsh, o0.y ^ wsh, SL);
+	build(o1.x ^ wsh, o1.y ^ wsh, SL + PEARL_FU_SLICE_U4);
+	__syncthreads();
+	uint4 fa[2];
+	uint32_t fb0[8][2], fb1[8][2];
+	fa[0] = SL[aq];
+	#pragma unroll
+	for (int jp = 0; jp < 4; jp++) load_fb(SL, jp, fb0);
+	gather(0, o2.x ^ wsh, xa);			/* piece 0 of slice 2 */
+	const uint2 *oq = O + 128;
+	#pragma unroll 1
+	for (uint32_t q = 0; q < (S >> 2); q++, oq += 128) {
+		step(std::integral_constant<int, 0>(), oq, fa, fb0, fb1);
+		step(std::integral_constant<int, 1>(), oq, fa, fb1, fb0);
+		step(std::integral_constant<int, 2>(), oq, fa, fb0, fb1);
+		step(std::integral_constant<int, 3>(), oq, fa, fb1, fb0);
+	}
+
+	const uint32_t rot = (S / 4) & 15;
+	for (uint32_t q = 0; q < rot; q++) {
+		const uint32_t last = win[15];
+		#pragma unroll
+		for (int i = 15; i > 0; i--) win[i] = win[i - 1];
+		win[0] = last;
+	}
+	uint32_t hw[8];
+	blake3_keyed_block(p.a_seed.w, win, hw);
+	const uint32_t ro = bm * PEARL_FU_BT + wm * 64 + g;
+	const uint32_t co = bn * PEARL_BT + wn * 64 + 2 * t;
+	if (dbg) {
+		const uint32_t ri = (ro / 64) * 8 + ro % 64, ci = (co / 64) * 4 + (co % 64) / 2;
+		uint32_t *d = dbg + ((size_t)ri * (p.n / 16) + ci) * 24;
+		#pragma unroll
+		for (int i = 0; i < 16; i++) d[i] = win[i];
+		#pragma unroll
+		for (int i = 0; i < 8; i++) d[16 + i] = hw[i];
+	}
+	if (pearl_meets_words(hw, p.bound)) {
+		const uint32_t slot = atomicAdd(&hits[0], 1);
+		if (slot < PEARL_MAX_HITS) { hits[1 + 2 * slot] = ro; hits[2 + 2 * slot] = co; }
+	}
+#endif
+}
+static_assert(PEARL_FU_SMEM <= 99 * 1024, "fused kernel smem must fit the sm_86 opt-in limit");
+
+/* --- Merkle tree of a constant-content matrix (fused geometry: A = B = 64) ----------------- */
+/* layer 0: leaf i = keyed chunk CV of `chunk` (1024 B, device) at counter i */
+__global__ void pearl_merkle_const_leaves(pearl_key8 key, const uint8_t *chunk, uint32_t leaves, uint32_t *cv)
+{
+	const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i >= leaves) return;
+	blake3_node node;
+	blake3_chunk_node(key.w, chunk, BLAKE3_CHUNK_LEN, i, BLAKE3_KEYED_HASH, &node);
+	blake3_node_cv(&node, 0, cv + 8 * (size_t)i);
+}
+
+/* one layer up: parents of pairs, an odd last node is carried up */
+__global__ void pearl_merkle_parents(pearl_key8 key, const uint32_t *in, uint32_t n, uint32_t *out)
+{
+	const uint32_t i = blockIdx.x * blockDim.x + threadIdx.x;
+	if (i >= (n + 1) / 2) return;
+	uint32_t *o = out + 8 * (size_t)i;
+	if (2 * i + 1 < n) {
+		blake3_node node;
+		blake3_parent_node(key.w, in + 16 * (size_t)i, in + 16 * (size_t)i + 8, BLAKE3_KEYED_HASH, &node);
+		blake3_node_cv(&node, 0, o);
+	} else {
+		#pragma unroll
+		for (int w = 0; w < 8; w++) o[w] = in[16 * (size_t)i + w];
+	}
+}
 
 #endif /* PEARL_DEVICE_CUH */

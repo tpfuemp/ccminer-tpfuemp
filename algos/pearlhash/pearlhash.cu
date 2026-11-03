@@ -22,8 +22,11 @@
 #define PEARL_N		8192
 #define PEARL_K		2048
 #define PEARL_R		128
-/* hashes_done unit: 2^20 MAC, so one trial (2^37 MAC) is 2^17 units */
-#define PEARL_TRIAL_UNITS	((uint32_t)(((uint64_t)PEARL_M * PEARL_N * PEARL_K) >> 20))
+/* fused geometry (sm_80+): k at the consensus maximum, A = B = 64 in every mined entry, and A
+ * committed with one extra row (row PEARL_M) whose first chunk carries the nonce; that row is
+ * never mined, so the mined operands are pure 64 + noise */
+#define PEARL_FK		65536
+#define PEARL_FILL		64
 #define PEARL_CALL_SECONDS	1.0
 
 /* ------------------------------------------------------------ proof stash */
@@ -81,12 +84,21 @@ struct pearl_state {
 	uint32_t h, w;				/* pattern sizes: 8 x 8 dp4a, 8 x 16 IMMA */
 	bool dp4a_local;			/* dp4a jackpot window in local memory (sm_6x) */
 	pearl_config cfg;
-	uint32_t *dU, *dP, *dApan, *dBpan, *dHits;	/* dHits: self-test only */
+	bool fused;				/* sm_80+: operands built inside the GEMM */
+	uint32_t m, mc, n;			/* mined rows, committed A rows, B^T rows */
+	uint32_t units;				/* hashes_done units (2^20 MAC) per trial */
+	size_t nonce_leaf;			/* fused: leaf of A's tree holding the nonce chunk */
+	uint32_t *dU, *dP, *dApan, *dBpan, *dHits;	/* dp4a path; dHits: self-test only */
+	int8_t *dUA, *dUB;			/* fused: E of A and of B^T */
+	uint32_t *dPA, *dPB;			/* fused: (p0, p1) per k */
+	uint2 *dO2;				/* fused: packed smem offsets */
+	uint8_t *dFill;				/* fused: one 1024-byte chunk of PEARL_FILL */
+	uint32_t *dTree0, *dTree1;		/* fused: per-job tree layers, ping-pong */
 	pearl_slot slot[2];
 	double t_host, t_gpu, t_hit;		/* -D timing: seconds since the last log */
 	uint32_t t_trials;
 	time_t t_last;
-	uint8_t *A, *Bt;			/* host matrices: A = 0, B^T = 0 but chunk 0 */
+	uint8_t *A, *Bt;			/* dp4a host matrices: A = 0, B^T = 0 but chunk 0 (NULL when fused) */
 	pearl_merkle ta, tb;
 	bool have_job;
 	uint8_t header[PEARL_HEADER_LEN];
@@ -108,19 +120,33 @@ static void pearl_nonce_chunk(uint8_t *chunk, uint32_t trial, uint64_t salt, int
 	for (int i = 0; i < 2; i++) chunk[p++] = (uint8_t)(int8_t)((int)(((uint32_t)thr_id >> (6 * i)) & 63) - 32);
 }
 
-/* One trial on the GPU from given seeds: noise, prepass, kernel. B^T is zero except the
- * 1024-byte chunk_b (host bytes, passed as kernel parameters) at the start of row 0.
- * hits must be device-visible (mapped host memory in the miner); the trial clears it.
- * dbg may be NULL. */
-static void pearl_gpu_trial(pearl_state &s, uint32_t m, uint32_t n, const uint8_t a_seed[32],
+/* One trial on the GPU from given seeds. hits must be device-visible (mapped host memory in the
+ * miner); the trial clears it. dbg may be NULL.
+ * Fused: noise and offset tables, then the fused GEMM (A = B = 64; chunk_b is not used).
+ * dp4a: noise, prepass, kernel; B^T is zero except the 1024-byte chunk_b (host bytes, passed as
+ * kernel parameters) at the start of row 0. */
+static void pearl_gpu_trial(pearl_state &s, uint32_t m, uint32_t n, uint32_t k, const uint8_t a_seed[32],
 	const uint8_t b_seed[32], const uint32_t bound[8], const uint8_t *chunk_b, uint32_t *hits, uint32_t *dbg)
 {
-	pearl_chunk1k cb;
-	memcpy(cb.w, chunk_b, BLAKE3_CHUNK_LEN);
-	const uint32_t k = s.cfg.k, r = s.cfg.r;
+	const uint32_t r = s.cfg.r;
 	pearl_key8 ka, kb;
 	pearl_key_words(a_seed, ka.w);
 	pearl_key_words(b_seed, kb.w);
+	if (s.fused) {
+		pearl_noise_uniform_kernel <<<(m * r / 32 + 255) / 256, 256>>> (ka, 'A', m * r / 32, (uint32_t *)s.dUA);
+		pearl_noise_perm_kernel <<<(k / 8 + 127) / 128, 128>>> (ka, 'A', k, r, s.dPA);
+		pearl_noise_uniform_kernel <<<(n * r / 32 + 255) / 256, 256>>> (kb, 'B', n * r / 32, (uint32_t *)s.dUB);
+		pearl_noise_perm_kernel <<<(k / 8 + 127) / 128, 128>>> (kb, 'B', k, r, s.dPB);
+		pearl_fused_offsets <<<(k + PEARL_FU_OPAD + 255) / 256, 256>>> (s.dPA, s.dPB, k, s.dO2, hits);
+		pearl_gemm_params gp;
+		gp.m = m; gp.n = n; gp.k = k; gp.r = r; gp.a_seed = ka;
+		memcpy(gp.bound, bound, 32);
+		pearl_tiles_fused_t<PEARL_FU_GM> <<<(m / PEARL_FU_BT) * (n / PEARL_BT), 256, PEARL_FU_SMEM>>>
+			(gp, s.dUA, s.dUB, s.dO2, dbg, hits);
+		return;
+	}
+	pearl_chunk1k cb;
+	memcpy(cb.w, chunk_b, BLAKE3_CHUNK_LEN);
 	const size_t smem = PEARL_PREP_KW * 16 + (size_t)PEARL_BT * (r + 4);
 	const dim3 ga(m / PEARL_BT, (k / 4 + PEARL_PREP_KW - 1) / PEARL_PREP_KW);
 	const dim3 gb(n / PEARL_BT, (k / 4 + PEARL_PREP_KW - 1) / PEARL_PREP_KW);
@@ -168,12 +194,13 @@ static bool pearl_cpu_tile(const pearl_state &s, const uint8_t *A, const uint8_t
 	int8_t *na = (int8_t *)malloc(s.h * (size_t)k), *nb = (int8_t *)malloc(s.w * (size_t)k);
 	pearl_noise_rows(a_seed, 'A', tr, s.h, k, r, na);
 	pearl_noise_rows(b_seed, 'B', tc, s.w, k, r, nb);
+	/* A, Bt NULL: the fused geometry's constant PEARL_FILL */
 	for (uint32_t i = 0; i < s.h; i++)
 		for (uint32_t l = 0; l < k; l++)
-			na[(size_t)i * k + l] = (int8_t)((int8_t)A[(size_t)tr[i] * k + l] + na[(size_t)i * k + l]);
+			na[(size_t)i * k + l] = (int8_t)((A ? (int8_t)A[(size_t)tr[i] * k + l] : PEARL_FILL) + na[(size_t)i * k + l]);
 	for (uint32_t i = 0; i < s.w; i++)
 		for (uint32_t l = 0; l < k; l++)
-			nb[(size_t)i * k + l] = (int8_t)((int8_t)Bt[(size_t)tc[i] * k + l] + nb[(size_t)i * k + l]);
+			nb[(size_t)i * k + l] = (int8_t)((Bt ? (int8_t)Bt[(size_t)tc[i] * k + l] : PEARL_FILL) + nb[(size_t)i * k + l]);
 	uint32_t jp[16];
 	uint8_t hb[32];
 	pearl_tile_jackpot(na, nb, k, r, loc, s.h, loc, s.w, jp);
@@ -245,21 +272,24 @@ static bool pearl_host_kats(int fault)
 /* GPU vs host on every tile of a 256 x 256 trial, then a changed seed must change the tiles */
 static bool pearl_gpu_differential(int thr_id, pearl_state &s, int fault, bool *ran)
 {
-	const uint32_t m = 256, n = 256, k = s.cfg.k, r = s.cfg.r;
+	const uint32_t m = 256, n = 256, k = PEARL_K, r = s.cfg.r;	/* fused: same kernel at a small k */
 	const uint32_t ntile = (m / s.h) * (n / s.w);
 	*ran = false;
 	uint8_t *A = (uint8_t *)calloc((size_t)m * k, 1), *Bt = (uint8_t *)malloc((size_t)n * k);
-	/* the miner's shape: A = 0, B^T = 0 except a random first chunk of row 0 */
-	memset(Bt, 0, (size_t)n * k);
+	/* the miner's shape: fused A = B = 64; dp4a A = 0, B^T = 0 except a random first chunk of row 0 */
+	memset(Bt, s.fused ? PEARL_FILL : 0, (size_t)n * k);
+	if (s.fused) memset(A, PEARL_FILL, (size_t)m * k);
 	uint32_t lcg = 0x9e3779b9u;
-	for (size_t i = 0; i < BLAKE3_CHUNK_LEN; i++) {
+	for (size_t i = 0; i < BLAKE3_CHUNK_LEN && !s.fused; i++) {
 		lcg = lcg * 1664525u + 1013904223u;
 		Bt[i] = (uint8_t)(int8_t)((int)(lcg >> 25) - 64);
 	}
 	uint8_t header[PEARL_HEADER_LEN];
 	for (int i = 0; i < PEARL_HEADER_LEN; i++) header[i] = (uint8_t)(i * 37 + 11);
 	uint8_t jk[32], ha[32], hb[32], bs[32], as[32];
-	pearl_job_key(header, &s.cfg, jk);
+	pearl_config tcfg = s.cfg;
+	tcfg.k = k;
+	pearl_job_key(header, &tcfg, jk);
 	pearl_matrix_root(A, (size_t)m * k, jk, ha);
 	pearl_matrix_root(Bt, (size_t)n * k, jk, hb);
 	pearl_seeds(jk, ha, hb, m, n, bs, as);
@@ -277,7 +307,7 @@ static bool pearl_gpu_differential(int thr_id, pearl_state &s, int fault, bool *
 		uint8_t as_gpu[32];
 		memcpy(as_gpu, as, 32);
 		if (fault == 2) as_gpu[3] ^= 0x40;
-		pearl_gpu_trial(s, m, n, as_gpu, bs, bound, Bt, s.dHits, d_dbg);
+		pearl_gpu_trial(s, m, n, k, as_gpu, bs, bound, Bt, s.dHits, d_dbg);
 	}
 	if (cudaDeviceSynchronize() != cudaSuccess) { cudaGetLastError(); goto done; }
 	uint32_t hits[1 + 2 * PEARL_MAX_HITS];
@@ -288,9 +318,10 @@ static bool pearl_gpu_differential(int thr_id, pearl_state &s, int fault, bool *
 		int8_t *na = (int8_t *)malloc((size_t)m * k), *nb = (int8_t *)malloc((size_t)n * k);
 		pearl_noise_full(as, 'A', m, k, r, na);
 		pearl_noise_full(bs, 'B', n, k, r, nb);
+		for (size_t i = 0; i < (size_t)m * k; i++) na[i] = (int8_t)((int8_t)A[i] + na[i]);
 		for (size_t i = 0; i < (size_t)n * k; i++) nb[i] = (int8_t)((int8_t)Bt[i] + nb[i]);
 		std::vector<uint32_t> roff, coff;
-		for (uint32_t o = 0; o < m; o++) if (pearl_offset_is_valid(&s.cfg.rows, o)) roff.push_back(o);
+		for (uint32_t o = 0; o < m; o++) if (pearl_offset_is_valid(&s.cfg.rows, o)) roff.push_back(o);	/* m multiple of the period */
 		for (uint32_t o = 0; o < n; o++) if (pearl_offset_is_valid(&s.cfg.cols, o)) coff.push_back(o);
 		uint32_t bad = 0, ref_hits = 0;
 		for (uint32_t t = 0; t < ntile; t++) {
@@ -314,7 +345,7 @@ static bool pearl_gpu_differential(int thr_id, pearl_state &s, int fault, bool *
 		uint8_t as_bad[32];
 		memcpy(as_bad, as, 32);
 		as_bad[17] ^= 1;
-		pearl_gpu_trial(s, m, n, as_bad, bs, bound, Bt, s.dHits, d_dbg);
+		pearl_gpu_trial(s, m, n, k, as_bad, bs, bound, Bt, s.dHits, d_dbg);
 		if (cudaDeviceSynchronize() != cudaSuccess) { cudaGetLastError(); ok = false; *ran = false; goto done; }
 		cudaMemcpy(dbg2, d_dbg, (size_t)ntile * 96, cudaMemcpyDeviceToHost);
 		if (!memcmp(dbg, dbg2, (size_t)ntile * 96)) {
@@ -328,6 +359,58 @@ done:
 	return ok;
 }
 
+/* Merkle tree (layers on the host, as pearl_merkle_build) of a matrix whose every chunk is
+ * PEARL_FILL, built on the GPU: leaves x 16 BLAKE3 compressions is ~1 GB of hashing per job at the
+ * fused geometry, seconds on the CPU. */
+static void pearl_tree_const_gpu(pearl_state &s, pearl_merkle *t, size_t leaves, const uint8_t key[32])
+{
+	memset(t, 0, sizeof(*t));
+	pearl_key_words(key, t->key);
+	t->leaves = leaves;
+	pearl_key8 k8;
+	memcpy(k8.w, t->key, 32);
+	pearl_merkle_const_leaves <<<(uint32_t)((leaves + 255) / 256), 256>>> (k8, s.dFill, (uint32_t)leaves, s.dTree0);
+	uint32_t *cur = s.dTree0, *nxt = s.dTree1;
+	size_t n = leaves;
+	int L = 0;
+	t->layer[0] = (uint32_t *)malloc(n * 32);
+	t->len[0] = n;
+	CUDA_SAFE_CALL(cudaMemcpy(t->layer[0], cur, n * 32, cudaMemcpyDeviceToHost));
+	while (n > 2) {
+		const size_t nn = (n + 1) / 2;
+		pearl_merkle_parents <<<(uint32_t)((nn + 255) / 256), 256>>> (k8, cur, (uint32_t)n, nxt);
+		L++;
+		t->layer[L] = (uint32_t *)malloc(nn * 32);
+		t->len[L] = nn;
+		CUDA_SAFE_CALL(cudaMemcpy(t->layer[L], nxt, nn * 32, cudaMemcpyDeviceToHost));
+		uint32_t *tmp = cur; cur = nxt; nxt = tmp;
+		n = nn;
+	}
+	t->nlayers = L + 1;
+	uint32_t root[8];
+	pearl_parent_cv(t->key, t->layer[L], t->layer[L] + 8, BLAKE3_ROOT, root);
+	blake3_cv_to_bytes(root, t->root);
+}
+
+/* self-test leg (fused): the GPU tree of a constant matrix == the host tree, every layer, for an
+ * odd leaf count (carried nodes) */
+static bool pearl_tree_selftest(pearl_state &s, int fault)
+{
+	const size_t leaves = 37;
+	uint8_t *data = (uint8_t *)malloc(leaves * BLAKE3_CHUNK_LEN), key[32];
+	memset(data, PEARL_FILL, leaves * BLAKE3_CHUNK_LEN);
+	for (int i = 0; i < 32; i++) key[i] = (uint8_t)(i * 29 + 3);
+	pearl_merkle h, g;
+	pearl_merkle_build(&h, data, leaves * BLAKE3_CHUNK_LEN, key);
+	pearl_tree_const_gpu(s, &g, leaves, key);
+	if (fault == 3) g.layer[1][5] ^= 1;
+	bool ok = h.nlayers == g.nlayers && !memcmp(h.root, g.root, 32);
+	for (int L = 0; L < h.nlayers && ok; L++) ok = h.len[L] == g.len[L] && !memcmp(h.layer[L], g.layer[L], h.len[L] * 32);
+	pearl_merkle_free(&h); pearl_merkle_free(&g);
+	free(data);
+	return ok;
+}
+
 static bool pearl_selftest(int thr_id, pearl_state &s)
 {
 	const char *fenv = getenv("PEARLHASH_SELFTEST_FAULT");
@@ -338,13 +421,14 @@ static bool pearl_selftest(int thr_id, pearl_state &s)
 	bool ran = false;
 	const bool diff = pearl_gpu_differential(thr_id, s, fault, &ran);
 	if (!ran) selftest_cuda_fault();
-	const bool passed = kat && diff;
+	const bool tree = !s.fused || (ran && pearl_tree_selftest(s, fault));
+	const bool passed = kat && diff && tree;
 	if (!passed)
-		gpulog(LOG_ERR, thr_id, "pearlhash self-test FAILED (host KATs %s, GPU differential %s)",
-			kat ? "ok" : "FAIL", diff ? "ok" : (ran ? "FAIL" : "not run"));
+		gpulog(LOG_ERR, thr_id, "pearlhash self-test FAILED (host KATs %s, GPU differential %s, GPU tree %s)",
+			kat ? "ok" : "FAIL", diff ? "ok" : (ran ? "FAIL" : "not run"), tree ? "ok" : "FAIL");
 	else
-		gpulog(LOG_INFO, thr_id, "pearlhash self-test passed (seed/noise/ticket KATs, %s kernel == oracle on %u tiles, negative control)",
-			s.imma ? "IMMA" : "dp4a", (256 / s.h) * (256 / s.w));
+		gpulog(LOG_INFO, thr_id, "pearlhash self-test passed (seed/noise/ticket KATs, %s kernel == oracle on %u tiles, negative control%s)",
+			s.fused ? "fused IMMA" : "dp4a", (256 / s.h) * (256 / s.w), s.fused ? ", GPU tree" : "");
 	return selftest_gate(thr_id, "pearlhash", passed);
 }
 
@@ -368,35 +452,54 @@ static void pearl_init(int thr_id)
 	if (opt_cudaschedule < 0) pearl_blocking_sync(thr_id);
 
 	s.imma = device_sm[dev] >= 800;
+	s.fused = s.imma;		/* the fused kernel replaces the panel GEMM on sm_80+ */
 	/* sm_6x spills the register window inside the loop; sm_75 spills the local one */
 	s.dp4a_local = device_sm[dev] < 700;
 	s.rows = s.imma ? PEARL_IMMA_ROWS : PEARL_DP4A_PATTERN;
 	s.cols = s.imma ? PEARL_IMMA_W_COLS : PEARL_DP4A_PATTERN;
 	s.h = 8;
 	s.w = s.imma ? 16 : 8;
-	s.cfg.k = PEARL_K;
+	s.cfg.k = s.fused ? PEARL_FK : PEARL_K;
 	s.cfg.r = PEARL_R;
+	s.m = PEARL_M; s.n = PEARL_N;
+	s.mc = s.fused ? PEARL_M + 1 : PEARL_M;
+	s.units = (uint32_t)(((uint64_t)s.m * s.n * s.cfg.k) >> 20);
+	s.nonce_leaf = (size_t)PEARL_M * s.cfg.k / BLAKE3_CHUNK_LEN;
 	pearl_pattern_from_list(s.rows, s.h, &s.cfg.rows);
 	pearl_pattern_from_list(s.cols, s.w, &s.cfg.cols);
 
-	CUDA_SAFE_CALL(cudaMalloc(&s.dU, (size_t)PEARL_M * PEARL_R));
-	CUDA_SAFE_CALL(cudaMalloc(&s.dP, (size_t)PEARL_K * 4));
-	CUDA_SAFE_CALL(cudaMalloc(&s.dApan, (size_t)PEARL_M * PEARL_K));
-	CUDA_SAFE_CALL(cudaMalloc(&s.dBpan, (size_t)PEARL_N * PEARL_K));
+	if (s.fused) {
+		const size_t leaves = (size_t)s.mc * s.cfg.k / BLAKE3_CHUNK_LEN;
+		CUDA_SAFE_CALL(cudaMalloc(&s.dUA, (size_t)s.m * PEARL_R));
+		CUDA_SAFE_CALL(cudaMalloc(&s.dUB, (size_t)s.n * PEARL_R));
+		CUDA_SAFE_CALL(cudaMalloc(&s.dPA, (size_t)s.cfg.k * 4));
+		CUDA_SAFE_CALL(cudaMalloc(&s.dPB, (size_t)s.cfg.k * 4));
+		CUDA_SAFE_CALL(cudaMalloc(&s.dO2, (size_t)(s.cfg.k + PEARL_FU_OPAD) * 8));
+		CUDA_SAFE_CALL(cudaMalloc(&s.dFill, BLAKE3_CHUNK_LEN));
+		CUDA_SAFE_CALL(cudaMemset(s.dFill, PEARL_FILL, BLAKE3_CHUNK_LEN));
+		CUDA_SAFE_CALL(cudaMalloc(&s.dTree0, leaves * 32));
+		CUDA_SAFE_CALL(cudaMalloc(&s.dTree1, (leaves + 1) / 2 * 32));
+		CUDA_SAFE_CALL(cudaFuncSetAttribute(pearl_tiles_fused_t<PEARL_FU_GM>, cudaFuncAttributeMaxDynamicSharedMemorySize, PEARL_FU_SMEM));
+	} else {
+		CUDA_SAFE_CALL(cudaMalloc(&s.dU, (size_t)PEARL_M * PEARL_R));
+		CUDA_SAFE_CALL(cudaMalloc(&s.dP, (size_t)PEARL_K * 4));
+		CUDA_SAFE_CALL(cudaMalloc(&s.dApan, (size_t)PEARL_M * PEARL_K));
+		CUDA_SAFE_CALL(cudaMalloc(&s.dBpan, (size_t)PEARL_N * PEARL_K));
+	}
 	CUDA_SAFE_CALL(cudaMalloc(&s.dHits, (1 + 2 * PEARL_MAX_HITS) * 4));
 	for (int b = 0; b < 2; b++) {
 		CUDA_SAFE_CALL(cudaHostAlloc(&s.slot[b].hits, PEARL_HITS_BYTES, cudaHostAllocMapped));
 		CUDA_SAFE_CALL(cudaHostGetDevicePointer(&s.slot[b].dhits, s.slot[b].hits, 0));
 		CUDA_SAFE_CALL(cudaEventCreateWithFlags(&s.slot[b].done, cudaEventDisableTiming | cudaEventBlockingSync));
 	}
-	s.A = (uint8_t *)calloc((size_t)PEARL_M * PEARL_K, 1);
-	s.Bt = (uint8_t *)calloc((size_t)PEARL_N * PEARL_K, 1);
+	s.A = s.fused ? NULL : (uint8_t *)calloc((size_t)PEARL_M * PEARL_K, 1);
+	s.Bt = s.fused ? NULL : (uint8_t *)calloc((size_t)PEARL_N * PEARL_K, 1);
 	s.have_job = false;
 
 	pearl_selftest(thr_id, s);
-	gpulog(LOG_INFO, thr_id, "pearlhash: %s kernel, m=n=%u k=%u rank %u, %u tickets of %u MAC per trial",
-		s.imma ? "IMMA (sm_80+)" : "dp4a", PEARL_M, PEARL_K, PEARL_R,
-		(PEARL_M / s.h) * (PEARL_N / s.w), s.h * s.w * PEARL_K);
+	gpulog(LOG_INFO, thr_id, "pearlhash: %s kernel, m=n=%u k=%u rank %u, %u tickets of %u MAC per trial%s",
+		s.fused ? "fused IMMA (sm_80+)" : "dp4a", s.m, s.cfg.k, PEARL_R,
+		(s.m / s.h) * (s.n / s.w), s.h * s.w * s.cfg.k, s.fused ? ", A = B = 64, nonce in an unmined row" : "");
 	init_done[thr_id] = true;
 }
 
@@ -407,9 +510,14 @@ static void pearl_new_job(int thr_id, const uint8_t *header)
 	memcpy(s.header, header, PEARL_HEADER_LEN);
 	pearl_job_key(header, &s.cfg, s.job_key);
 	if (s.have_job) { pearl_merkle_free(&s.ta); pearl_merkle_free(&s.tb); }
-	memset(s.Bt, 0, BLAKE3_CHUNK_LEN);
-	pearl_merkle_build(&s.ta, s.A, (size_t)PEARL_M * PEARL_K, s.job_key);
-	pearl_merkle_build(&s.tb, s.Bt, (size_t)PEARL_N * PEARL_K, s.job_key);
+	if (s.fused) {	/* constant matrices; the nonce leaf of A is set per trial */
+		pearl_tree_const_gpu(s, &s.ta, (size_t)s.mc * s.cfg.k / BLAKE3_CHUNK_LEN, s.job_key);
+		pearl_tree_const_gpu(s, &s.tb, (size_t)s.n * s.cfg.k / BLAKE3_CHUNK_LEN, s.job_key);
+	} else {
+		memset(s.Bt, 0, BLAKE3_CHUNK_LEN);
+		pearl_merkle_build(&s.ta, s.A, (size_t)PEARL_M * PEARL_K, s.job_key);
+		pearl_merkle_build(&s.tb, s.Bt, (size_t)PEARL_N * PEARL_K, s.job_key);
+	}
 	s.salt = ((uint64_t)rand() << 40) ^ ((uint64_t)rand() << 20) ^ (uint64_t)rand() ^ ((uint64_t)time(NULL) << 24)
 		^ ((uint64_t)thr_id << 58);
 	s.have_job = true;
@@ -443,9 +551,10 @@ extern "C" int scanhash_pearlhash(int thr_id, struct work *work, uint32_t max_no
 			return 0;
 		}
 	} else {
-		/* --benchmark: about one share per 16 trials, written into the header so a
-		 * dumped share is valid against its own nbits */
-		const uint32_t nbits = 0x1c008000;
+		/* --benchmark: about one share per 16 trials of 2^37 MAC, written into the header
+		 * so a dumped share is valid against its own nbits (fused: target / 32 against the
+		 * 32x ticket work, so still ~1 share per 16 trials) */
+		const uint32_t nbits = s.fused ? 0x1c000400 : 0x1c008000;
 		memcpy(header + 72, &nbits, 4);
 		pearl_bound(nbits, &s.cfg, bound);
 	}
@@ -470,6 +579,10 @@ extern "C" int scanhash_pearlhash(int thr_id, struct work *work, uint32_t max_no
 	pearl_slot *q = s.slot;
 	int newest = -1;
 	auto set_chunk = [&](int b) {
+		if (s.fused) {	/* the first chunk of A's unmined row PEARL_M */
+			pearl_merkle_update_leaf(&s.ta, s.nonce_leaf, q[b].chunk);
+			return;
+		}
 		memcpy(s.Bt, q[b].chunk, BLAKE3_CHUNK_LEN);
 		pearl_merkle_update_leaf(&s.tb, 0, q[b].chunk);
 	};
@@ -480,9 +593,9 @@ extern "C" int scanhash_pearlhash(int thr_id, struct work *work, uint32_t max_no
 		pearl_nonce_chunk(q[b].chunk, trial, s.salt, thr_id);
 		set_chunk(b);
 		newest = b;
-		pearl_seeds(s.job_key, s.ta.root, s.tb.root, PEARL_M, PEARL_N, q[b].bs, q[b].as);
+		pearl_seeds(s.job_key, s.ta.root, s.tb.root, s.mc, s.n, q[b].bs, q[b].as);
 		/* slot b's hit list is only rewritten by this trial, after its previous reader is done */
-		pearl_gpu_trial(s, PEARL_M, PEARL_N, q[b].as, q[b].bs, bound, q[b].chunk, q[b].dhits, NULL);
+		pearl_gpu_trial(s, s.m, s.n, s.cfg.k, q[b].as, q[b].bs, bound, q[b].chunk, q[b].dhits, NULL);
 		cudaEventRecord(q[b].done);
 		gettimeofday(&tb2, NULL);
 		s.t_host += (tb2.tv_sec - ta.tv_sec) + 1e-6 * (tb2.tv_usec - ta.tv_usec);
@@ -521,7 +634,12 @@ extern "C" int scanhash_pearlhash(int thr_id, struct work *work, uint32_t max_no
 			for (uint32_t i = 0; i < s.h; i++) tr[i] = ro + s.rows[i];
 			for (uint32_t i = 0; i < s.w; i++) tc[i] = co + s.cols[i];
 			pearl_buf b = { 0, 0, 0 };
-			pearl_plain_proof(&b, PEARL_M, PEARL_N, PEARL_K, PEARL_R, &s.ta, s.A, tr, s.h, &s.tb, s.Bt, tc, s.w);
+			if (s.fused) {	/* mined rows hold only PEARL_FILL chunks */
+				static uint8_t fill[BLAKE3_CHUNK_LEN];
+				if (!fill[0]) memset(fill, PEARL_FILL, sizeof(fill));
+				pearl_plain_proof_const(&b, s.mc, s.n, s.cfg.k, PEARL_R, &s.ta, fill, tr, s.h, &s.tb, fill, tc, s.w);
+			} else
+				pearl_plain_proof(&b, PEARL_M, PEARL_N, PEARL_K, PEARL_R, &s.ta, s.A, tr, s.h, &s.tb, s.Bt, tc, s.w);
 			/* PEARLHASH_DUMP=<dir>: write the first share as header76.hex + proof.bin */
 			static bool dumped[MAX_GPUS];
 			const char *dump = getenv("PEARLHASH_DUMP");
@@ -568,7 +686,7 @@ extern "C" int scanhash_pearlhash(int thr_id, struct work *work, uint32_t max_no
 		cur ^= 1;
 	}
 
-	*hashes_done = (unsigned long)trials * PEARL_TRIAL_UNITS;
+	*hashes_done = (unsigned long)trials * s.units;
 	return work->valid_nonces;
 }
 
@@ -578,6 +696,8 @@ extern "C" void free_pearlhash(int thr_id)
 	pearl_state &s = st[thr_id];
 	cudaSetDevice(device_map[thr_id]);
 	cudaFree(s.dU); cudaFree(s.dP); cudaFree(s.dApan); cudaFree(s.dBpan); cudaFree(s.dHits);
+	cudaFree(s.dUA); cudaFree(s.dUB); cudaFree(s.dPA); cudaFree(s.dPB); cudaFree(s.dO2);
+	cudaFree(s.dFill); cudaFree(s.dTree0); cudaFree(s.dTree1);
 	for (int b = 0; b < 2; b++) { cudaFreeHost(s.slot[b].hits); cudaEventDestroy(s.slot[b].done); }
 	free(s.A); free(s.Bt);
 	if (s.have_job) { pearl_merkle_free(&s.ta); pearl_merkle_free(&s.tb); }
