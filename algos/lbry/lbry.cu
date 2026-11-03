@@ -96,8 +96,7 @@ extern "C" int scanhash_lbry(int thr_id, struct work *work, uint32_t max_nonce, 
 	if (init[thr_id]) throughput = min(throughput, max_nonce - first_nonce);
 
 	if (opt_benchmark) {
-		// screened as a 64-bit compare over ptarget[6..7] (benchmark target is all
-		// zero), so ~1 candidate per 2.9e8 hashes — the CPU re-verify is a real gate
+		// the GPU screens ptarget[6..7] only: keep the CPU re-verify exercised
 		ptarget[7] = 0xf;
 	}
 
@@ -164,16 +163,22 @@ extern "C" int scanhash_lbry(int thr_id, struct work *work, uint32_t max_nonce, 
 					lbry_hash(vhash, endiandata);
 					work->nonces[1] = swab32_if(resNonces[1], swap);
 
-					if (bn_hash_target_ratio(vhash, ptarget) > work->shareratio[0]) {
-						// best first
-						xchg(work->nonces[1], work->nonces[0]);
-						work->sharediff[1] = work->sharediff[0];
-						work->shareratio[1] = work->shareratio[0];
-						work_set_target_ratio(work, vhash);
-					} else {
-						bn_set_target_ratio(work, vhash, 1);
+					if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
+						if (bn_hash_target_ratio(vhash, ptarget) > work->shareratio[0]) {
+							// best first
+							xchg(work->nonces[1], work->nonces[0]);
+							work->sharediff[1] = work->sharediff[0];
+							work->shareratio[1] = work->shareratio[0];
+							work_set_target_ratio(work, vhash);
+						} else {
+							bn_set_target_ratio(work, vhash, 1);
+						}
+						work->valid_nonces++;
+					} else if (vhash[7] > Htarg) {
+						gpu_increment_reject(thr_id);
+						if (!opt_quiet)
+							gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", resNonces[1]);
 					}
-					work->valid_nonces++;
 				}
 
 				pdata[LBC_NONCE_OFT32] = max(work->nonces[0], work->nonces[1]); // next scan start

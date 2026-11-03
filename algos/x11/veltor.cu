@@ -1,15 +1,8 @@
 /**
- * Veltor algorithm — fixed 4-stage chain
+ * Veltor: skein(80) - shavite - shabal - streebog(final)
  *
- * skein(80) - shavite - shabal - streebog(final)
- *
- * Migrated to the shared x-family machinery (docs/coding-guideline.md §2/§3):
- * the stages call the bare device-launcher names through the cuda_x_stages.h
- * bridge (skein512 80-byte, sp shavite512, shabal512). No fusible run of >= 2
- * consecutive register-resident stages exists (shavite is a boundary, shabal a
- * run-of-1, streebog the terminal), so there is no fused kernel. The terminal
- * streebog uses the fused-compare launcher streebog_cpu_hash_64_final (streebog
- * + on-device target compare, 2 nonces via its atomicExch chain).
+ * Stages via cuda_x_stages.h; no fused kernel (no run of >= 2 register-resident
+ * stages). The last stage compares on the device and returns up to 2 nonces.
  */
 
 extern "C" {
@@ -140,14 +133,22 @@ extern "C" int scanhash_veltor(int thr_id, struct work* work, uint32_t max_nonce
 					uint32_t secNonce = work->nonces[1] = startNounce + h_resNonce[1];
 					be32enc(&endiandata[19], secNonce);
 					veltorhash(vhash, endiandata);
-					work->nonces[1] = secNonce;
-					if (bn_hash_target_ratio(vhash, ptarget) > work->shareratio[0]) {
-						work_set_target_ratio(work, vhash);
-						xchg(work->nonces[1], work->nonces[0]);
-					} else {
-						bn_set_target_ratio(work, vhash, work->valid_nonces);
+					if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
+						if (bn_hash_target_ratio(vhash, ptarget) > work->shareratio[0]) {
+							// best first
+							work->sharediff[1] = work->sharediff[0];
+							work->shareratio[1] = work->shareratio[0];
+							xchg(work->nonces[1], work->nonces[0]);
+							work_set_target_ratio(work, vhash);
+						} else {
+							bn_set_target_ratio(work, vhash, 1);
+						}
+						work->valid_nonces++;
+					} else if (vhash[7] > Htarg) {
+						gpu_increment_reject(thr_id);
+						if (!opt_quiet)
+							gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", secNonce);
 					}
-					work->valid_nonces++;
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				} else {
 					pdata[19] = work->nonces[0] + 1; // cursor

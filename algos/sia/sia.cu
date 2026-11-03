@@ -254,7 +254,10 @@ int scanhash_sia(int thr_id, struct work *work, uint32_t max_nonce, unsigned lon
 				if (swab32(hash[0]) <= Htarg) {
 					swab256(vhashcpu, hash);
 					if (fulltest(vhashcpu, ptarget)) {
-						if (bn_hash_target_ratio(vhashcpu, ptarget) > work->shareratio[0]) {
+						if (!work->valid_nonces) { /* first failed: this one goes to slot 0 */
+							work->nonces[0] = work->nonces[1];
+							work_set_target_ratio(work, vhashcpu);
+						} else if (bn_hash_target_ratio(vhashcpu, ptarget) > work->shareratio[0]) {
 							work->sharediff[1] = work->sharediff[0];
 							work->shareratio[1] = work->shareratio[0];
 							xchg(work->nonces[1], work->nonces[0]);
@@ -263,7 +266,7 @@ int scanhash_sia(int thr_id, struct work *work, uint32_t max_nonce, unsigned lon
 							bn_set_target_ratio(work, vhashcpu, 1);
 						}
 						work->valid_nonces++;
-						pdata[8] = work->nonces[1] + 1;
+						pdata[8] = max(work->nonces[0], work->nonces[1]) + 1;
 					}
 				} else {
 					gpu_increment_reject(thr_id);

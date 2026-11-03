@@ -131,13 +131,22 @@ extern "C" int scanhash_skunk(int thr_id, struct work* work, uint32_t max_nonce,
 					uint32_t secNonce = work->nonces[1] = startNounce + h_resNonce[1];
 					be32enc(&endiandata[19], secNonce);
 					skunk_hash(vhash, endiandata);
-					if (bn_hash_target_ratio(vhash, ptarget) > work->shareratio[0]) {
-						work_set_target_ratio(work, vhash);
-						xchg(work->nonces[1], work->nonces[0]);
-					} else {
-						bn_set_target_ratio(work, vhash, work->valid_nonces);
+					if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
+						if (bn_hash_target_ratio(vhash, ptarget) > work->shareratio[0]) {
+							// best first
+							work->sharediff[1] = work->sharediff[0];
+							work->shareratio[1] = work->shareratio[0];
+							xchg(work->nonces[1], work->nonces[0]);
+							work_set_target_ratio(work, vhash);
+						} else {
+							bn_set_target_ratio(work, vhash, 1);
+						}
+						work->valid_nonces++;
+					} else if (vhash[7] > Htarg) {
+						gpu_increment_reject(thr_id);
+						if (!opt_quiet)
+							gpulog(LOG_WARNING, thr_id, "result for %08x does not validate on CPU!", secNonce);
 					}
-					work->valid_nonces++;
 					pdata[19] = max(work->nonces[0], work->nonces[1]) + 1;
 				} else {
 					pdata[19] = work->nonces[0] + 1; // cursor
