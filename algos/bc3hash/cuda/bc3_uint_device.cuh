@@ -247,6 +247,152 @@ __device__ __forceinline__ bc3u<N> bc3_mod_normalize(const bc3u<N>& a)
 #define BC3_ADDC_CC(d, a)      asm volatile("addc.cc.u32 %0, %0, %1;" : "+r"(d) : "r"(a))
 #define BC3_ADDC(d, a)         asm volatile("addc.u32 %0, %0, %1;" : "+r"(d) : "r"(a))
 
+#ifndef BC3_MUL_EO
+/* Products with every lo/hi pair on an even word (k, k+1), so each pair can be
+ * one wide multiply-add: a_i * b_j goes to A0 when i+j is even (lo at word i+j),
+ * to A1 when odd (lo at word i+j-1, i.e. A1[k] is column k+1). Indices are
+ * compile-time; the bool arrays (folded away) mark written words, and a first
+ * write adds an immediate 0. */
+#define BC3_ACC(op, d, a, b)  asm volatile(op " %0, %1, %2, %0;" : "+r"(d) : "r"(a), "r"(b))
+#define BC3_MAC0(op, d, a, b) asm volatile(op " %0, %1, %2, 0;" : "=r"(d) : "r"(a), "r"(b))
+#define BC3_ACCI(op, d, x)    asm volatile(op " %0, %0, %1;" : "+r"(d) : "r"(x))
+#define BC3_A3(op, d, x, y)   asm volatile(op " %0, %1, %2;" : "=r"(d) : "r"(x), "r"(y))
+#define BC3_A2I(op, d, x)     asm volatile(op " %0, %1, 0;" : "=r"(d) : "r"(x))
+#define BC3_A0I(op, d)        asm volatile(op " %0, 0, 0;" : "=r"(d))
+
+/* d (+)= lo or hi of a*b, with carry in CI and carry out CO */
+template <bool HI, bool CI, bool CO>
+__device__ __forceinline__ void bc3_mac(uint32_t& d, bool& def, uint32_t a, uint32_t b)
+{
+	if (def) {
+		if (!HI && !CI && CO) BC3_ACC("mad.lo.cc.u32", d, a, b);
+		if (!HI && CI && CO)  BC3_ACC("madc.lo.cc.u32", d, a, b);
+		if (!HI && CI && !CO) BC3_ACC("madc.lo.u32", d, a, b);
+		if (HI && CI && CO)   BC3_ACC("madc.hi.cc.u32", d, a, b);
+		if (HI && CI && !CO)  BC3_ACC("madc.hi.u32", d, a, b);
+	} else {
+		if (!HI && !CI && CO) BC3_MAC0("mad.lo.cc.u32", d, a, b);
+		if (!HI && CI && CO)  BC3_MAC0("madc.lo.cc.u32", d, a, b);
+		if (!HI && CI && !CO) BC3_MAC0("madc.lo.u32", d, a, b);
+		if (HI && CI && CO)   BC3_MAC0("madc.hi.cc.u32", d, a, b);
+		if (HI && CI && !CO)  BC3_MAC0("madc.hi.u32", d, a, b);
+	}
+	def = true;
+}
+
+/* a_i * b_j for j = J0, J0+2, .. < N, lo at word I+j-S, hi at the next; the
+ * chain's carry goes to the word after the last hi, if that is below LIM */
+template <int N, int I, int J0, int S, int LIM>
+__device__ __forceinline__ void bc3_mul_chain(uint32_t (&A)[2 * N], bool (&D)[2 * N], uint32_t ai, const uint32_t* b)
+{
+	if (J0 >= N) return;
+	constexpr int JL = J0 + ((N - 1 - J0) & ~1); /* last j */
+	constexpr int TOP = I + JL - S + 2;
+	constexpr bool top = TOP < LIM;
+#pragma unroll
+	for (int j = J0; j < N; j += 2) {
+		const int k = I + j - S;
+		if (j == J0) bc3_mac<false, false, true>(A[k], D[k], ai, b[j]);
+		else bc3_mac<false, true, true>(A[k], D[k], ai, b[j]);
+		if (j == JL && !top) bc3_mac<true, true, false>(A[k + 1], D[k + 1], ai, b[j]);
+		else bc3_mac<true, true, true>(A[k + 1], D[k + 1], ai, b[j]);
+	}
+	if (top) {
+		constexpr int T = TOP < LIM ? TOP : 0;
+		if (D[T]) BC3_ACCI("addc.u32", A[T], 0u);
+		else BC3_A0I("addc.u32", A[T]);
+		D[T] = true;
+	}
+}
+
+/* rows I..IE-1 of a*b; SQ: the cross terms only (j > i) */
+template <int N, int I, int IE, bool SQ>
+struct bc3_mul_rows {
+	static __device__ __forceinline__ void run(uint32_t (&A0)[2 * N], bool (&D0)[2 * N], uint32_t (&A1)[2 * N],
+	                                           bool (&D1)[2 * N], const uint32_t* a, const uint32_t* b)
+	{
+		constexpr int jmin = SQ ? I + 1 : 0;
+		constexpr int je = jmin + ((I + jmin) & 1), jo = jmin + (((I + jmin) & 1) ^ 1);
+		bc3_mul_chain<N, I, je, 0, 2 * N>(A0, D0, a[I], b);
+		bc3_mul_chain<N, I, jo, 1, 2 * N - 1>(A1, D1, a[I], b);
+		bc3_mul_rows<N, I + 1, IE, SQ>::run(A0, D0, A1, D1, a, b);
+	}
+};
+template <int N, int IE, bool SQ>
+struct bc3_mul_rows<N, IE, IE, SQ> {
+	static __device__ __forceinline__ void run(uint32_t (&)[2 * N], bool (&)[2 * N], uint32_t (&)[2 * N],
+	                                           bool (&)[2 * N], const uint32_t*, const uint32_t*) {}
+};
+
+/* t[0..K) = A0 + A1 * 2^32, words not yet written counting as zero */
+template <int N, int K>
+__device__ __forceinline__ void bc3_mul_join(uint32_t* t, const uint32_t (&E)[2 * N], const bool (&DE)[2 * N],
+                                             const uint32_t (&O)[2 * N], const bool (&DO)[2 * N])
+{
+	t[0] = DE[0] ? E[0] : 0u;
+	bool cy = false; /* a carry is pending */
+#pragma unroll
+	for (int k = 1; k < K; k++) {
+		const bool e = DE[k], o = DO[k - 1], last = k == K - 1;
+		if (!cy) {
+			if (e && o) {
+				if (last) t[k] = E[k] + O[k - 1];
+				else BC3_A3("add.cc.u32", t[k], E[k], O[k - 1]);
+				cy = !last;
+			} else t[k] = e ? E[k] : o ? O[k - 1] : 0u;
+		} else if (e && o) {
+			if (last) BC3_A3("addc.u32", t[k], E[k], O[k - 1]);
+			else BC3_A3("addc.cc.u32", t[k], E[k], O[k - 1]);
+		} else if (e || o) {
+			const uint32_t z = e ? E[k] : O[k - 1];
+			if (last) BC3_A2I("addc.u32", t[k], z);
+			else BC3_A2I("addc.cc.u32", t[k], z);
+		} else {
+			if (last) BC3_A0I("addc.u32", t[k]);
+			else BC3_A0I("addc.cc.u32", t[k]);
+		}
+	}
+}
+
+template <int N>
+__device__ __forceinline__ void bc3_mul_full(uint32_t (&t)[2 * N], const uint32_t* a, const uint32_t* b)
+{
+	uint32_t A0[2 * N], A1[2 * N];
+	bool D0[2 * N], D1[2 * N];
+#pragma unroll
+	for (int k = 0; k < 2 * N; k++) D0[k] = D1[k] = false;
+	bc3_mul_rows<N, 0, N, false>::run(A0, D0, A1, D1, a, b);
+	bc3_mul_join<N, 2 * N>(t, A0, D0, A1, D1);
+}
+
+/* a^2: the cross terms a_i a_j (j > i) once, doubled, plus the squares a_i^2. */
+template <int N>
+__device__ __forceinline__ void bc3_sqr_full(uint32_t (&t)[2 * N], const uint32_t* a)
+{
+	uint32_t A0[2 * N], A1[2 * N], x[2 * N];
+	bool D0[2 * N], D1[2 * N];
+#pragma unroll
+	for (int k = 0; k < 2 * N; k++) D0[k] = D1[k] = false;
+	bc3_mul_rows<N, 0, N - 1, true>::run(A0, D0, A1, D1, a, a);
+	bc3_mul_join<N, 2 * N>(x, A0, D0, A1, D1);
+	/* cross sum < 2^(64N-1), so doubling fits */
+	t[0] = x[0] << 1;
+#pragma unroll
+	for (int k = 1; k < 2 * N; k++) t[k] = __funnelshift_l(x[k - 1], x[k], 1);
+	bool d = true;
+	bc3_mac<false, false, true>(t[0], d, a[0], a[0]);
+	bc3_mac<true, true, true>(t[1], d, a[0], a[0]);
+#pragma unroll
+	for (int i = 1; i < N - 1; i++) {
+		bc3_mac<false, true, true>(t[2 * i], d, a[i], a[i]);
+		bc3_mac<true, true, true>(t[2 * i + 1], d, a[i], a[i]);
+	}
+	bc3_mac<false, true, true>(t[2 * N - 2], d, a[N - 1], a[N - 1]);
+	bc3_mac<true, true, false>(t[2 * N - 1], d, a[N - 1], a[N - 1]);
+}
+
+#else /* BC3_MUL_EO: the previous even/odd-column products */
+
 /* Row i of a product into the two column accumulators: E takes a_i * b_j for
  * even j (lo at column i+j, hi at i+j+1, so the row is one contiguous chain),
  * O the odd j one column down. j starts at j0 (> i for the squaring's cross
@@ -333,9 +479,12 @@ __device__ __forceinline__ void bc3_sqr_full(uint32_t (&t)[2 * N], const uint32_
 	BC3_MADCLO_CC(t[2 * N - 2], a[N - 1], a[N - 1]);
 	BC3_MADCHI(t[2 * N - 1], a[N - 1], a[N - 1]);
 }
+#endif /* BC3_MUL_EO */
 
 /* Mod::reduce of t mod 2^(32N) - C, C < 2^16, to N words but NOT canonical:
  * r < 2^(32N), r == t (mod m). r = lo + hi*C (folded twice). */
+#if defined(BC3_MUL_EO) || (defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700)
+/* one lo chain and one hi chain (smaller on sm_6x) */
 template <int N, uint32_t C>
 __device__ __forceinline__ bc3u<N> bc3_reduce_lazy(const uint32_t (&t)[2 * N])
 {
@@ -373,6 +522,40 @@ __device__ __forceinline__ bc3u<N> bc3_reduce_lazy(const uint32_t (&t)[2 * N])
 	}
 	return r;
 }
+#else
+/* q = lo + hi*C < 2^(32N+17) with A0 seeded as lo (A1's part < 2^(32N+16), so
+ * it never carries past column N); r = q mod 2^(32N) + q[N]*C. A wrap leaves
+ * r < 2^33, so + C stays within r0, r1. */
+template <int N, uint32_t C>
+__device__ __forceinline__ bc3u<N> bc3_reduce_lazy(const uint32_t (&t)[2 * N])
+{
+	uint32_t A0[2 * N], A1[2 * N], q[N + 1];
+	bool D0[2 * N], D1[2 * N];
+#pragma unroll
+	for (int k = 0; k < 2 * N; k++) {
+		D0[k] = k < N;
+		D1[k] = false;
+		A0[k] = k < N ? t[k] : 0u;
+		A1[k] = 0u;
+	}
+	bc3_mul_chain<N, 0, 0, 0, N + 1>(A0, D0, C, t + N);
+	bc3_mul_chain<N, 0, 1, 1, N>(A1, D1, C, t + N);
+	bc3_mul_join<N, N + 1>(q, A0, D0, A1, D1);
+	bc3u<N> r;
+#pragma unroll
+	for (int k = 0; k < N; k++) r.w[k] = q[k];
+	BC3_ACC("mad.lo.cc.u32", r.w[0], q[N], C);
+	BC3_ACC("madc.hi.cc.u32", r.w[1], q[N], C);
+#pragma unroll
+	for (int k = 2; k < N; k++) BC3_A2I("addc.cc.u32", r.w[k], r.w[k]);
+	uint32_t c;
+	BC3_A0I("addc.u32", c);
+	const uint32_t m = 0u - c;
+	BC3_ACCI("add.cc.u32", r.w[0], m & C);
+	BC3_A2I("addc.u32", r.w[1], r.w[1]);
+	return r;
+}
+#endif
 
 /* Lazy products: any inputs < 2^(32N), any output < 2^(32N) congruent mod m.
  * A chain of them is made canonical once, by bc3_mod_normalize, at its end. */

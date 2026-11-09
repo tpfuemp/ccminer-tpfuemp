@@ -46,6 +46,47 @@ __device__ __forceinline__ uint32_t bc3_fp_subc(bc3u256& r, uint32_t m)
 }
 
 /* t (16 words) mod p, to 8 words, not canonical. t = lo + hi*977 + hi*2^32. */
+#ifndef BC3_MUL_EO
+/* First fold with A0 seeded as lo and A1 as hi (= hi*2^32), plus the hi*977
+ * row: q < 2^290, w = q >> 256 < 2^34. Second fold + w*(2^32 + 977) < 2^67; a
+ * wrap leaves r < 2^67, so + C stays within r0..r2. */
+__device__ __forceinline__ bc3u256 bc3_fp_reduce(const uint32_t (&t)[16])
+{
+	uint32_t A0[16], A1[16], q[10];
+	bool D0[16], D1[16];
+#pragma unroll
+	for (int k = 0; k < 16; k++) {
+		D0[k] = D1[k] = k < 8;
+		A0[k] = k < 8 ? t[k] : 0u;
+		A1[k] = k < 8 ? t[8 + k] : 0u;
+	}
+	bc3_mul_chain<8, 0, 0, 0, 9>(A0, D0, BC3_SECP_C0, t + 8);
+	bc3_mul_chain<8, 0, 1, 1, 9>(A1, D1, BC3_SECP_C0, t + 8);
+	bc3_mul_join<8, 10>(q, A0, D0, A1, D1);
+	/* column 1: hi(w0*977) + w1*977 + w0 (33 bits: v1, carry into v2) */
+	const uint32_t w0 = q[8], w1 = q[9];
+	uint32_t s1, v1, v2;
+	BC3_MAC0("mad.lo.u32", s1, w1, BC3_SECP_C0);
+	BC3_ACC("mad.hi.u32", s1, w0, BC3_SECP_C0);
+	BC3_A3("add.cc.u32", v1, s1, w0);
+	BC3_A2I("addc.u32", v2, w1);
+	bc3u256 r;
+#pragma unroll
+	for (int k = 0; k < 8; k++) r.w[k] = q[k];
+	BC3_ACC("mad.lo.cc.u32", r.w[0], w0, BC3_SECP_C0);
+	BC3_ACCI("addc.cc.u32", r.w[1], v1);
+	BC3_ACCI("addc.cc.u32", r.w[2], v2);
+#pragma unroll
+	for (int k = 3; k < 8; k++) BC3_A2I("addc.cc.u32", r.w[k], r.w[k]);
+	uint32_t c;
+	BC3_A0I("addc.u32", c);
+	const uint32_t m = 0u - c;
+	BC3_ACCI("add.cc.u32", r.w[0], m & BC3_SECP_C0);
+	BC3_ACCI("addc.cc.u32", r.w[1], m & 1u);
+	BC3_A2I("addc.u32", r.w[2], r.w[2]);
+	return r;
+}
+#else
 __device__ __forceinline__ bc3u256 bc3_fp_reduce(const uint32_t (&t)[16])
 {
 	bc3u256 r;
@@ -73,6 +114,7 @@ __device__ __forceinline__ bc3u256 bc3_fp_reduce(const uint32_t (&t)[16])
 	bc3_fp_addc(r, 0u - (uint32_t)(c >> 32));
 	return r;
 }
+#endif
 
 __device__ __forceinline__ bc3u256 bc3_fp_mul(const bc3u256& a, const bc3u256& b)
 {

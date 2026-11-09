@@ -68,7 +68,8 @@ One thread per nonce, with the state in global memory between kernels (SoA):
 |---|---|
 | `bc3_k_front_ab` | the six front hashes, the schedule, phases A and B |
 | `bc3_k_c_exp1`, `bc3_k_c_exp2`, `bc3_k_c_ec` | phase C, three launches per round (16 rounds) |
-| `bc3_k_d_final` | phase D, the final SHA3-256, the target compare and report |
+| `bc3_k_d_final` | phase D, the final SHA3-256, the target compare and report (sm_70+) |
+| `bc3_k_d_round`, `bc3_k_final` | the same on sm_6x: phase D one launch per round (64), then the final hash; `BC3HASH_DSPLIT=0` or `1` forces either |
 
 The device code lives in `cuda/`:
 
@@ -92,7 +93,7 @@ Tables, per GPU:
 
 `bc3hash.cu` is built with a 255-register cap in both build systems; the
 project default is 128. The default batch is a whole number of GPU waves (for
-example 71 680 nonces on an RTX 3060, 64 512 on a GTX 1080 Ti; `-i` to tune).
+example 53 760 nonces on an RTX 3060, 64 512 on a GTX 1080 Ti; `-i` to tune).
 The host waits for a batch with blocking sync instead of spinning a CPU core
 per GPU (CPU 100% -> ~2% of a core on the 3060, same rate); `--cuda-schedule`
 overrides it.
@@ -142,3 +143,5 @@ Default intensity, CUDA 11.8. The pool runs were 10 minutes each on zpool
 | 2026-10-16 | RTX 3060 (sm_86), Windows | 595.95 | ~350 kH/s | pool: accepted 505/507, 2 stale |
 | 2026-10-16 | GTX 1080 Ti (sm_61), Linux | 580.173.02 | ~127 kH/s | `--benchmark`, current kernels |
 | 2026-10-16 | GTX 1080 Ti (sm_61), Linux | 580.173.02 | ~124 kH/s | pool: accepted 224/224 |
+| 2026-11-09 | RTX 3060 (sm_86), Windows | 595.95 | ~442 kH/s | pool: accepted 459/463, 4 invalid job id at job switches; register-aligned multiply pairs (1.24x in an interleaved A/B) |
+| 2026-11-09 | GTX 1080 Ti (sm_61), Linux | 580.173.02 | ~133 kH/s | pool: accepted 198/198; register-aligned multiply pairs (1.045x) and phase D per round (1.017x), interleaved A/Bs |

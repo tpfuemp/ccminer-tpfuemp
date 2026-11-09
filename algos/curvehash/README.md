@@ -123,12 +123,13 @@ The device stack is validated bottom-up against an independent oracle before
 being trusted: the field ops, the fixed-base `k·G` affine (X, Y) (against
 `secp256k1_ec_pubkey_create`), and the full hash are each checked bit-for-bit on
 the GPU, and each check is confirmed non-vacuous (a one-byte flip must fail it).
-See the init-time self-test above and the standalone harnesses.
+The init-time self-test above repeats the key checks on every start.
 
 ## Benchmarks
 
-RTX 3060 (sm_86), Windows / MSVC Release x64. All GPU rows live-validated on
-zpool `curve.na.mine.zpool.ca:4633` (accepted, 0 rejects).
+RTX 3060 (sm_86), Windows / MSVC Release x64, unless the row says GTX 1080 Ti
+(sm_61, Linux build). Pool rows were run on zpool `curve.na.mine.zpool.ca:4633`
+(accepted, 0 rejects).
 
 | date | rate | notes |
 |------|------|-------|
@@ -137,3 +138,10 @@ zpool `curve.na.mine.zpool.ca:4633` (accepted, 0 rejects).
 | 2026-07-18 | ~1.65 MH/s (GPU) | 8-bit window (512 KB table), half the point-adds; accepted 11/11. Warm 69 °C / 144 W / 11.4 kH/W. |
 | 2026-07-18 | ~1.85 MH/s (GPU) | occupancy tuning (`__launch_bounds__(512,1)`, tpb 512, throughput 1<<16); accepted 6/6, ~1846–1857 kH/s. Warm 80 °C / 158 W / 11.6 kH/W. |
 | 2026-08-11 | ~2.70 MH/s (GPU) | safegcd inversion replaces the `p-2` addition chain (~1.4x, measured interleaved in both orders); accepted 26/26, ~2662–2719 kH/s. 69 °C / 155 W / 17.3 kH/W. Launch shape re-checked against tpb 384/448/640 and kept. |
+| 2026-08-16 | ~4.0 MH/s (GPU) | 16-bit window (64 MB table), 1.6x; accepted 45/45, 25.0 kH/W. |
+| 2026-10-23 | ~5.0-5.3 MH/s live, 5.3-5.6 bench | 8 x 32-bit field on PTX carry chains (1.31x in an interleaved A/B); accepted 29/29. |
+| 2026-10-23 | GTX 1080 Ti: ~2.05 MH/s bench | same field change (1.60x in an interleaved A/B); accepted 28/28. |
+| 2026-10-24 | GTX 1080 Ti: ~2.91 MH/s bench, ~2.6 live | word-domain hash chain, 320 x 2 launch shape, 2^18 batch; accepted 66/66. |
+| 2026-10-24 | ~6.1 MH/s bench, ~6.0 live | word-domain hash chain, 128 x 4 launch shape (1.09x); accepted 43/43. |
+| 2026-11-09 | ~7.0 MH/s bench, ~7.0 live | field products with every multiply pair register-aligned (1.25x in an interleaved A/B); accepted 99/99. |
+| 2026-11-09 | GTX 1080 Ti: ~3.08 MH/s bench | same change (1.055x in an interleaved A/B); pool not run. |

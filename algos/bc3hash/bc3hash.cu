@@ -153,16 +153,11 @@ __global__ void __launch_bounds__(BC3_TPB, BC3_EC_MINB(W)) bc3_k_c_ec(bc3_tables
 	bc3_st_put(st, threads, 1, t, h2);
 }
 
-/* digests != NULL (self-test only): every digest is stored, as 32 bytes per nonce. */
-template <int RB>
-__global__ void bc3_k_d_final(bc3_tables tb, uint32_t threads, uint32_t startNonce, const uint32_t* st,
-                              const uint32_t* front, uint32_t* resNonce, uint8_t* digests)
+/* Final SHA3-256 over the front digests and the mix, target compare, report.
+ * digests != NULL (self-test only): every digest is stored, as 32 bytes per nonce. */
+__device__ __forceinline__ void bc3_final_tail(uint32_t t, uint32_t threads, uint32_t startNonce, const uint32_t* front,
+                                               uint32_t* resNonce, uint8_t* digests, const uint8_t* mix)
 {
-	const uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
-	if (t >= threads) return;
-	uint8_t mix[32];
-	bc3_mix_d<RB>(mix, bc3_st_get(st, threads, 0, t), bc3_st_get(st, threads, 1, t), tb);
-
 	bc3_front f;
 	uint8_t* keep = f.s384;
 	for (int i = 0; i < BC3_FRONT_WORDS; i++) {
@@ -194,6 +189,42 @@ __global__ void bc3_k_d_final(bc3_tables tb, uint32_t threads, uint32_t startNon
 	}
 }
 
+template <int RB>
+__global__ void bc3_k_d_final(bc3_tables tb, uint32_t threads, uint32_t startNonce, const uint32_t* st,
+                              const uint32_t* front, uint32_t* resNonce, uint8_t* digests)
+{
+	const uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
+	if (t >= threads) return;
+	uint8_t mix[32];
+	bc3_mix_d<RB>(mix, bc3_st_get(st, threads, 0, t), bc3_st_get(st, threads, 1, t), tb);
+	bc3_final_tail(t, threads, startNonce, front, resNonce, digests, mix);
+}
+
+/* Phase D as one launch per round (u1, u2 in slots 0, 1), then the final hash;
+ * used on sm_6x, sm_70+ runs k_d_final. */
+template <int RB>
+__global__ void __launch_bounds__(BC3_TPB, 10) bc3_k_d_round(bc3_tables tb, uint32_t threads, uint32_t* st, int i)
+{
+	const uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
+	if (t >= threads) return;
+	bc3u256 u1 = bc3_st_get(st, threads, 0, t), u2 = bc3_st_get(st, threads, 1, t), k1, k2;
+	bc3_mix_d_pow<RB>(k1, k2, u1, u2, tb);
+	bc3_mix_d_inv(u1, u2, k1, k2, i);
+	bc3_st_put(st, threads, 0, t, u1);
+	bc3_st_put(st, threads, 1, t, u2);
+}
+__global__ void bc3_k_final(uint32_t threads, uint32_t startNonce, const uint32_t* st, const uint32_t* front,
+                            uint32_t* resNonce, uint8_t* digests)
+{
+	const uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
+	if (t >= threads) return;
+	uint8_t mix[32];
+	bc3_mix_d_out(mix, bc3_st_get(st, threads, 0, t), bc3_st_get(st, threads, 1, t));
+	bc3_final_tail(t, threads, startNonce, front, resNonce, digests, mix);
+}
+
+static bool d_split[MAX_GPUS]; /* phase D per round (sm_6x); BC3HASH_DSPLIT=0|1 overrides */
+
 static bc3_tables bc3_device_tables(int thr_id)
 {
 	bc3_tables tb;
@@ -218,6 +249,15 @@ static void bc3_launch(int thr_id, uint32_t threads, uint32_t startNonce, uint8_
 	}
 	uint32_t* st = d_state[thr_id];
 	uint32_t* fr = d_front[thr_id];
+	if (d_split[thr_id]) {
+		for (int i = 0; i < 64; i++) switch (pow_rb[thr_id]) {
+			case 12: bc3_k_d_round<12> <<< grid, BC3_TPB >>> (tb, threads, st, i); break;
+			case 11: bc3_k_d_round<11> <<< grid, BC3_TPB >>> (tb, threads, st, i); break;
+			default: bc3_k_d_round<8> <<< grid, BC3_TPB >>> (tb, threads, st, i); break;
+			}
+		bc3_k_final <<< grid, BC3_TPB >>> (threads, startNonce, st, fr, d_res[thr_id], d_digests);
+		return;
+	}
 	switch (pow_rb[thr_id]) {
 	case 12: bc3_k_d_final<12> <<< grid, BC3_TPB >>> (tb, threads, startNonce, st, fr, d_res[thr_id], d_digests); break;
 	case 11: bc3_k_d_final<11> <<< grid, BC3_TPB >>> (tb, threads, startNonce, st, fr, d_res[thr_id], d_digests); break;
@@ -514,8 +554,12 @@ static void bc3hash_init(int thr_id, uint32_t throughput)
 	CUDA_SAFE_CALL(cudaMalloc(&d_front[thr_id], (size_t)BC3_FRONT_WORDS * 4 * throughput));
 	CUDA_SAFE_CALL(cudaMalloc(&d_res[thr_id], BC3_RES_WORDS * sizeof(uint32_t)));
 
-	gpulog(LOG_INFO, thr_id, "bc3hash: %d-bit curve windows (%u MB), %d-bit power rows, batch %u nonces",
-	       W, (unsigned)(4 * (tbytes >> 20)), pow_rb[thr_id], throughput);
+	{
+		const char* fd = getenv("BC3HASH_DSPLIT");
+		d_split[thr_id] = fd ? atoi(fd) != 0 : device_sm[device_map[thr_id]] < 700;
+	}
+	gpulog(LOG_INFO, thr_id, "bc3hash: %d-bit curve windows (%u MB), %d-bit power rows, phase D %s, batch %u nonces",
+	       W, (unsigned)(4 * (tbytes >> 20)), pow_rb[thr_id], d_split[thr_id] ? "per round" : "merged", throughput);
 
 	bc3_device_selftest(thr_id);
 	init_done[thr_id] = true;
