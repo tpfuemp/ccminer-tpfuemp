@@ -93,7 +93,7 @@ Tables, per GPU:
 
 `bc3hash.cu` is built with a 255-register cap in both build systems; the
 project default is 128. The default batch is a whole number of GPU waves (for
-example 53 760 nonces on an RTX 3060, 64 512 on a GTX 1080 Ti; `-i` to tune).
+example 89 600 nonces on an RTX 3060, 64 512 on a GTX 1080 Ti; `-i` to tune).
 The host waits for a batch with blocking sync instead of spinning a CPU core
 per GPU (CPU 100% -> ~2% of a core on the 3060, same rate); `--cuda-schedule`
 overrides it.
@@ -145,3 +145,4 @@ Default intensity, CUDA 11.8. The pool runs were 10 minutes each on zpool
 | 2026-10-16 | GTX 1080 Ti (sm_61), Linux | 580.173.02 | ~124 kH/s | pool: accepted 224/224 |
 | 2026-11-09 | RTX 3060 (sm_86), Windows | 595.95 | ~442 kH/s | pool: accepted 459/463, 4 invalid job id at job switches; register-aligned multiply pairs (1.24x in an interleaved A/B) |
 | 2026-11-09 | GTX 1080 Ti (sm_61), Linux | 580.173.02 | ~133 kH/s | pool: accepted 198/198; register-aligned multiply pairs (1.045x) and phase D per round (1.017x), interleaved A/Bs |
+| 2026-11-10 | RTX 3060 (sm_86), Windows | 595.95 | ~442 kH/s | pool: accepted 797/798, 1 invalid job id; launch bounds on `bc3_k_d_final` (1.025x in an interleaved A/B, batch 89 600) |

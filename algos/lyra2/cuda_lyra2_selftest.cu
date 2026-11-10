@@ -4,10 +4,9 @@
  * Covers blake2b_device.cuh and the v1 wander's split shared/register matrix through
  * the shipping launcher; the oracle is LYRA2() from Lyra2.c, which scanhash also uses.
  *
- * L2ST_THREADS must be a multiple of 8. The wander kernel launches block(4,8) = one
- * warp and its shuffles use a full-warp mask, so leaving quads inactive would name
- * non-participating threads (undefined behaviour). Every real intensity is a
- * multiple of 8, so the shipping path is safe.
+ * L2ST_THREADS is deliberately not a multiple of 8: the wander kernel runs 8 hashes
+ * per warp with full-warp shuffles, and the last batch of a scan range can have any
+ * size, so the partial warp (tail lanes kept in the shuffles) is tested here too.
  *
  * Fails closed via cuda/selftest_gate.cuh.
  */
@@ -28,7 +27,7 @@ extern "C" {
 extern void lyra2_cpu_init(int thr_id, uint32_t threads, uint64_t *d_matrix);
 extern void lyra2_cpu_hash_32(int thr_id, uint32_t threads, uint64_t *d_outputHash);
 
-#define L2ST_THREADS 8u   /* whole quads: see above */
+#define L2ST_THREADS 11u  /* one full warp of hashes plus a partial one: see above */
 #define L2ST_MATRIX  (sizeof(uint64_t) * 4 * 4)
 
 /* Runs the real launcher over L2ST_THREADS inputs and returns the digests.

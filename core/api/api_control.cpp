@@ -519,8 +519,13 @@ bool api_ctl_algo_accepts(int algo, const char *name)
  * network it would turn a bad parameter into a remote process kill. */
 static bool value_ok(const ctl_param_def_t *def, const char *v, char *err, size_t errlen)
 {
-	if (def->type == CTLP_STRING)
+	if (def->type == CTLP_STRING) {
+		if (!strcmp(def->name, "key") && strlen(v) > YESCRYPT_KEY_MAX) {
+			snprintf(err, errlen, "key: at most %d bytes", YESCRYPT_KEY_MAX);
+			return false;
+		}
 		return true;
+	}
 
 	const char *p = v;
 	int fields = 0;

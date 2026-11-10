@@ -405,6 +405,8 @@ extern void free_verthash(int thr_id);
 extern int scanhash_equihash(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 extern int scanhash_zr5(int thr_id, struct work *work, uint32_t max_nonce, unsigned long *hashes_done);
 
+/* longest yescrypt client key: key, 0x80 and the 64-bit length in one 128-byte block */
+#define YESCRYPT_KEY_MAX 119
 extern int scanhash_yescrypt(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done);
 extern int scanhash_yescryptr8(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done);
 extern int scanhash_yescryptr16(int thr_id, struct work* work, uint32_t max_nonce, unsigned long* hashes_done);

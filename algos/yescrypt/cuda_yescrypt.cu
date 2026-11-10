@@ -1110,7 +1110,7 @@ void yescrypt_setTarget(int thr_id, uint32_t pdata[20], char *key, uint32_t key_
 	cudaMemcpyToSymbol(cpu_h, h, 8 * sizeof(uint32_t), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(c_data, pdata, 20 * sizeof(uint32_t), 0, cudaMemcpyHostToDevice);
 
-	if (key)
+	if (key && key_len <= YESCRYPT_KEY_MAX)	/* longer keys are refused by the caller */
 	{
 		memcpy(data, key, key_len);
 		((uint8_t*)data)[key_len] = (uint8_t)0x80;

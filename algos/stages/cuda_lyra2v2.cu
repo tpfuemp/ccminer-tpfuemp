@@ -255,16 +255,19 @@ void lyra2v2_gpu_hash_32_2(uint32_t threads, uint32_t startNounce, uint64_t *out
 {
 	const uint32_t thread = blockDim.y * blockIdx.x + threadIdx.y;
 
-	if (thread < threads)
+	/* every lane runs the full-mask shuffles; a lane past the batch works on a
+	 * copy of the last hash and stores nothing */
+	const bool active = thread < threads;
+	const uint32_t tl = active ? thread : threads - 1;
 	{
 		uint2 state[4];
 		v2_regs_t R;
 		// the init/final kernels' 64-thread grid sets the DState stride
 		const uint32_t stride = (threads + 63) & ~63u;
-		state[0] = ((uint2*)DState)[(0 * stride + thread) * blockDim.x + threadIdx.x];
-		state[1] = ((uint2*)DState)[(1 * stride + thread) * blockDim.x + threadIdx.x];
-		state[2] = ((uint2*)DState)[(2 * stride + thread) * blockDim.x + threadIdx.x];
-		state[3] = ((uint2*)DState)[(3 * stride + thread) * blockDim.x + threadIdx.x];
+		state[0] = ((uint2*)DState)[(0 * stride + tl) * blockDim.x + threadIdx.x];
+		state[1] = ((uint2*)DState)[(1 * stride + tl) * blockDim.x + threadIdx.x];
+		state[2] = ((uint2*)DState)[(2 * stride + tl) * blockDim.x + threadIdx.x];
+		state[3] = ((uint2*)DState)[(3 * stride + tl) * blockDim.x + threadIdx.x];
 
 		v2_setup(state, R);
 		v2_wander(3, 0, state, R);
@@ -272,11 +275,13 @@ void lyra2v2_gpu_hash_32_2(uint32_t threads, uint32_t startNounce, uint64_t *out
 		v2_wander(1, 2, state, R);
 		v2_wander_last(state, R);
 
-		((uint2*)DState)[(0 * stride + thread) * blockDim.x + threadIdx.x] = state[0];
-		((uint2*)DState)[(1 * stride + thread) * blockDim.x + threadIdx.x] = state[1];
-		((uint2*)DState)[(2 * stride + thread) * blockDim.x + threadIdx.x] = state[2];
-		((uint2*)DState)[(3 * stride + thread) * blockDim.x + threadIdx.x] = state[3];
-	} //thread
+		if (active) {
+			((uint2*)DState)[(0 * stride + thread) * blockDim.x + threadIdx.x] = state[0];
+			((uint2*)DState)[(1 * stride + thread) * blockDim.x + threadIdx.x] = state[1];
+			((uint2*)DState)[(2 * stride + thread) * blockDim.x + threadIdx.x] = state[2];
+			((uint2*)DState)[(3 * stride + thread) * blockDim.x + threadIdx.x] = state[3];
+		}
+	}
 }
 
 template <bool SOA>

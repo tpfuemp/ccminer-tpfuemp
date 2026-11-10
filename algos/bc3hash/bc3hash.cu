@@ -73,13 +73,13 @@ __device__ __forceinline__ bc3u256 bc3_st_get(const uint32_t* st, uint32_t n, in
 	return v;
 }
 
-/* launch bounds on sm_70+ only */
+/* launch bounds on sm_70+ only (k_front_ab, k_d_final) */
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 700
-#define BC3_AB_BOUNDS __launch_bounds__(BC3_TPB, 10)
+#define BC3_SM70_BOUNDS __launch_bounds__(BC3_TPB, 10)
 #else
-#define BC3_AB_BOUNDS
+#define BC3_SM70_BOUNDS
 #endif
-__global__ void BC3_AB_BOUNDS bc3_k_front_ab(bc3_tables tb, uint32_t threads, uint32_t startNonce, uint32_t* st, uint32_t* front)
+__global__ void BC3_SM70_BOUNDS bc3_k_front_ab(bc3_tables tb, uint32_t threads, uint32_t startNonce, uint32_t* st, uint32_t* front)
 {
 	const uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
 	if (t >= threads) return;
@@ -190,7 +190,7 @@ __device__ __forceinline__ void bc3_final_tail(uint32_t t, uint32_t threads, uin
 }
 
 template <int RB>
-__global__ void bc3_k_d_final(bc3_tables tb, uint32_t threads, uint32_t startNonce, const uint32_t* st,
+__global__ void BC3_SM70_BOUNDS bc3_k_d_final(bc3_tables tb, uint32_t threads, uint32_t startNonce, const uint32_t* st,
                               const uint32_t* front, uint32_t* resNonce, uint8_t* digests)
 {
 	const uint32_t t = blockIdx.x * blockDim.x + threadIdx.x;
@@ -709,8 +709,10 @@ extern "C" int scanhash_bc3hash(int thr_id, struct work* work, uint32_t max_nonc
 
 	const uint32_t arm[3] = { UINT32_MAX, UINT32_MAX, 0 };
 	do {
+		/* never past max_nonce, so a resume at the batch end is above every candidate */
+		const uint32_t n = (uint32_t)min((uint64_t)throughput, (uint64_t)max_nonce - pdata[19]);
 		CUDA_SAFE_CALL(cudaMemcpy(d_res[thr_id], arm, sizeof(arm), cudaMemcpyHostToDevice));
-		bc3_launch(thr_id, throughput, pdata[19], NULL);
+		bc3_launch(thr_id, n, pdata[19], NULL);
 		uint32_t res[BC3_RES_WORDS];
 		CUDA_SAFE_CALL(cudaMemcpy(res, d_res[thr_id], sizeof(res), cudaMemcpyDeviceToHost));
 
@@ -747,18 +749,17 @@ extern "C" int scanhash_bc3hash(int thr_id, struct work* work, uint32_t max_nonc
 				}
 			}
 			if (work->valid_nonces) {
-				const uint64_t end = min((uint64_t)pdata[19] + throughput, (uint64_t)max_nonce);
-				pdata[19] = all ? (uint32_t)end : res[1] + 1;
+				pdata[19] = all ? pdata[19] + n : res[1] + 1;
 				*hashes_done = pdata[19] - first_nonce;
 				return work->valid_nonces;
 			}
 		}
 
-		if ((uint64_t)throughput + pdata[19] >= max_nonce) {
+		if ((uint64_t)n + pdata[19] >= max_nonce) {
 			pdata[19] = max_nonce;
 			break;
 		}
-		pdata[19] += throughput;
+		pdata[19] += n;
 	} while (!work_restart[thr_id].restart);
 
 	*hashes_done = pdata[19] - first_nonce;

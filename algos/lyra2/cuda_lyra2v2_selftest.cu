@@ -31,7 +31,7 @@ extern void lyra2v2_cpu_hash_32_soa(int thr_id, uint32_t threads, uint32_t start
 /* 64, not 8: _1/_3 index DState with stride blockDim.x * gridDim.x -- the padded
  * grid width, not `threads` -- so a smaller count is written past its allocation.
  * 64 makes threads == padded width. The miner is safe because throughput is always
- * a multiple of 64. Also a multiple of 8, as the wander kernel's mask requires. */
+ * a multiple of 64. */
 #define V2ST_THREADS 64u
 #define V2ST_MATRIX  (16 * sizeof(uint64_t) * 4 * 3)   /* as lyra2REv2.cu sizes it */
 

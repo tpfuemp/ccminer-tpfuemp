@@ -22,11 +22,8 @@ extern uint32_t yescrypt_param_p;
 
 void yescrypt_hash_base(void *state, const void *input, const uint32_t N, const uint32_t r, const uint32_t p, char *key, const size_t key_len)
 {
-	if (client_key_len == 0xff)
-	{
-		client_key = key;
-		client_key_len = key_len;
-	}
+	client_key = key;
+	client_key_len = key_len;
 	yescrypt_bsty((unsigned char*)input, 80, (unsigned char*)input, 80, N, r, p, (unsigned char *)state, 32);
 }
 
@@ -71,6 +68,12 @@ int scanhash_yescrypt_base(int thr_id, struct work* work, uint32_t max_nonce, un
 	uint32_t* pdata = work->data;
 	uint32_t* ptarget = work->target;
 	const uint32_t first_nonce = pdata[19];
+
+	if (key && key_len > YESCRYPT_KEY_MAX) {
+		gpulog(LOG_ERR, thr_id, "yescrypt key is %u bytes, at most %d are supported",
+		       (unsigned)key_len, YESCRYPT_KEY_MAX);
+		proper_exit(EXIT_CODE_USAGE);
+	}
 
 	int dev_id = device_map[thr_id];
 	cudaDeviceProp props;

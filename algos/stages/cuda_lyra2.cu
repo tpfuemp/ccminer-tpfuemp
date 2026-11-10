@@ -277,14 +277,17 @@ __launch_bounds__(TPB52, 1)
 void lyra2_gpu_hash_32_2(const uint32_t threads, uint64_t *g_hash)
 {
 	const uint32_t thread = L2_BDIMY * blockIdx.x + threadIdx.y;
-	if (thread < threads)
+	/* every lane runs the full-mask shuffles; a lane past the batch works on a
+	 * copy of the last hash and stores nothing */
+	const bool active = thread < threads;
+	const uint32_t tl = active ? thread : threads - 1;
 	{
 		uint2 state[4];
 		lyra2_regs_t R;
-		state[0] = __ldg(&DMatrix[(0 * threads + thread) * L2_BDIMX + threadIdx.x]);
-		state[1] = __ldg(&DMatrix[(1 * threads + thread) * L2_BDIMX + threadIdx.x]);
-		state[2] = __ldg(&DMatrix[(2 * threads + thread) * L2_BDIMX + threadIdx.x]);
-		state[3] = __ldg(&DMatrix[(3 * threads + thread) * L2_BDIMX + threadIdx.x]);
+		state[0] = __ldg(&DMatrix[(0 * threads + tl) * L2_BDIMX + threadIdx.x]);
+		state[1] = __ldg(&DMatrix[(1 * threads + tl) * L2_BDIMX + threadIdx.x]);
+		state[2] = __ldg(&DMatrix[(2 * threads + tl) * L2_BDIMX + threadIdx.x]);
+		state[3] = __ldg(&DMatrix[(3 * threads + tl) * L2_BDIMX + threadIdx.x]);
 
 		l2_duplex(state, R);
 
@@ -305,10 +308,12 @@ void lyra2_gpu_hash_32_2(const uint32_t threads, uint64_t *g_hash)
 		const uint32_t rowa = WarpShuffle(state[0].x, 0, 4) & 7;
 		l2_wander_last(rowa, state, R);
 
-		DMatrix[(0 * threads + thread) * L2_BDIMX + threadIdx.x] = state[0];
-		DMatrix[(1 * threads + thread) * L2_BDIMX + threadIdx.x] = state[1];
-		DMatrix[(2 * threads + thread) * L2_BDIMX + threadIdx.x] = state[2];
-		DMatrix[(3 * threads + thread) * L2_BDIMX + threadIdx.x] = state[3];
+		if (active) {
+			DMatrix[(0 * threads + thread) * L2_BDIMX + threadIdx.x] = state[0];
+			DMatrix[(1 * threads + thread) * L2_BDIMX + threadIdx.x] = state[1];
+			DMatrix[(2 * threads + thread) * L2_BDIMX + threadIdx.x] = state[2];
+			DMatrix[(3 * threads + thread) * L2_BDIMX + threadIdx.x] = state[3];
+		}
 	}
 }
 

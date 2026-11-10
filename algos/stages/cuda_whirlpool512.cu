@@ -176,7 +176,7 @@ static bool whirlcoin_selftest(int thr_id)
 		for (int j = 0; j < 3; j++)
 			if (v[j] <= tg) { if (e[0] == UINT32_MAX) e[0] = start + j; else if (e[1] == UINT32_MAX) e[1] = start + j; }
 		whirlpool512_cpu_hash_80(thr_id, 3, start, res, tg);
-		if (cudaGetLastError() != cudaSuccess)
+		if (cudaPeekAtLastError() != cudaSuccess)
 			return selftest_gate(thr_id, "whirlpool", selftest_cuda_fault());
 		bad += res[0] != e[0] || res[1] != e[1];
 	}

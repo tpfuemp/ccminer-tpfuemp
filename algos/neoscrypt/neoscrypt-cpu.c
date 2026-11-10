@@ -774,6 +774,7 @@ static void neoscrypt_fastkdf(const uchar *password, uint password_len, const uc
 		neoscrypt_copy(&output[a], &B[0], output_len - a);
 	}
 	// for (int i = 0; i<10; i++) { printf("cpu fastkdf %d %08x %08x\n", i, ((unsigned int*)output)[2 * i], ((unsigned int*)output)[2 * i + 1]); }
+	free(stack);
 }
 
 
@@ -985,5 +986,6 @@ void neoscrypt(unsigned char *output, const unsigned char *input, unsigned int p
 		neoscrypt_pbkdf2_sha256(input, 80, (uchar *) X, r * 2 * SCRYPT_BLOCK_SIZE, 1, output, 32);
 		break;
 	}
+	free(stack);
 }
 
