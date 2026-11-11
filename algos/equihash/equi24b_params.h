@@ -1,22 +1,19 @@
 // ---------------------------------------------------------------------------
-// Geometry for the DIGITBITS=24 solver (144/5 and 192/7): FEW LARGE BUCKETS.
+// Geometry for the DIGITBITS=24 solver (144/5 and 192/7): few large buckets.
 //
-// The scatter is the cost, and it is bound by the write frontier -- one open
-// 32 B sector per destination bucket. With 4096 buckets that is 128 KB and
-// stays resident in L2; a many-bucket layout puts it in the megabytes and
-// thrashes. Everything else follows from choosing 4096:
+// The scatter is bound by its write frontier, one open 32 B sector per
+// destination bucket; with 4096 buckets that frontier stays resident in L2.
 //
-//   * a bucket is NEVER fully staged in shared memory; it is processed in
-//     EQ24B_CHUNKS passes split by REST PREFIX, which is lossless because two
-//     items whose rest values differ in the high bits can never collide
-//   * collisions are found with a per-rest LINKED LIST in shared memory
-//     (atomicExch on a head array), not a counting sort, so no order array
-//   * layers are INDEPENDENT arrays, not a staggered heap, so nothing is
-//     overwritten and the reference may be 8 bytes
+//   * a bucket is never fully staged in shared memory; each round processes
+//     it in chunks split by REST PREFIX, which is lossless because items whose
+//     rest differs in the high bits cannot collide
+//   * collisions are found with a per-rest linked list in shared memory
+//     (atomicExch on a head array)
+//   * layers are independent arrays, so nothing is overwritten and the
+//     reference may be 8 bytes
 //
-// Only 8/16/32-byte strides are used: a scattered record costs one sector
-// transaction regardless of its size, and only those three divide a 32 B
-// sector without straddling.
+// Record strides are 8, 16 or 32 B only: a scattered record costs one sector
+// transaction, and any other size straddles sectors.
 // ---------------------------------------------------------------------------
 #ifndef EQUI24B_PARAMS_H
 #define EQUI24B_PARAMS_H
@@ -28,7 +25,6 @@
 #define EQ24B_NDIGITS      (EQ_WK + 1)
 #define EQ24B_DIGITBITS    (EQ_WN / EQ24B_NDIGITS)
 
-// The whole point of this architecture: few, large buckets.
 #define EQ24B_BUCKBITS     12u
 #define EQ24B_RESTBITS     (EQ24B_DIGITBITS - EQ24B_BUCKBITS)
 #define EQ24B_NBUCKETS     (1u << EQ24B_BUCKBITS)
@@ -36,44 +32,33 @@
 #define EQ24B_BUCKMASK     (EQ24B_NBUCKETS - 1u)
 #define EQ24B_RESTMASK     (EQ24B_NRESTS - 1u)
 
-// Capacity per bucket. Mean is 2^25 / 4096 = 8192 with sigma 90.5, so 8704 is
-// mean + 5.7 sigma, i.e. 1.06x over-provisioned. Large buckets need
-// proportionally less slack because relative spread falls as
-// 1/sqrt(n); that is half of why this arena is smaller despite bigger records.
+// Slots per bucket: mean 2^25 / 4096 = 8192, sigma 90.5, so 8704 is mean + 5.7 sigma.
 #define EQ24B_NSLOTS       8704u
 
-// Chunks per bucket, split by rest prefix. 3 fits 39.0 KB of shared and 4 fits
-// 31.5 KB; each chunk costs one extra streaming pass over the bucket, measured
-// at 1.70x (3 passes) and 1.53x (4) against the current single-pass round.
-#ifndef EQ24B_CHUNKS
-#define EQ24B_CHUNKS       3u
-#endif
-
-// ---- reference word: 8 bytes, because no layer overwrites another ----------
+// ---- reference word: 8 bytes (source bucket + Cantor code of two slots) ------
 #define EQ24B_CANTOR_MAX   (((eq_u64)EQ24B_NSLOTS * (EQ24B_NSLOTS - 1u)) / 2u)
 #define EQ24B_CANTORBITS   26u
 #define EQ24B_CANTORMASK   ((((eq_u64)1) << EQ24B_CANTORBITS) - 1u)
 #define EQ24B_REFBITS      (EQ24B_BUCKBITS + EQ24B_CANTORBITS)
 
-// ---- payload schedule ------------------------------------------------------
-// Bits still to cancel after round r, less the bucket index that position
-// already encodes.
+// ---- payload schedule and record layout ------------------------------------
+// Bits still to cancel after round r, less the bucket index the position encodes.
 #define EQ24B_HASHBITS(r)  (EQ_WN - (r) * EQ24B_DIGITBITS - EQ24B_BUCKBITS)
 #define EQ24B_PAYLOAD(r)   ((EQ24B_HASHBITS(r) + 7) / 8)
-#define EQ24B_RECBYTES(r)  (8u + EQ24B_PAYLOAD(r))
-
-// Only 8/16/32 avoid straddling a 32 B sector; anything between costs MORE
-// transactions than the 32 B record it replaces (measured: 20 B and 24 B both
-// touch 1.50 sectors per record against 1.00 for 32 B).
+// Record: [8 B ref][payload]. A layer whose payload fits 16 B only without the
+// ref's 26 unused high bits is PACKED instead: [ref bits 0-31][payload][ref bits
+// 32-37 in byte 15], so it takes one 16 B sector slot instead of a 32 B one.
+// Layer 0 holds the blake index (4 B) and keeps the plain layout.
+#define EQ24B_PACKED(r)    ((r) > 0u && 8u + EQ24B_PAYLOAD(r) > 16u && 4u + EQ24B_PAYLOAD(r) <= 15u)
+#define EQ24B_POFF_W(r)    (EQ24B_PACKED(r) ? 1u : 2u)          // payload word offset
+#define EQ24B_RECBYTES(r)  (EQ24B_PACKED(r) ? 16u : 8u + EQ24B_PAYLOAD(r))
+// Payload bytes valid in its last word (readers mask the rest: a packed layer
+// keeps ref bits there, and the zero-XOR test must not see them).
+#define EQ24B_PMASK(r)     ((EQ24B_PAYLOAD(r) & 3u) ? ((1u << (8u * (EQ24B_PAYLOAD(r) & 3u))) - 1u) : 0xffffffffu)
 #define EQ24B_STRIDE(r) \
 	(EQ24B_RECBYTES(r) <= 8u ? 8u : (EQ24B_RECBYTES(r) <= 16u ? 16u : 32u))
-
 #define EQ24B_LAYER_BYTES(r) \
 	((eq_u64)EQ24B_NBUCKETS * EQ24B_NSLOTS * EQ24B_STRIDE(r))
-
-// Bytes staged per slot while a chunk is resident: 8 B of payload (all the
-// collision test and the XOR need) plus a 2-byte list link.
-#define EQ24B_STAGE_BYTES  10u
 
 #ifdef __cplusplus
 #include <cstdint>
@@ -87,46 +72,66 @@ static_assert(EQ24B_CANTOR_MAX < (((eq_u64)1) << EQ24B_CANTORBITS),
 	"Cantor code overflows its field at this NSLOTS");
 static_assert(EQ24B_REFBITS <= 64,
 	"reference word must fit 64 bits");
-// The constraint that killed three earlier designs, now checked rather than argued.
 static_assert(EQ24B_REFBITS > 32,
 	"reference exceeds 32 bits by design -- layers must NOT be staggered");
+static_assert(EQ24B_REFBITS <= 40,
+	"a packed record keeps ref bits 32+ in one byte");
 #endif
 
-
-// ---- digitR staging -------------------------------------------------------
-// A bucket is never fully staged. Chunk c handles the rests whose PREFIX is c,
-// which is lossless: two items whose rest values differ in the high bits cannot
-// collide, so no pair spans a chunk.
+// ---- digitR / digitK staging ------------------------------------------------
+// Per staged item: the round's input payload, a 2-byte list link, and the
+// 2-byte ORIGIN SLOT the reference names (the staging index is an append order
+// and says nothing about it). Heads cover only the chunk's rest range and are
+// u32 because there is no 16-bit atomicExch. The heads division rounds UP, or
+// the top rests would select a chunk that is never visited.
 //
-// Per staged item: the layer r-1 payload, a 2-byte list link, and the 2-byte
-// ORIGIN SLOT -- the reference must name slots within the source bucket, and the
-// staging index is an atomic append order that says nothing about them.
-//
-// Heads cover only the chunk's rest range, not all 4096; sizing them per chunk
-// cut the total passes over a bucket from 18 to 15. The division must round
-// UP: with chunks*heads < EQ24B_NRESTS the top rests select a chunk index
-// that is never visited and their items are staged by no pass at all.
+// SCANNED rounds: one pass reads payload word 0 of every slot and files the slot
+// id by chunk in shared ([CHUNKS][SLOTS] u16, which is also the origin slot);
+// each chunk then fetches only its own records, so a round reads the bucket
+// once plus one record per item whatever CHUNKS is. Rounds staging 2 payload
+// words need only 3 chunks and keep plain passes, which cost the same there.
 #define EQ24B_STAGE_W(r)     (((EQ24B_PAYLOAD((r) - 1u) + 3u) / 4u))
-#define EQ24B_STAGE_B(r)     (EQ24B_STAGE_W(r) * 4u + 4u)
+#define EQ24B_SCAN(r)        (EQ24B_STAGE_W(r) >= 3u)
 
-// Heads are u32: CUDA has no 16-bit atomicExch, and the list head must be
-// swapped atomically. (The reference miner's head array is 4-byte too.)
-//
-// Chunks per round, derived from the 48 KB budget at mean + 5 sigma occupancy.
-// 144/5: 6,5,4,3   192/7: 6,6,6,5,4,3
+// Chunks per round: the fewest whose staging holds a full bucket's share
+// (8704 * heads / 4096) + 6 sigma within the budget. digitK uses
+// CHUNKS_R(EQ_WK - 1), which is never a scanned round.
 #if EQ_WN == 144
-#define EQ24B_CHUNKS_R(r)    ((r) == 1u ? 6u : ((r) == 2u ? 5u : ((r) == 3u ? 4u : 3u)))
+#define EQ24B_CHUNKS_R(r)    ((r) == 1u ? 9u : ((r) == 2u ? 8u : ((r) == 3u ? 6u : 3u)))
 #else
-#define EQ24B_CHUNKS_R(r)    ((r) <= 3u ? 6u : ((r) == 4u ? 5u : ((r) == 5u ? 4u : 3u)))
+#define EQ24B_CHUNKS_R(r)    ((r) == 1u ? 11u : ((r) <= 3u ? 9u : ((r) == 4u ? 8u : ((r) == 5u ? 6u : 3u))))
 #endif
-
 #define EQ24B_HEADS(r)       ((EQ24B_NRESTS + EQ24B_CHUNKS_R(r) - 1u) / EQ24B_CHUNKS_R(r))
-// Budget 48 KB MINUS 512 B: the block also carries a static counter, and a
-// dynamic request that lands on 49152 exactly makes the launch fail with
-// cudaErrorInvalidValue -- silently, if nobody checks (it did).
+
+// 48 KB minus 512 B for the static counters: a dynamic request of exactly
+// 49152 B fails the launch with cudaErrorInvalidValue.
 #define EQ24B_SHARED_BUDGET  (49152u - 512u)
-#define EQ24B_STAGE_SLOTS(r) ((EQ24B_SHARED_BUDGET - EQ24B_HEADS(r) * 4u) / EQ24B_STAGE_B(r))
 #define EQ24B_LIST_END       0xffffu
 #define EQ24B_PROOFSIZE      (1u << EQ_WK)
+// u16 entries per staged slot besides the link: CHUNKS on scanned rounds, else 1.
+#define EQ24B_LIST_U16(r)    (EQ24B_SCAN(r) ? EQ24B_CHUNKS_R(r) : 1u)
+#define EQ24B_STAGE_SLOTS(r) ((EQ24B_SHARED_BUDGET - EQ24B_HEADS(r) * 4u - (EQ24B_SCAN(r) ? 4u : 0u)) \
+                              / (EQ24B_STAGE_W(r) * 4u + 2u + 2u * EQ24B_LIST_U16(r)))
+// Word offset of the head array: payloads, then the u16 links and lists, padded
+// to a whole word.
+#define EQ24B_HEAD_OFF_W(r)  (EQ24B_STAGE_SLOTS(r) * EQ24B_STAGE_W(r) \
+                              + (EQ24B_STAGE_SLOTS(r) * (1u + EQ24B_LIST_U16(r)) + 1u) / 2u)
+#define EQ24B_SHARED_BYTES(r) ((EQ24B_HEAD_OFF_W(r) + EQ24B_HEADS(r)) * 4u)
+
+#ifdef __cplusplus
+// Per round: staging fits the budget, holds a full bucket across its chunks,
+// and its indices fit the u16 links (EQ24B_LIST_END is reserved).
+#define EQ24B_ROUND_OK(r) \
+	(EQ24B_SHARED_BYTES(r) <= EQ24B_SHARED_BUDGET \
+	 && EQ24B_STAGE_SLOTS(r) * EQ24B_CHUNKS_R(r) >= EQ24B_NSLOTS \
+	 && EQ24B_STAGE_SLOTS(r) < EQ24B_LIST_END)
+static_assert(EQ24B_ROUND_OK(1u) && EQ24B_ROUND_OK(2u) && EQ24B_ROUND_OK(3u) && EQ24B_ROUND_OK(4u),
+	"digitR/digitK staging out of budget or capacity");
+#if EQ_WK > 5
+static_assert(EQ24B_ROUND_OK(5u) && EQ24B_ROUND_OK(6u),
+	"digitR/digitK staging out of budget or capacity");
+#endif
+static_assert(!EQ24B_SCAN(EQ_WK - 1u), "digitK has no scan path");
+#endif
 
 #endif // EQUI24B_PARAMS_H

@@ -77,9 +77,8 @@ static char  eq_personal[16] = "ZcashPoW";
 // costs a local reject rather than a bad share.
 static void* equi24b_ctx[MAX_GPUS] = { NULL };
 
-// Throughput meter for the 144/5 path: scanhash only returns on a target hit, so
-// without this the rate is unobservable. sol/nonce (expect ~2) is reported too --
-// an overfull bucket drops valid pairs silently, which Sol/s alone cannot show.
+// Throughput meter for the 144/5 and 192/7 path, rate-limited to one line per 5 s.
+// sol/nonce (expect ~2) is reported too: dropped pairs lower it, Sol/s cannot show that.
 static uint32_t eq_m_sols[MAX_GPUS]   = { 0 };
 static uint32_t eq_m_nonces[MAX_GPUS] = { 0 };
 static uint32_t eq_m_bad[MAX_GPUS]    = { 0 };  // solutions that failed the host re-verify
@@ -176,19 +175,26 @@ static void cb_solution(int thr_id, const std::vector<uint32_t>& solutions, size
 static void cb_hashdone(int thr_id) {
 	if (!valid_sols[thr_id]) valid_sols[thr_id] = -1;
 }
+// Return to the miner loop at least once a second so it re-checks the time and
+// share limits (max_nonce cannot bound the scan: it comes from a rate counted in
+// solutions). The nonce carries forward through pdata.
+static bool eq_slice_done(const struct timeval *start)
+{
+	struct timeval now, d;
+	gettimeofday(&now, NULL);
+	timeval_subtract(&d, &now, (struct timeval *) start);
+	return d.tv_sec >= 1;
+}
+
 static bool cb_cancel(int thr_id) {
 	if (work_restart[thr_id].restart)
 		valid_sols[thr_id] = -1;
 	return work_restart[thr_id].restart;
 }
 
-// --- DIGITBITS=24 scan path (144/5 and 192/7) -------------------------------
-// FOR TECHNICAL STUDY ONLY: tromp's reference solver -- correct + live-validated,
-// but not performance-optimized and not comparable to dedicated Equihash miners.
-// Sized for the LARGEST proof in the family: 2^7 = 128 indices for 192/7,
-// against 32 for 144/5. The emit callback takes the size from the solver rather
-// than assuming it -- the previous hard-coded `proofsize == 32` would have
-// silently discarded every 192/7 solution.
+// --- DIGITBITS=24 scan path (144/5 and 192/7, equi24b solver) ---------------
+// Proof buffers are sized for the largest proof (128 indices, 192/7); the emit
+// callback takes the size from the solver.
 #define EQ_MAX_PROOF 128
 static uint32_t tromp_idx[MAX_GPUS][MAXREALSOLS][EQ_MAX_PROOF];
 static int      tromp_ns[MAX_GPUS];
@@ -219,9 +225,8 @@ static int scanhash_equihash_dig24(int thr_id, struct work *work, uint32_t max_n
 		ptarget[7] = 0xfffff;
 
 	if (!init[thr_id]) {
-		// equi24b is the only solver for the DIGITBITS=24 variants. The older
-		// There is no fallback solver: if the arena will not fit, this card
-		// cannot mine the variant, and saying so beats mining nothing quietly.
+		// equi24b is the only solver for these variants: a card that cannot hold
+		// the arena cannot mine them, and says so.
 		const size_t need = (eq_wk == 7) ? equi24b_192_arena_needed()
 		                                 : equi24b_144_arena_needed();
 		equi24b_ctx[thr_id] = (eq_wk == 7) ? equi24b_192_init() : equi24b_144_init();
@@ -256,28 +261,22 @@ static int scanhash_equihash_dig24(int thr_id, struct work *work, uint32_t max_n
 		eq_m_sols[thr_id] += (uint32_t) (nsol > 0 ? nsol : 0); // every solver solution, not just submitted ones
 		*hashes_done = soluce_count;
 
-		// The device buffer holds a bounded number of candidates; anything past
-		// that was counted and thrown away, in arrival order, so the discard is
-		// indiscriminate -- a real solution goes as readily as a trivial one.
-		// It depresses sol/nonce the same way an overfull bucket does and has no
-		// other symptom, so report it rather than assume it cannot happen.
-		//
-		// Sizing this cap to the expected solution count instead of the
-		// candidate count loses real solutions with every other gate green.
+		// Candidates past the device cap are discarded in arrival order (real
+		// solutions included), and the heap counters report dropped items.
 		unsigned clamped = 0;
 		{
 			unsigned dr[4];
 			if (eq_wk == 7) equi24b_192_drops(equi24b_ctx[thr_id], dr);
 			else            equi24b_144_drops(equi24b_ctx[thr_id], dr);
 			clamped = dr[3];
-			// dr[0..2] are the heap counters. A degenerate input can drive one
-			// destination bucket far past capacity and yield NOTHING, with these
-			// as the only symptom, so report them rather than assume they cannot
-			// fire.
-			if (dr[0] || dr[1] || dr[2])
+			// Scatter overflow is the expected bucket-fill tail (negligible loss);
+			// staging overflow means the shared-memory sizing is wrong.
+			if (dr[1] || dr[2])
 				gpulog(LOG_WARNING, thr_id, "equi24b heap overflow: scatter %u, "
 				       "round staging %u, final staging %u -- solutions are being LOST",
 				       dr[0], dr[1], dr[2]);
+			else if (dr[0])
+				gpulog(LOG_DEBUG, thr_id, "equi24b: %u item(s) over bucket capacity", dr[0]);
 		}
 		if (clamped) {
 			eq_m_clamped[thr_id] += clamped;
@@ -296,9 +295,8 @@ static int scanhash_equihash_dig24(int thr_id, struct work *work, uint32_t max_n
 				std::vector<unsigned char> minimal = eq_minimal_from_indices(idx, cbl); // solsz bytes
 
 				memcpy(full_data, endiandata, 140);
-				// compactSize: one byte below 253, else 0xfd + u16 LE. 144/5's
-				// solution is 100 B (one byte); 192/7's is 400 (three), so the
-				// old single-byte form would have written a corrupt prefix.
+				// compactSize: one byte below 253 (144/5: 100 B), else 0xfd + u16 LE
+				// (192/7: 400 B).
 				const int pfx = eq_solprefix();
 				if (pfx == 1) {
 					sol_data[0] = (uint8_t) solsz;
@@ -311,10 +309,7 @@ static int scanhash_equihash_dig24(int thr_id, struct work *work, uint32_t max_n
 				equi_hash(full_data, vhash, 140 + pfx + solsz);
 
 				if (vhash[7] <= Htarg && fulltest(vhash, ptarget)) {
-					// The re-verify MUST match the variant: the 144/5 verifier
-					// on a 192/7 proof would read 32 of 128 indices under the
-					// wrong parameters and reject every solution. This is the
-					// only independent check on the solver.
+					// host re-verify with the verifier of THIS variant
 					int rc = (eq_wk == 7)
 						? eq_verify_192((const char*) endiandata, eq_personal,
 						                tromp_idx[thr_id][s])
@@ -360,6 +355,7 @@ static int scanhash_equihash_dig24(int thr_id, struct work *work, uint32_t max_n
 			}
 		}
 
+		if (eq_slice_done(&tv_start)) break;
 	} while (!work_restart[thr_id].restart);
 
 out:
@@ -431,9 +427,8 @@ extern "C" int scanhash_equihash(int thr_id, struct work *work, uint32_t max_non
 
 			*hashes_done = soluce_count;
 
-			// Same defect as the 144/5 path: solutions past MAXREALSOLS were
-			// found and dropped in silence (the donor left its own detector
-			// commented out). Should never fire -- ~2 solutions against a cap of 9.
+			// solutions past MAXREALSOLS are dropped; report it (expected ~2 per
+			// solve against a cap of 9)
 			if (solvers[thr_id]->sols_overflow) {
 				eq_m_clamped[thr_id] += solvers[thr_id]->sols_overflow;
 				gpulog(LOG_WARNING, thr_id, "solution buffer overflow: %u solution(s) discarded "
@@ -487,6 +482,7 @@ extern "C" int scanhash_equihash(int thr_id, struct work *work, uint32_t max_non
 
 		endiandata[NONCE_OFT] += nonce_increment;
 
+		if (eq_slice_done(&tv_start)) break;
 	} while (!work_restart[thr_id].restart);
 
 out:
