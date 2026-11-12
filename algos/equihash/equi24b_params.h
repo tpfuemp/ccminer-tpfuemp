@@ -79,27 +79,19 @@ static_assert(EQ24B_REFBITS <= 40,
 #endif
 
 // ---- digitR / digitK staging ------------------------------------------------
-// Per staged item: the round's input payload, a 2-byte list link, and the
-// 2-byte ORIGIN SLOT the reference names (the staging index is an append order
-// and says nothing about it). Heads cover only the chunk's rest range and are
-// u32 because there is no 16-bit atomicExch. The heads division rounds UP, or
-// the top rests would select a chunk that is never visited.
-//
-// SCANNED rounds: one pass reads payload word 0 of every slot and files the slot
-// id by chunk in shared ([CHUNKS][SLOTS] u16, which is also the origin slot);
-// each chunk then fetches only its own records, so a round reads the bucket
-// once plus one record per item whatever CHUNKS is. Rounds staging 2 payload
-// words need only 3 chunks and keep plain passes, which cost the same there.
+// One block per (bucket, chunk). Per staged item: the round's input payload and
+// a 2-byte list link. The ORIGIN SLOT the reference names (the staging index is
+// an append order) replaces payload bytes 0-1, the rest, which is equal within
+// a list and never emitted. Heads cover only the chunk's rest range and are u32
+// because there is no 16-bit atomicExch. The heads division rounds UP, or the
+// top rests would select a chunk never visited.
 #define EQ24B_STAGE_W(r)     (((EQ24B_PAYLOAD((r) - 1u) + 3u) / 4u))
-#define EQ24B_SCAN(r)        (EQ24B_STAGE_W(r) >= 3u)
 
-// Chunks per round: the fewest whose staging holds a full bucket's share
-// (8704 * heads / 4096) + 6 sigma within the budget. digitK uses
-// CHUNKS_R(EQ_WK - 1), which is never a scanned round.
+// Chunks per round (digitK uses CHUNKS_R(EQ_WK - 1)).
 #if EQ_WN == 144
-#define EQ24B_CHUNKS_R(r)    ((r) == 1u ? 9u : ((r) == 2u ? 8u : ((r) == 3u ? 6u : 3u)))
+#define EQ24B_CHUNKS_R(r)    ((r) == 1u ? 5u : ((r) <= 3u ? 4u : 3u))
 #else
-#define EQ24B_CHUNKS_R(r)    ((r) == 1u ? 11u : ((r) <= 3u ? 9u : ((r) == 4u ? 8u : ((r) == 5u ? 6u : 3u))))
+#define EQ24B_CHUNKS_R(r)    ((r) == 1u ? 6u : ((r) <= 3u ? 5u : ((r) <= 5u ? 4u : 3u)))
 #endif
 #define EQ24B_HEADS(r)       ((EQ24B_NRESTS + EQ24B_CHUNKS_R(r) - 1u) / EQ24B_CHUNKS_R(r))
 
@@ -108,30 +100,28 @@ static_assert(EQ24B_REFBITS <= 40,
 #define EQ24B_SHARED_BUDGET  (49152u - 512u)
 #define EQ24B_LIST_END       0xffffu
 #define EQ24B_PROOFSIZE      (1u << EQ_WK)
-// u16 entries per staged slot besides the link: CHUNKS on scanned rounds, else 1.
-#define EQ24B_LIST_U16(r)    (EQ24B_SCAN(r) ? EQ24B_CHUNKS_R(r) : 1u)
-#define EQ24B_STAGE_SLOTS(r) ((EQ24B_SHARED_BUDGET - EQ24B_HEADS(r) * 4u - (EQ24B_SCAN(r) ? 4u : 0u)) \
-                              / (EQ24B_STAGE_W(r) * 4u + 2u + 2u * EQ24B_LIST_U16(r)))
-// Word offset of the head array: payloads, then the u16 links and lists, padded
-// to a whole word.
-#define EQ24B_HEAD_OFF_W(r)  (EQ24B_STAGE_SLOTS(r) * EQ24B_STAGE_W(r) \
-                              + (EQ24B_STAGE_SLOTS(r) * (1u + EQ24B_LIST_U16(r)) + 1u) / 2u)
+#define EQ24B_STAGE_SLOTS(r) ((EQ24B_SHARED_BUDGET - EQ24B_HEADS(r) * 4u - 4u) / (EQ24B_STAGE_W(r) * 4u + 2u))
+// Word offset of the head array: payloads, then the u16 links padded to a word.
+#define EQ24B_HEAD_OFF_W(r)  (EQ24B_STAGE_SLOTS(r) * EQ24B_STAGE_W(r) + (EQ24B_STAGE_SLOTS(r) + 1u) / 2u)
 #define EQ24B_SHARED_BYTES(r) ((EQ24B_HEAD_OFF_W(r) + EQ24B_HEADS(r)) * 4u)
 
 #ifdef __cplusplus
-// Per round: staging fits the budget, holds a full bucket across its chunks,
-// and its indices fit the u16 links (EQ24B_LIST_END is reserved).
+// Per round: staging fits the budget, one block holds a full bucket's share of
+// its chunk + 6 sigma (binomial), and its indices fit the u16 links
+// (EQ24B_LIST_END is reserved).
+#define EQ24B_SHARE(r)       (EQ24B_NSLOTS * EQ24B_HEADS(r) / EQ24B_NRESTS)
 #define EQ24B_ROUND_OK(r) \
 	(EQ24B_SHARED_BYTES(r) <= EQ24B_SHARED_BUDGET \
-	 && EQ24B_STAGE_SLOTS(r) * EQ24B_CHUNKS_R(r) >= EQ24B_NSLOTS \
+	 && EQ24B_STAGE_SLOTS(r) > EQ24B_SHARE(r) \
+	 && (EQ24B_STAGE_SLOTS(r) - EQ24B_SHARE(r)) * (EQ24B_STAGE_SLOTS(r) - EQ24B_SHARE(r)) >= 36u * EQ24B_SHARE(r) \
 	 && EQ24B_STAGE_SLOTS(r) < EQ24B_LIST_END)
 static_assert(EQ24B_ROUND_OK(1u) && EQ24B_ROUND_OK(2u) && EQ24B_ROUND_OK(3u) && EQ24B_ROUND_OK(4u),
 	"digitR/digitK staging out of budget or capacity");
+static_assert(EQ24B_NSLOTS <= 0x10000u, "the staged origin slot is 16 bits");
 #if EQ_WK > 5
 static_assert(EQ24B_ROUND_OK(5u) && EQ24B_ROUND_OK(6u),
 	"digitR/digitK staging out of budget or capacity");
 #endif
-static_assert(!EQ24B_SCAN(EQ_WK - 1u), "digitK has no scan path");
 #endif
 
 #endif // EQUI24B_PARAMS_H

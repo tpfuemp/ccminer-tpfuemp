@@ -45,8 +45,7 @@ namespace EQ24B_NS {
 #include "blake2b_tromp.cuh"   // ROR2/G/ROUND + blake2b_gpu_hash_regs
 
 // Warp-aggregated append: lanes hitting the same counter elect one leader that
-// does a single atomicAdd for the group. With 4096 buckets instead of 65536 the
-// same-destination hit rate is high enough that this matters.
+// does a single atomicAdd for the group.
 __device__ __forceinline__ u32 eq24b_append(u32 *ctr, u32 key, u32 lane)
 {
 #if __CUDA_ARCH__ >= 700
@@ -77,6 +76,25 @@ __device__ __forceinline__ u32 eq24b_append(u32 *ctr, u32 key, u32 lane)
 	if (lane == leader) base = atomicAdd(ctr, (u32)__popc(peers));
 	base = __shfl(base, leader);
 	return base + rank;
+#endif
+}
+
+// Slot in a random destination bucket: a warp's keys are nearly all distinct,
+// so on sm_6x (ballot loop above) a plain atomic is cheaper.
+#ifndef EQ24B_PLAIN_SCATTER
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
+#define EQ24B_PLAIN_SCATTER 1
+#else
+#define EQ24B_PLAIN_SCATTER 0
+#endif
+#endif
+__device__ __forceinline__ u32 eq24b_scatter_slot(u32 *ctr, u32 key, u32 lane)
+{
+#if EQ24B_PLAIN_SCATTER
+	(void)key; (void)lane;
+	return atomicAdd(ctr, 1u);
+#else
+	return eq24b_append(ctr, key, lane);
 #endif
 }
 
@@ -114,7 +132,7 @@ __global__ void digitH(const u64 *__restrict__ blake_h,
 			             | EQ24B_BYTE(hh, b + 2);
 			const u32 bucket = (d0 >> EQ24B_RESTBITS) & EQ24B_BUCKMASK;
 
-			const u32 slot = eq24b_append(&counts[bucket], bucket, threadIdx.x & 31);
+			const u32 slot = eq24b_scatter_slot(&counts[bucket], bucket, threadIdx.x & 31);
 			if (slot >= EQ24B_NSLOTS) {          // counted, never silent
 				atomicAdd(overflow, 1u);
 				continue;
@@ -206,8 +224,9 @@ __device__ __forceinline__ eq_u64 eq24b_get_ref(const u32 *rec, bool packed)
 //
 // A bucket is processed in EQ24B_CHUNKS_R(R) chunks split by rest PREFIX, which
 // is lossless because items whose rest differs in the high bits cannot collide.
-// On scanned rounds (EQ24B_SCAN) one scan files every slot by chunk first, so each
-// chunk fetches only its own records instead of re-reading the whole bucket.
+// Each chunk is its own block and a bucket's chunks have adjacent block ids, so
+// they run together: every one streams the whole bucket, which DRAM delivers
+// about once and L2 serves to the others.
 // Within a chunk, collisions are found by a per-rest singly-linked list built
 // with atomicExch -- each item stores the previous head, so walking from an
 // item's link visits exactly the items staged before it in its group and every
@@ -218,124 +237,94 @@ __global__ void digitR(const u32 *__restrict__ heapIn, u32 *__restrict__ heapOut
                        const u32 *__restrict__ cntIn, u32 *__restrict__ cntOut,
                        u32 *__restrict__ overflow)
 {
-	const u32 bucket = blockIdx.x;
+	const u32 CH   = EQ24B_CHUNKS_R(R);
+	const u32 bucket = blockIdx.x / CH, chunk = blockIdx.x % CH;
 	const u32 tid = threadIdx.x, lane = tid & 31u;
 	const u32 nin = min(cntIn[bucket], EQ24B_NSLOTS);
 
 	const u32 PW   = EQ24B_STAGE_W(R);          // payload words staged
 	const u32 SLOTS = EQ24B_STAGE_SLOTS(R);
 	const u32 HEADS = EQ24B_HEADS(R);
-	const u32 CH   = EQ24B_CHUNKS_R(R);
-	const bool SCAN = EQ24B_SCAN(R);            // compile-time per instantiation
 	const u32 PIN  = EQ24B_POFF_W(R - 1u);      // payload word offset, input / output
 	const u32 POUT = EQ24B_POFF_W(R);
 	const u32 INW  = EQ24B_STRIDE(R - 1u) / 4u;  // input record stride, words
 	const u32 OUTW = EQ24B_STRIDE(R) / 4u;
 
 	extern __shared__ u32 sh[];
-	u32 *s_pay  = sh;                              // [SLOTS][PW]
+	u32 *s_pay  = sh;                              // [SLOTS][PW], word 0 low 16 bits = origin slot
 	u16 *s_next = (u16 *)(sh + SLOTS * PW);        // [SLOTS]
-	u16 *s_slot = s_next + SLOTS;                  // SCAN: [CH][SLOTS] slot ids by chunk; else [SLOTS]
 	u32 *s_head = sh + EQ24B_HEAD_OFF_W(R);        // [HEADS], u32: no 16-bit atomicExch
 	__shared__ u32 s_n;
-	__shared__ u32 s_cnt[SCAN ? CH : 1u];
 
-	// ---- scan: read each slot's first payload word once, file the slot by chunk
-	if (SCAN) {
-		for (u32 i = tid; i < CH; i += blockDim.x) s_cnt[i] = 0u;
-		__syncthreads();
-		for (u32 slot = tid; slot < nin; slot += blockDim.x) {
-			const u32 p0 = heapIn[(size_t)(bucket * EQ24B_NSLOTS + slot) * INW + PIN];
-			const u32 rest = ((p0 & 0x0fu) << 8) | ((p0 >> 8) & 0xffu);
-			const u32 c = rest / HEADS;
-			const u32 i = eq24b_append(&s_cnt[c], c, lane);
-			if (i >= SLOTS) { atomicAdd(overflow + 1, 1u); continue; }
-			s_slot[c * SLOTS + i] = (u16)slot;
-		}
-		__syncthreads();
+	for (u32 i = tid; i < HEADS; i += blockDim.x) s_head[i] = EQ24B_LIST_END;
+	if (tid == 0) s_n = 0u;
+	__syncthreads();
+
+	// ---- pass A: stage the items whose rest prefix selects this chunk ----
+	for (u32 slot = tid; slot < nin; slot += blockDim.x) {
+		const u32 *rec = heapIn + (size_t)(bucket * EQ24B_NSLOTS + slot) * INW;
+		const u32 p0 = rec[PIN];                     // payload word 0
+		const u32 rest = ((p0 & 0x0fu) << 8) | ((p0 >> 8) & 0xffu);
+		if (rest / HEADS != chunk) continue;
+
+		const u32 s = eq24b_append(&s_n, chunk, lane);
+		if (s >= SLOTS) { if (lane == 0) atomicAdd(overflow + 1, 1u); continue; }
+
+		// payload bytes 0-1 hold the rest (equal within a list, never emitted):
+		// they carry the origin slot instead
+		s_pay[s * PW] = (p0 & 0xffff0000u) | slot;
+		for (u32 w = 1; w < PW; w++) s_pay[s * PW + w] = eq24b_pay<R - 1u, PW>(rec, w);
+		s_next[s] = (u16)atomicExch(&s_head[rest % HEADS], s);
 	}
+	__syncthreads();
 
-	for (u32 chunk = 0; chunk < CH; chunk++) {
-		for (u32 i = tid; i < HEADS; i += blockDim.x) s_head[i] = EQ24B_LIST_END;
-		if (!SCAN && tid == 0) s_n = 0u;
-		__syncthreads();
+	// ---- pass B: walk each item's list and emit its pairs ----------------
+	const u32 nst = min(s_n, SLOTS);
+	for (u32 s = tid; s < nst; s += blockDim.x) {
+		for (u32 t = s_next[s]; t != EQ24B_LIST_END; t = s_next[t]) {
+			u32 x[8];
+			for (u32 w = 0; w < PW; w++) x[w] = s_pay[s * PW + w] ^ s_pay[t * PW + w];
+			x[0] &= 0xffff0000u;                     // slots, not payload
+			// A pair whose payload cancels ENTIRELY agrees on every remaining bit,
+			// which only happens when the two subtrees share leaves. Dropping it
+			// is not an optimisation: such a child has rest 0, so every one of
+			// them lands in bucket 0 and pairs with the others, growing
+			// quadratically per round until it swamps the final round.
+			u32 nz = 0u;
+			for (u32 w = 0; w < PW; w++) nz |= x[w];
+			if (!nz) continue;
+			// bytes 0,1 of the xor are zero by construction (same rest)
+			const u32 b2 = (x[0] >> 16) & 0xffu, b3 = (x[0] >> 24) & 0xffu;
+			const u32 dst = ((b2 << 4) | (b3 >> 4)) & EQ24B_BUCKMASK;
 
-		// ---- pass A: stage the items whose rest prefix selects this chunk ----
-		if (SCAN) {
-			// fetch only this chunk's records; the staging index is the list index
-			const u32 nc = min(s_cnt[chunk], SLOTS);
-			for (u32 s = tid; s < nc; s += blockDim.x) {
-				const u32 *rec = heapIn + (size_t)(bucket * EQ24B_NSLOTS + s_slot[chunk * SLOTS + s]) * INW;
-				for (u32 w = 0; w < PW; w++) s_pay[s * PW + w] = eq24b_pay<R - 1u, PW>(rec, w);
-				const u32 p0 = s_pay[s * PW];
-				const u32 rest = ((p0 & 0x0fu) << 8) | ((p0 >> 8) & 0xffu);
-				s_next[s] = (u16)atomicExch(&s_head[rest % HEADS], s);
-			}
-		} else {
-			for (u32 slot = tid; slot < nin; slot += blockDim.x) {
-				const u32 *rec = heapIn + (size_t)(bucket * EQ24B_NSLOTS + slot) * INW;
-				const u32 p0 = rec[PIN];                     // payload word 0
-				const u32 rest = ((p0 & 0x0fu) << 8) | ((p0 >> 8) & 0xffu);
-				if (rest / HEADS != chunk) continue;
+			const u32 os = eq24b_scatter_slot(&cntOut[dst], dst, lane);
+			if (os >= EQ24B_NSLOTS) { atomicAdd(overflow, 1u); continue; }
 
-				const u32 s = eq24b_append(&s_n, chunk, lane);
-				if (s >= SLOTS) { if (lane == 0) atomicAdd(overflow + 1, 1u); continue; }
-
-				for (u32 w = 0; w < PW; w++) s_pay[s * PW + w] = eq24b_pay<R - 1u, PW>(rec, w);
-				s_slot[s] = (u16)slot;
-				s_next[s] = (u16)atomicExch(&s_head[rest % HEADS], s);
-			}
-		}
-		__syncthreads();
-
-		// ---- pass B: walk each item's list and emit its pairs ----------------
-		const u32 nst = SCAN ? min(s_cnt[chunk], SLOTS) : min(s_n, SLOTS);
-		const u16 *orig = SCAN ? s_slot + chunk * SLOTS : s_slot;
-		for (u32 s = tid; s < nst; s += blockDim.x) {
-			for (u32 t = s_next[s]; t != EQ24B_LIST_END; t = s_next[t]) {
-				u32 x[8];
-				for (u32 w = 0; w < PW; w++) x[w] = s_pay[s * PW + w] ^ s_pay[t * PW + w];
-				// A pair whose payload cancels ENTIRELY agrees on every remaining bit,
-				// which only happens when the two subtrees share leaves. Dropping it
-				// is not an optimisation: such a child has rest 0, so every one of
-				// them lands in bucket 0 and pairs with the others, growing
-				// quadratically per round until it swamps the final round.
-				u32 nz = 0u;
-				for (u32 w = 0; w < PW; w++) nz |= x[w];
-				if (!nz) continue;
-				// bytes 0,1 of the xor are zero by construction (same rest)
-				const u32 b2 = (x[0] >> 16) & 0xffu, b3 = (x[0] >> 24) & 0xffu;
-				const u32 dst = ((b2 << 4) | (b3 >> 4)) & EQ24B_BUCKMASK;
-
-				const u32 os = eq24b_append(&cntOut[dst], dst, lane);
-				if (os >= EQ24B_NSLOTS) { atomicAdd(overflow, 1u); continue; }
-
-				u32 *out = heapOut + (size_t)(dst * EQ24B_NSLOTS + os) * OUTW;
-				// reference: source bucket + Cantor of the two ORIGIN slots
-				const u32 a = max(orig[s], orig[t]), bb = min(orig[s], orig[t]);
-				const eq_u64 ref = ((eq_u64)bucket << EQ24B_CANTORBITS)
-				                 | (((eq_u64)a * (a - 1u)) / 2u + bb);
-				u32 o[8];
-				for (u32 w = 0; w < 8u; w++) o[w] = 0u;
-				// next payload starts at byte 3 of the xor
-				for (u32 w = 0; w * 4u < EQ24B_PAYLOAD(R) && w < 6u; w++) {
-					u32 v = 0u;
-					for (u32 j = 0; j < 4u; j++) {
-						const u32 bi = 3u + w * 4u + j;
-						// bytes past PAYLOAD(R) must be ZERO, not whatever the xor
-						// left there: digitK tests the final payload for being
-						// entirely zero, and stale padding would break it.
-						if (w * 4u + j < EQ24B_PAYLOAD(R) && bi < PW * 4u)
-							v |= ((x[bi >> 2] >> ((bi & 3u) * 8u)) & 0xffu) << (8u * j);
-					}
-					o[POUT + w] = v;
+			u32 *out = heapOut + (size_t)(dst * EQ24B_NSLOTS + os) * OUTW;
+			// reference: source bucket + Cantor of the two ORIGIN slots
+			const u32 os_ = s_pay[s * PW] & 0xffffu, ot_ = s_pay[t * PW] & 0xffffu;
+			const u32 a = max(os_, ot_), bb = min(os_, ot_);
+			const eq_u64 ref = ((eq_u64)bucket << EQ24B_CANTORBITS)
+			                 | (((eq_u64)a * (a - 1u)) / 2u + bb);
+			u32 o[8];
+			for (u32 w = 0; w < 8u; w++) o[w] = 0u;
+			// next payload starts at byte 3 of the xor
+			for (u32 w = 0; w * 4u < EQ24B_PAYLOAD(R) && w < 6u; w++) {
+				u32 v = 0u;
+				for (u32 j = 0; j < 4u; j++) {
+					const u32 bi = 3u + w * 4u + j;
+					// bytes past PAYLOAD(R) must be ZERO, not whatever the xor
+					// left there: digitK tests the final payload for being
+					// entirely zero, and stale padding would break it.
+					if (w * 4u + j < EQ24B_PAYLOAD(R) && bi < PW * 4u)
+						v |= ((x[bi >> 2] >> ((bi & 3u) * 8u)) & 0xffu) << (8u * j);
 				}
-				eq24b_put_ref<R>(o, ref);
-				*(uint4 *)(out + 0) = make_uint4(o[0], o[1], o[2], o[3]);
-				if (OUTW > 4u) *(uint4 *)(out + 4) = make_uint4(o[4], o[5], o[6], o[7]);
+				o[POUT + w] = v;
 			}
+			eq24b_put_ref<R>(o, ref);
+			*(uint4 *)(out + 0) = make_uint4(o[0], o[1], o[2], o[3]);
+			if (OUTW > 4u) *(uint4 *)(out + 4) = make_uint4(o[4], o[5], o[6], o[7]);
 		}
-		__syncthreads();
 	}
 }
 
@@ -351,7 +340,8 @@ __global__ void digitK(const u32 *__restrict__ heapIn,
                        u32 *__restrict__ sols, u32 *__restrict__ nsols, u32 maxsols,
                        u32 *__restrict__ overflow)
 {
-	const u32 bucket = blockIdx.x;
+	const u32 CH = EQ24B_CHUNKS_R(EQ_WK - 1u);   // one chunk per block, as digitR
+	const u32 bucket = blockIdx.x / CH, chunk = blockIdx.x % CH;
 	const u32 tid = threadIdx.x, lane = tid & 31u;
 	const u32 nin = min(cntIn[bucket], EQ24B_NSLOTS);
 
@@ -363,47 +353,43 @@ __global__ void digitK(const u32 *__restrict__ heapIn,
 	extern __shared__ u32 sh[];
 	u32 *s_pay  = sh;
 	u16 *s_next = (u16 *)(sh + SLOTS * PW);
-	u16 *s_slot = s_next + SLOTS;
-	u32 *s_head = (u32 *)(s_slot + SLOTS);
+	u32 *s_head = sh + SLOTS * PW + (SLOTS + 1u) / 2u;
 	__shared__ u32 s_n;
 
-	for (u32 chunk = 0; chunk < EQ24B_CHUNKS_R(EQ_WK - 1u); chunk++) {
-		for (u32 i = tid; i < HEADS; i += blockDim.x) s_head[i] = EQ24B_LIST_END;
-		if (tid == 0) s_n = 0u;
-		__syncthreads();
+	for (u32 i = tid; i < HEADS; i += blockDim.x) s_head[i] = EQ24B_LIST_END;
+	if (tid == 0) s_n = 0u;
+	__syncthreads();
 
-		for (u32 slot = tid; slot < nin; slot += blockDim.x) {
-			const u32 *rec = heapIn + (size_t)(bucket * EQ24B_NSLOTS + slot) * INW;
-			const u32 p0 = rec[EQ24B_POFF_W(EQ_WK - 1u)];   // payload word 0
-			const u32 rest = ((p0 & 0x0fu) << 8) | ((p0 >> 8) & 0xffu);
-			if (rest / HEADS != chunk) continue;
-			const u32 s = eq24b_append(&s_n, chunk, lane);
-			// never silent: a dropped stage here is a LOST SOLUTION and looks
-			// exactly like the solver being slightly unlucky.
-			if (s >= SLOTS) { atomicAdd(overflow + 2, 1u); continue; }
-			for (u32 w = 0; w < PW; w++) s_pay[s * PW + w] = eq24b_pay<EQ_WK - 1u, PW>(rec, w);
-			s_slot[s] = (u16)slot;
-			s_next[s] = (u16)atomicExch(&s_head[rest % HEADS], s);
-		}
-		__syncthreads();
+	for (u32 slot = tid; slot < nin; slot += blockDim.x) {
+		const u32 *rec = heapIn + (size_t)(bucket * EQ24B_NSLOTS + slot) * INW;
+		const u32 p0 = rec[EQ24B_POFF_W(EQ_WK - 1u)];   // payload word 0
+		const u32 rest = ((p0 & 0x0fu) << 8) | ((p0 >> 8) & 0xffu);
+		if (rest / HEADS != chunk) continue;
+		const u32 s = eq24b_append(&s_n, chunk, lane);
+		// never silent: a dropped stage here is a LOST SOLUTION and looks
+		// exactly like the solver being slightly unlucky.
+		if (s >= SLOTS) { atomicAdd(overflow + 2, 1u); continue; }
+		s_pay[s * PW] = (p0 & 0xffff0000u) | slot;   // origin slot over the rest, as digitR
+		for (u32 w = 1; w < PW; w++) s_pay[s * PW + w] = eq24b_pay<EQ_WK - 1u, PW>(rec, w);
+		s_next[s] = (u16)atomicExch(&s_head[rest % HEADS], s);
+	}
+	__syncthreads();
 
-		const u32 nst = min(s_n, SLOTS);
-		for (u32 s = tid; s < nst; s += blockDim.x) {
-			for (u32 t = s_next[s]; t != EQ24B_LIST_END; t = s_next[t]) {
-				u32 z = 0u;
-				for (u32 w = 0; w < PW; w++) z |= s_pay[s * PW + w] ^ s_pay[t * PW + w];
-				// digitR zeroes payload padding, so a solution is simply an
-				// all-zero xor across the staged words.
-				if (z) continue;
-				const u32 at = atomicAdd(nsols, 1u);
-				if (at < maxsols) {
-					sols[at * 3 + 0] = bucket;
-					sols[at * 3 + 1] = s_slot[s];
-					sols[at * 3 + 2] = s_slot[t];
-				}
+	const u32 nst = min(s_n, SLOTS);
+	for (u32 s = tid; s < nst; s += blockDim.x) {
+		for (u32 t = s_next[s]; t != EQ24B_LIST_END; t = s_next[t]) {
+			u32 z = (s_pay[s * PW] ^ s_pay[t * PW]) & 0xffff0000u;
+			for (u32 w = 1; w < PW; w++) z |= s_pay[s * PW + w] ^ s_pay[t * PW + w];
+			// digitR zeroes payload padding, so a solution is simply an
+			// all-zero xor across the staged words.
+			if (z) continue;
+			const u32 at = atomicAdd(nsols, 1u);
+			if (at < maxsols) {
+				sols[at * 3 + 0] = bucket;
+				sols[at * 3 + 1] = s_pay[s * PW] & 0xffffu;
+				sols[at * 3 + 2] = s_pay[t * PW] & 0xffffu;
 			}
 		}
-		__syncthreads();
 	}
 }
 
@@ -593,10 +579,8 @@ static int eq24b_round_tpb(unsigned r)
 	int dev = 0, major = 8;
 	cudaGetDevice(&dev);
 	cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, dev);
-	const bool scan = r < EQ_WK && EQ24B_SCAN(r);
-	if (major >= 8) return scan ? 256 : 512;
-	if (!scan) return 1024;
-	return EQ24B_STAGE_W(r) <= 3u ? 768 : 512;
+	(void)r;
+	return major >= 8 ? 512 : 1024;
 }
 
 extern "C" int EQ24B_API(solve)(void *p, const char *headernonce, const char *personal,
@@ -616,7 +600,7 @@ extern "C" int EQ24B_API(solve)(void *p, const char *headernonce, const char *pe
 			return -1;
 
 	const unsigned shK = EQ24B_API(shared)(EQ_WK - 1u);
-	EQ24B_NS::digitK<<<EQ24B_NBUCKETS, eq24b_round_tpb(EQ_WK), shK>>>(c->layer[EQ_WK-1], c->cnt[EQ_WK-1],
+	EQ24B_NS::digitK<<<EQ24B_NBUCKETS * EQ24B_CHUNKS_R(EQ_WK - 1u), eq24b_round_tpb(EQ_WK), shK>>>(c->layer[EQ_WK-1], c->cnt[EQ_WK-1],
 	                                               c->sols, c->nsols, c->maxsol, c->over);
 	if (cudaGetLastError() != cudaSuccess) return -4;
 	if (cudaDeviceSynchronize() != cudaSuccess) return -3;
@@ -699,13 +683,13 @@ extern "C" int EQ24B_API(digitR)(int r, const unsigned *d_in, unsigned *d_out,
 	const unsigned sh = eq24b_shared((unsigned)r);
 	if (!sh) return -1;
 	switch (r) {
-	case 1: EQ24B_NS::digitR<1><<<EQ24B_NBUCKETS, tpb, sh>>>(d_in, d_out, d_cntIn, d_cntOut, d_over); break;
-	case 2: EQ24B_NS::digitR<2><<<EQ24B_NBUCKETS, tpb, sh>>>(d_in, d_out, d_cntIn, d_cntOut, d_over); break;
-	case 3: EQ24B_NS::digitR<3><<<EQ24B_NBUCKETS, tpb, sh>>>(d_in, d_out, d_cntIn, d_cntOut, d_over); break;
-	case 4: EQ24B_NS::digitR<4><<<EQ24B_NBUCKETS, tpb, sh>>>(d_in, d_out, d_cntIn, d_cntOut, d_over); break;
+	case 1: EQ24B_NS::digitR<1><<<EQ24B_NBUCKETS * EQ24B_CHUNKS_R(1u), tpb, sh>>>(d_in, d_out, d_cntIn, d_cntOut, d_over); break;
+	case 2: EQ24B_NS::digitR<2><<<EQ24B_NBUCKETS * EQ24B_CHUNKS_R(2u), tpb, sh>>>(d_in, d_out, d_cntIn, d_cntOut, d_over); break;
+	case 3: EQ24B_NS::digitR<3><<<EQ24B_NBUCKETS * EQ24B_CHUNKS_R(3u), tpb, sh>>>(d_in, d_out, d_cntIn, d_cntOut, d_over); break;
+	case 4: EQ24B_NS::digitR<4><<<EQ24B_NBUCKETS * EQ24B_CHUNKS_R(4u), tpb, sh>>>(d_in, d_out, d_cntIn, d_cntOut, d_over); break;
 #if EQ_WK > 5
-	case 5: EQ24B_NS::digitR<5><<<EQ24B_NBUCKETS, tpb, sh>>>(d_in, d_out, d_cntIn, d_cntOut, d_over); break;
-	case 6: EQ24B_NS::digitR<6><<<EQ24B_NBUCKETS, tpb, sh>>>(d_in, d_out, d_cntIn, d_cntOut, d_over); break;
+	case 5: EQ24B_NS::digitR<5><<<EQ24B_NBUCKETS * EQ24B_CHUNKS_R(5u), tpb, sh>>>(d_in, d_out, d_cntIn, d_cntOut, d_over); break;
+	case 6: EQ24B_NS::digitR<6><<<EQ24B_NBUCKETS * EQ24B_CHUNKS_R(6u), tpb, sh>>>(d_in, d_out, d_cntIn, d_cntOut, d_over); break;
 #endif
 	default: return -1;
 	}
