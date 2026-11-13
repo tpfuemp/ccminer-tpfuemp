@@ -141,7 +141,7 @@ __global__ void digitH(const u64 *__restrict__ blake_h,
 			// One 32 B record: [index | pad | payload]. Two uint4 stores, not a
 			// scalar loop: a scattered store costs a whole sector transaction
 			// whatever its width, so only the NUMBER of requests matters.
-			u32 *rec = layer0 + (size_t)(bucket * EQ24B_NSLOTS + slot) * EQ24B_L0_STRIDE_W;
+			u32 *rec = layer0 + EQ24B_RIDX(0u, bucket, slot) * EQ24B_L0_STRIDE_W;
 			u32 w[8];
 #pragma unroll
 			for (u32 k = 0; k < 8u; k++) w[k] = 0u;
@@ -262,7 +262,7 @@ __global__ void digitR(const u32 *__restrict__ heapIn, u32 *__restrict__ heapOut
 
 	// ---- pass A: stage the items whose rest prefix selects this chunk ----
 	for (u32 slot = tid; slot < nin; slot += blockDim.x) {
-		const u32 *rec = heapIn + (size_t)(bucket * EQ24B_NSLOTS + slot) * INW;
+		const u32 *rec = heapIn + EQ24B_RIDX(R - 1u, bucket, slot) * INW;
 		const u32 p0 = rec[PIN];                     // payload word 0
 		const u32 rest = ((p0 & 0x0fu) << 8) | ((p0 >> 8) & 0xffu);
 		if (rest / HEADS != chunk) continue;
@@ -300,7 +300,7 @@ __global__ void digitR(const u32 *__restrict__ heapIn, u32 *__restrict__ heapOut
 			const u32 os = eq24b_scatter_slot(&cntOut[dst], dst, lane);
 			if (os >= EQ24B_NSLOTS) { atomicAdd(overflow, 1u); continue; }
 
-			u32 *out = heapOut + (size_t)(dst * EQ24B_NSLOTS + os) * OUTW;
+			u32 *out = heapOut + EQ24B_RIDX(R, dst, os) * OUTW;
 			// reference: source bucket + Cantor of the two ORIGIN slots
 			const u32 os_ = s_pay[s * PW] & 0xffffu, ot_ = s_pay[t * PW] & 0xffffu;
 			const u32 a = max(os_, ot_), bb = min(os_, ot_);
@@ -361,7 +361,7 @@ __global__ void digitK(const u32 *__restrict__ heapIn,
 	__syncthreads();
 
 	for (u32 slot = tid; slot < nin; slot += blockDim.x) {
-		const u32 *rec = heapIn + (size_t)(bucket * EQ24B_NSLOTS + slot) * INW;
+		const u32 *rec = heapIn + EQ24B_RIDX(EQ_WK - 1u, bucket, slot) * INW;
 		const u32 p0 = rec[EQ24B_POFF_W(EQ_WK - 1u)];   // payload word 0
 		const u32 rest = ((p0 & 0x0fu) << 8) | ((p0 >> 8) & 0xffu);
 		if (rest / HEADS != chunk) continue;
@@ -418,7 +418,7 @@ __global__ void expandSols(u32 *const *__restrict__ layers,
 		const u32 *L = layers[layer];
 		const eq24b_layer li = eq24b_layer_info(layer);
 		for (int i = (int)n - 1; i >= 0; i--) {
-			const u32 *rec = L + (size_t)(bkt[i] * EQ24B_NSLOTS + slt[i]) * li.stride_w;
+			const u32 *rec = L + EQ24B_RIDX_SW(li.stride_w == 8u, bkt[i], slt[i]) * li.stride_w;
 			const eq_u64 ref = eq24b_get_ref(rec, li.packed);
 			const u32 src = (u32)(ref >> EQ24B_CANTORBITS);
 			const eq_u64 c = ref & EQ24B_CANTORMASK;
@@ -434,7 +434,7 @@ __global__ void expandSols(u32 *const *__restrict__ layers,
 	const u32 *L0 = layers[0];
 	const u32 SW0 = eq24b_layer_info(0).stride_w;
 	for (u32 i = 0; i < n; i++)
-		idx[i] = L0[(size_t)(bkt[i] * EQ24B_NSLOTS + slt[i]) * SW0];
+		idx[i] = L0[EQ24B_RIDX(0u, bkt[i], slt[i]) * SW0];
 
 	for (u32 blk = 2; blk <= EQ24B_PROOFSIZE; blk <<= 1)
 		for (u32 base = 0; base < EQ24B_PROOFSIZE; base += blk)

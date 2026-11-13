@@ -1,5 +1,5 @@
 
-ccminer-tpfuemp 2026.10-p2   "BC3Hash for Bitcoin III; faster blake256, balloon and bmw; GPU self-tests"
+ccminer-tpfuemp 2026.11   "Pearlhash; equihash 144/5 and 192/7 up to 3x; faster bc3hash and curvehash"
 ---------------------------------------------------------------
 
 Donation addresses and contributor credits are in CREDITS.txt.
@@ -330,6 +330,58 @@ Toolkit, use the upstream project instead -- it retains that wider hardware and
 toolkit range: https://github.com/tpruvot/ccminer
 
 >>> RELEASE HISTORY <<<
+  Nov. 13th 2026 ccminer-tpfuemp 2026.11
+
+                  New algorithms
+                    pearlhash        Pearl (PRL), noisy int8 GEMM (alias
+                                     pearl): dp4a kernel on sm_61+, IMMA on
+                                     sm_80+; rate in int8 MAC/s, about
+                                     37 T on an RTX 3060, 17-18 T on a
+                                     GTX 1080 Ti
+
+                  Speed
+                    equihash   144/5 and 192/7: about 3x on a GTX 1080 Ti
+                               (144/5 ~20 -> ~60 Sol/s) and 1.8x on an
+                               RTX 3060; GPU memory 3.75 GB (144/5) and
+                               5.97 GB (192/7), was 4.28 / 6.50 GB; no more
+                               "solutions are being LOST" warnings on 192/7
+                    bc3hash    +27% on an RTX 3060, +6% on a GTX 1080 Ti;
+                               one CPU core per GPU no longer spins
+                               (--cuda-schedule overrides)
+                    curvehash  RTX 3060 4.0 -> ~7.6 MH/s, GTX 1080 Ti
+                               ~1.3 -> ~3.1 MH/s
+                    qubit, deep, luffa: single-kernel SIMD, fused
+                               cubehash+shavite, faster luffa-80
+                    fugue256   faster kernels
+                    yespower   no re-hash of the rest of a batch after a find
+
+                  Fixes
+                    fugue256   submitted a stale nonce
+                    x11 family, quark, x16, x17 and others: the second GPU
+                    nonce was not checked against the target before submit
+                    lbry, skunk, veltor, sia, quark, anime: second nonce check
+                    blake2s, decred: every candidate is checked; more than
+                    two valid candidates were partly lost
+                    whirlpool, whirlcoin: second nonce reported; no batch
+                    skipped after a find
+                    blake256, blake2s, decred, cryptonight: a scan now runs
+                    up to the requested end of the range
+                    equihash   --time-limit and the share limit are honoured
+                               on a quiet pool
+                    yescrypt   variants no longer share the first client key
+                    lyra2, lyra2v2: partial last warp handled correctly
+                    neoscrypt  memory leak per scan call
+                    multi-GPU: the CUDA sleep table was shared without a lock
+
+                  Verification
+                    fail-closed self-tests at startup for flex, fugue256,
+                    fugue512-80, luffa-80 and pearlhash; gr and mike
+                    re-hash sampled lanes on the CPU (GR_VERIFY / MIKE_VERIFY)
+
+                  Build
+                    msbuild -p:DevArch=86, build.cmd 86, build.sh 86: one-arch
+                    developer build; source tree reorganised (cuda/, core/)
+
   Oct. 17th 2026 ccminer-tpfuemp 2026.10-p2 (patch, binaries added to the 2026.10 release)
 
                   Fixes

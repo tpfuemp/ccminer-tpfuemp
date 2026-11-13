@@ -57,6 +57,13 @@
 #define EQ24B_PMASK(r)     ((EQ24B_PAYLOAD(r) & 3u) ? ((1u << (8u * (EQ24B_PAYLOAD(r) & 3u))) - 1u) : 0xffffffffu)
 #define EQ24B_STRIDE(r) \
 	(EQ24B_RECBYTES(r) <= 8u ? 8u : (EQ24B_RECBYTES(r) <= 16u ? 16u : 32u))
+// Record index of (bucket, slot). 32 B layers are SLOT-MAJOR in groups of 32:
+// the slots every bucket is filling at the same time sit in one window, so the
+// scatter's write front stays compact; 8/16 B layers are bucket-major.
+#define EQ24B_RIDX_SW(swz, b, s) ((swz) \
+	? ((size_t)((s) >> 5) * EQ24B_NBUCKETS + (b)) * 32u + ((s) & 31u) \
+	: (size_t)(b) * EQ24B_NSLOTS + (s))
+#define EQ24B_RIDX(r, b, s)    EQ24B_RIDX_SW(EQ24B_STRIDE(r) == 32u, b, s)
 #define EQ24B_LAYER_BYTES(r) \
 	((eq_u64)EQ24B_NBUCKETS * EQ24B_NSLOTS * EQ24B_STRIDE(r))
 
