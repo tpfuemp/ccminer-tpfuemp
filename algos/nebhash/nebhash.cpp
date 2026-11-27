@@ -37,16 +37,21 @@ extern "C" {
 #include <thread>
 
 #define NEB_MAX_SLOTS   16
-/* Nonces per scan_run call. Each call pays a few uploads and a synchronisation; a
- * 64k window instead of 8k measured +2-3 % on Linux and +11-12 % on Windows (WDDM).
- * A call can report at most MAX_NONCES shares, so the window adapts to the target:
- * about targetdiff / 8 attempts (an expected 1/8 share per call), clamped to
- * [NEB_SCAN_MIN, NEB_SCAN_CAP]; low vardiff starts fall back to the 8k window. */
+/* Nonces per table-scan call. Each call pays a few uploads and a synchronisation, and
+ * can report at most MAX_NONCES shares, so the window adapts to the target: about
+ * targetdiff / 8 attempts (an expected 1/8 share per call), clamped to
+ * [NEB_SCAN_MIN, NEB_SCAN_CAP]. */
 #define NEB_SCAN_MIN    8192
 #define NEB_SCAN_CAP    65536
 #define NEB_MAX_HITS    (MAX_NONCES + 1)
 /* In-miner self-test: CPU tickets of this many nonces of a fixed header. */
 #define NEB_ST_N        32
+/* and the nonce range whose sparse-scan attempts it dumps */
+#define NEB_ST_SPARSE   8192
+/* Sparse scan: nonces per call (only a fraction of them is evaluated), sized like the table
+ * window through the measured fraction, clamped to this range. */
+#define NEB_SPARSE_MIN  (1u << 20)
+#define NEB_SPARSE_CAP  (1u << 27)
 /* --benchmark: one share per 2^22 attempts (a few per second), each re-verified on the CPU. */
 #define NEB_BENCH_BITS  22
 
@@ -73,6 +78,12 @@ struct ScanHandle {
 	int arch = 0;
 	uint8_t model_hash[32];
 	int logged_threads = 0;  /* launch shape last reported for this model (-D) */
+	/* Per model, the first full-window calls alternate the table and the sparse scan (rates from
+	 * calls 2 and 3), then the faster in evaluated attempts per second is kept. */
+	bool sparse_ok = false;  /* the self-test passed the sparse scan on this model */
+	int calls = 0;           /* scan calls since the model build, up to the decision */
+	int mode = 0;            /* 0 measuring, 1 table, 2 sparse */
+	double rate_table = 0, rate_sparse = 0, frac = 0;  /* frac: evaluated / scanned on the sparse path */
 };
 
 std::vector<Dataset> g_datasets;
@@ -193,13 +204,13 @@ bool le_lt(const uint8_t a[32], const uint8_t b[32])
 	return le_le(a, b) && memcmp(a, b, 32) != 0;
 }
 
-/* In-miner check of every table this thread uploads (V-01/V-02/V-12): the CPU reference
+/* In-miner check of every table this thread uploads: the CPU reference
  * tickets of NEB_ST_N nonces of a fixed header, then the GPU hit set through the shipping
  * launcher at bound = the 2nd lowest ticket (exactly the two lowest nonces) and at that
  * ticket - 1 (exactly the lowest). A mismatch refuses to mine (selftest_gate); a failure to
  * run (CUDA resource, host memory) only warns. NEBHASH_SELFTEST_FAULT=1 gives the GPU the
  * 3rd lowest ticket for the first leg, =2 the 2nd lowest for the second leg: both must fail. */
-bool scan_selftest(int thr_id, neb2t_scan *h, const Model &m, int slot)
+bool scan_selftest(int thr_id, neb2t_scan *h, const Model &m, int slot, bool *sparse_ok)
 {
 	static bool logged[MAX_GPUS];
 	const char *fenv = getenv("NEBHASH_SELFTEST_FAULT");
@@ -270,17 +281,79 @@ bool scan_selftest(int thr_id, neb2t_scan *h, const Model &m, int slot)
 	}
 	neb2t_scan_pin_shape(h, -1);
 
+	/* Sparse scan: the attempts it evaluates in NEB_ST_SPARSE nonces (GPU dump with tickets), the first NEB_ST_N by
+	 * nonce checked against the CPU reference, then the sparse scan over the sub-range holding exactly those, at
+	 * the 2nd lowest ticket and at that - 1. NEBHASH_SELFTEST_FAULT=3 / 4 break those legs as 1 / 2 do above, =5 one
+	 * dumped ticket. A model with fewer than 2 selected nonces there is not tested and never uses the sparse scan. */
+	bool sp_ran = true, sp_dump = true, sp_a = true, sp_b = true;
+	int sp_k = 0;
+	if (ran && leg_a && leg_b) {
+		std::vector<uint32_t> dn(NEB_ST_SPARSE);
+		std::vector<uint8_t> dt((size_t)32 * NEB_ST_SPARSE);
+		uint32_t nd = 0;
+		if (neb2t_scan_sparse_dump(h, header, start, NEB_ST_SPARSE, NEB_ST_SPARSE, dn.data(), dt.data(), &nd) != 0)
+			sp_ran = selftest_cuda_fault();
+		else if (nd >= 2) {
+			std::vector<uint32_t> o(nd);
+			for (uint32_t i = 0; i < nd; i++) o[i] = i;
+			std::sort(o.begin(), o.end(), [&](uint32_t a, uint32_t b) { return dn[a] < dn[b]; });
+			if (fault == 5)
+				dt[(size_t)32 * o[nd > 2 ? 2 : 0] + 7] ^= 1;   /* one checked ticket off by a bit */
+			sp_k = (int)std::min<uint32_t>(nd, NEB_ST_N);
+			struct St { uint8_t t[32]; uint32_t nonce; bool ok; } w[NEB_ST_N];
+			std::vector<std::thread> th2;
+			for (unsigned t = 0; t < nt; t++)
+				th2.emplace_back([&, t] {
+					uint8_t hd[80];
+					memcpy(hd, header, 80);
+					for (int i = (int)t; i < sp_k; i += (int)nt) {
+						w[i].nonce = dn[o[i]];
+						write_le32(hd + 76, w[i].nonce);
+						w[i].ok = verify_ticket(m, slot, hd, w[i].t) == 0 &&
+						          memcmp(w[i].t, &dt[(size_t)32 * o[i]], 32) == 0;
+					}
+				});
+			for (auto &x : th2) x.join();
+			for (int i = 0; i < sp_k; i++) sp_dump = sp_dump && w[i].ok;
+			const uint32_t cnt = w[sp_k - 1].nonce - start + 1;
+			std::sort(w, w + sp_k, [](const St &a, const St &b) { return le_lt(a.t, b.t); });
+			uint32_t ev = 0;
+			memcpy(bound, w[fault == 3 && sp_k > 2 ? 2 : 1].t, 32);
+			if (neb2t_scan_run_sparse(h, header, start, cnt, bound, hits, &nh, &ev) != 0)
+				sp_ran = sp_a = sp_b = selftest_cuda_fault();
+			else
+				sp_a = ev == (uint32_t)sp_k && nh == 2 &&
+				       ((hits[0] == w[0].nonce && hits[1] == w[1].nonce) || (hits[0] == w[1].nonce && hits[1] == w[0].nonce));
+			memcpy(bound, w[1].t, 32);
+			if (fault != 4)
+				for (int i = 0; i < 32 && bound[i]-- == 0; i++) {}
+			if (sp_ran) {
+				if (neb2t_scan_run_sparse(h, header, start, cnt, bound, hits, &nh, &ev) != 0)
+					sp_ran = sp_b = selftest_cuda_fault();
+				else
+					sp_b = ev == (uint32_t)sp_k && nh == 1 && hits[0] == w[0].nonce;
+			}
+		}
+	}
+	if (sparse_ok)
+		*sparse_ok = sp_ran && sp_k >= 2 && sp_dump && sp_a && sp_b;
+
 	gettimeofday(&t1, NULL);
 	const double ms = 1e3 * (t1.tv_sec - t0.tv_sec) + 1e-3 * (t1.tv_usec - t0.tv_usec);
-	const bool passed = ran && leg_a && leg_b;
-	if (!passed)
+	const bool passed = ran && leg_a && leg_b && sp_dump && sp_a && sp_b;
+	if (!(ran && leg_a && leg_b))
 		gpulog(LOG_ERR, thr_id, "nebhash self-test FAILED (slot %d, launch shape %d of %d: GPU hits at rank 2 %s, at rank 2 - 1 %s)",
 			slot, bad_shape + 1, shapes,
 			leg_a ? "ok" : (ran ? "WRONG" : "not run"), leg_b ? "ok" : (ran ? "WRONG" : "not run"));
+	else if (!passed)
+		gpulog(LOG_ERR, thr_id, "nebhash self-test FAILED (slot %d, sparse scan: tickets %s, hits at rank 2 %s, at rank 2 - 1 %s)",
+			slot, sp_dump ? "ok" : "WRONG", sp_a ? "ok" : "WRONG", sp_b ? "ok" : "WRONG");
 	else if (!logged[thr_id] || opt_debug) {
 		gpulog(logged[thr_id] ? LOG_DEBUG : LOG_INFO, thr_id,
-			"nebhash self-test passed (slot %d, %d launch shape%s, GPU == CPU hit sets at rank 2 and rank 2 - 1 of %d nonces, %.0f ms)",
-			slot, shapes, shapes > 1 ? "s" : "", NEB_ST_N, ms);
+			"nebhash self-test passed (slot %d, %d launch shape%s, GPU == CPU hit sets at rank 2 and rank 2 - 1 of %d nonces; "
+			"sparse scan %s, %.0f ms)",
+			slot, shapes, shapes > 1 ? "s" : "", NEB_ST_N,
+			sp_k >= 2 ? "tickets and hit sets ok" : (sp_ran ? "not tested (model has too few zero-gradient samples)" : "not run"), ms);
 		logged[thr_id] = true;
 	}
 	return selftest_gate(thr_id, "nebhash", passed);
@@ -315,9 +388,11 @@ bool ensure_scan(int thr_id, int slot, const uint8_t model_hash[32])
 			return false;
 		}
 		ref->arch = a->id;
-		/* opening the handle already built and uploaded this model (upstream 43ff9d6) */
+		/* opening the handle already built and uploaded this model */
 		memcpy(ref->model_hash, model_hash, 32);
-		scan_selftest(thr_id, ref->h, *m, slot);
+		ref->calls = ref->mode = 0;
+		ref->rate_table = ref->rate_sparse = ref->frac = 0;
+		scan_selftest(thr_id, ref->h, *m, slot, &ref->sparse_ok);
 	} else if (ref->arch != a->id) {
 		neb2t_scan_close(ref->h);
 		ref->h = NULL;
@@ -332,7 +407,9 @@ bool ensure_scan(int thr_id, int slot, const uint8_t model_hash[32])
 		}
 		memcpy(ref->model_hash, model_hash, 32);
 		ref->logged_threads = 0;
-		scan_selftest(thr_id, ref->h, *m, slot);
+		ref->calls = ref->mode = 0;
+		ref->rate_table = ref->rate_sparse = ref->frac = 0;
+		scan_selftest(thr_id, ref->h, *m, slot, &ref->sparse_ok);
 	}
 	return true;
 }
@@ -669,28 +746,59 @@ int nebhash_scanhash(int thr_id, struct work *work, uint32_t max_nonce,
 	uint32_t start = work->data[19];
 	if (start >= max_nonce)
 		return 0;
-	uint32_t window = NEB_SCAN_MIN;
-	if (work->targetdiff / 8.0 > (double)NEB_SCAN_MIN)
-		window = work->targetdiff / 8.0 >= (double)NEB_SCAN_CAP ? NEB_SCAN_CAP
-		                                                       : (uint32_t)(work->targetdiff / 8.0);
-	uint32_t count = max_nonce - start;
+	ScanHandle *sh = g_scans[thr_id][slot];
+	/* sparse only after a passed self-test; while measuring, the odd calls are sparse */
+	const bool sparse = sh->sparse_ok && (sh->mode == 2 || (sh->mode == 0 && (sh->calls & 1)));
+	uint32_t count = max_nonce - start, window;
+	if (sparse) {
+		/* keys per call: an expected 1/8 share per call as below, through the evaluated fraction */
+		double f = sh->frac > 0 ? sh->frac : 0.01;
+		double want = work->targetdiff / 8.0 / f;
+		window = want <= (double)NEB_SPARSE_MIN ? NEB_SPARSE_MIN
+		       : want >= (double)NEB_SPARSE_CAP ? NEB_SPARSE_CAP : (uint32_t)want;
+	} else {
+		window = NEB_SCAN_MIN;
+		if (work->targetdiff / 8.0 > (double)NEB_SCAN_MIN)
+			window = work->targetdiff / 8.0 >= (double)NEB_SCAN_CAP ? NEB_SCAN_CAP
+			                                                       : (uint32_t)(work->targetdiff / 8.0);
+	}
+	/* a call cut short by the end of the nonce slice is not timed for the decision below */
+	const bool full = count >= window;
 	if (count > window)
 		count = window;
 
 	uint8_t header[80];
 	memcpy(header, work->neb_header, 80);
 	uint32_t hits[NEB_MAX_HITS + 1];
-	uint32_t nhits = 0;
-	int rc = neb2t_scan_run(g_scans[thr_id][slot]->h, header, start, count,
-	                       (const uint8_t *)work->target, hits, &nhits);
+	uint32_t nhits = 0, evaluated = count;
+	struct timeval c0, c1;
+	gettimeofday(&c0, NULL);
+	int rc = sparse ? neb2t_scan_run_sparse(sh->h, header, start, count, (const uint8_t *)work->target, hits, &nhits, &evaluated)
+	                : neb2t_scan_run(sh->h, header, start, count, (const uint8_t *)work->target, hits, &nhits);
 	if (rc != 0) {
 		applog(LOG_ERR, "nebhash: scan failed on GPU %d (%d)", device_map[thr_id], rc);
 		usleep(1000 * 1000);
 		return -1;
 	}
+	if (sparse && count >= NEB_SPARSE_MIN / 4)
+		sh->frac = (double)evaluated / count;
+	if (sh->mode == 0) {
+		gettimeofday(&c1, NULL);
+		const double sec = (c1.tv_sec - c0.tv_sec) + 1e-6 * (c1.tv_usec - c0.tv_usec);
+		if (!sh->sparse_ok)
+			sh->mode = 1;
+		else if (!full || sec <= 0)
+			;   /* same call parity again */
+		else if (sh->calls >= 2)
+			(sparse ? sh->rate_sparse : sh->rate_table) = evaluated / sec;
+		if (sh->mode == 0 && full && sec > 0 && ++sh->calls >= 4) {
+			sh->mode = sh->rate_sparse > sh->rate_table ? 2 : 1;
+			gpulog(LOG_INFO, thr_id, "nebhash slot %d: sparse scan %.2f MH/s (%.3f %% of nonces evaluated), table %.2f MH/s: using the %s scan",
+				slot, sh->rate_sparse / 1e6, 100.0 * sh->frac, sh->rate_table / 1e6, sh->mode == 2 ? "sparse" : "table");
+		}
+	}
 
-	if (opt_debug) {
-		ScanHandle *sh = g_scans[thr_id][slot];
+	if (opt_debug && !sparse) {
 		const int nt = neb2t_scan_threads(sh->h);
 		if (nt && nt != sh->logged_threads) {
 			applog(LOG_DEBUG, "GPU #%d: nebhash slot %d launch shape %d threads per attempt", device_map[thr_id], slot, nt);
@@ -698,10 +806,10 @@ int nebhash_scanhash(int thr_id, struct work *work, uint32_t max_nonce,
 		}
 	}
 
-	*hashes_done = count;
-	/* Leave the LAST scanned nonce, not the next one: on unchanged work the miner loop
-	 * adds 1 before the next call (ccminer.cpp, nonceptr[0]++), so start + count here
-	 * skipped one nonce per call. start + count - 1 < max_nonce, no wrap (count >= 1). */
+	/* the work done: on the sparse path only the evaluated attempts count, as for the pool */
+	*hashes_done = evaluated;
+	/* Leave the last scanned nonce: on unchanged work the miner loop adds 1 before the
+	 * next call. start + count - 1 < max_nonce, no wrap (count >= 1). */
 	work->data[19] = start + count - 1;
 
 	std::shared_ptr<Model> m = find_model(work->neb_model_hash);

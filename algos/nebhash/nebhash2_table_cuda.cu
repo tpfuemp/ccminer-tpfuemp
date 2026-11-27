@@ -20,9 +20,9 @@
 #define THREADS 128
 #endif
 #define CHUNK 65536u  // attempts per launch
-// sm_6x launch shape per model (item 17): after each build the first launches of at least TUNE_MIN attempts alternate
-// THREADS and 32 threads per attempt, timed with events, until each shape has TUNE_ATTEMPTS; the faster one is kept.
-// Both shapes give the same tickets, and the timed launches are real work. The first timed launch is a warm-up.
+// sm_6x: the launch shape (THREADS or 32 threads per attempt) is chosen per model. After each build, launches of at
+// least TUNE_MIN attempts alternate the two shapes, timed after one warm-up, until each has TUNE_ATTEMPTS; the faster
+// is kept. Both shapes give the same tickets, and the timed launches are real work.
 #define TUNE_MIN 1024u
 #define TUNE_ATTEMPTS 262144u
 
@@ -157,15 +157,8 @@ __device__ __forceinline__ void linear_layer_pairs(const uint8_t *__restrict__ r
   lane[(2 * tid + 1) & 7] += acc1;
 }
 
-// Pascal (sm_6x) fits 7 blocks/SM at 72 registers; minBlocks 8 caps it at 64 (4 B spill) for 8 blocks: +10-12 % on the
-// 1080 Ti over 5 live models, but only when this file is built WITHOUT --maxrregcount (with it: +4.5-8 %), hence the
-// per-file override in both build systems. Every sm_75/86 arm lost (minBlocks 10/12 spill: -24..-28 %; THREADS 64/256:
-// -7..-12 %), so those keep the plain bound (sm_75 SASS unchanged, sm_86 neutral without the cap).
-//
-// Item 17: on sm_6x a model may run one warp per attempt instead, 32 blocks of 32 threads per SM at 64 registers. On
-// the 1080 Ti that is +19-20 % for the live slot-1 models (KEP1, 7089 samples) but -2..-4 % for slot 0 (KEP1, 13404
-// samples), and the plans of the two differ in nothing that predicts it, so the launcher measures it per model (see
-// TUNE_ATTEMPTS). 64 threads: -5 % / +10 %.
+// Launch bounds: sm_6x runs 8 blocks of 128 threads per SM (64 registers; this file is built without --maxrregcount,
+// see the build rules) or 32 blocks of 32; sm_75 and newer keep the plain bound.
 #ifndef NEB_SM6X_MINB
 #define NEB_SM6X_MINB 8
 #endif
@@ -184,7 +177,7 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
   __shared__ uint32_t wsum[8][NT / 32];
   __shared__ int active[NEB2_MAX_LAYERS][32], active_count[NEB2_MAX_LAYERS];
   // conv: bit b of cm[i][o] = sample b has a non-zero gradient in output channel o of layer i; a sample whose channel
-  // is inactive contributes exact zeros to that channel's weights, so its loads are skipped (item 14)
+  // is inactive contributes exact zeros to that channel's weights, so its loads are skipped
   __shared__ uint32_t cm[NEB2_MAX_LAYERS][32], smask[NEB2_MAX_LAYERS][NEB_NB];
   const int tid = threadIdx.x;
   const uint32_t nonce = start + blockIdx.x;
@@ -203,10 +196,8 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
   uint32_t rb[NEB_NB];
 #pragma unroll
   for (int b = 0; b < NEB_NB; b++) rb[b] = idx[b] * (uint32_t)P.row;
-  // Only the cout error words need staging. The cin input words are loaded once
-  // per input element and reused across all outputs, so shared memory stays tiny
-  // and many more blocks fit on an SM. The row bytes and their packing are the
-  // same as before; only the loop order changes, and the lane sums are mod 2^32.
+  // Only the cout error words are staged; the cin input words are loaded once per input element and reused across
+  // all outputs, so shared memory stays small. Lane sums are mod 2^32, so the loop order does not matter.
   for (int i = 0; i < P.nlayers; i++) {
     if (P.kind[i] != LINEAR) continue;
     for (int o = tid; o < P.cout[i]; o += NT) {
@@ -256,9 +247,8 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
     } else {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
       if (P.kind[i] == NARROW && P.am[i] >= 0 && (P.blk[i] & 7) == 0 && P.blk[i] <= 64) {
-        // Item 14, Pascal shape: one warp per channel, lane ln holds entries f, f + 1 (f = o * blk + 2 * ln, one
-        // 32-bit load per active sample). On the 1080 Ti +3..18 % over the dense loops below; the Ampere shape
-        // (quads, several channels per warp) measured -7..8 % against it here.
+        // Pascal: one warp per channel, lane ln holds entries f, f + 1 (f = o * blk + 2 * ln), one 32-bit load per
+        // sample active in the channel.
         const int ln = tid & 31, half = P.blk[i] >> 1;
         uint32_t acc0 = 0, acc1 = 0;
         if (ln < half) {
@@ -289,12 +279,10 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
       } else
 #else
       if (P.kind[i] == NARROW && P.am[i] >= 0 && (P.blk[i] & 7) == 0 && P.blk[i] <= 128) {
-        // Item 14: a sample whose output channel o is inactive (no non-zero gradient in the channel's blk weights)
-        // adds exact zeros there, so each channel loads only the samples active in it (cm[i][o], ~1/4 of the 16 on
-        // mainnet models) -- whole load instructions are skipped, not only bytes. A channel is blk / 4 lanes of one
-        // 64-bit load each (entries f .. f + 3, f = o * blk + 4 * l), and a warp takes 32 / (blk / 4) channels side by
-        // side (3 for blk 40). blk % 8 == 0 keeps the lanes (4 * l + j) & 7 fixed per thread. On the RTX 3060
-        // +50..63 % over the dense loops below and +12..15 % over the Pascal shape; sm_75 untested (no hardware).
+        // A sample whose output channel o is inactive (no non-zero gradient in the channel's blk weights) adds exact
+        // zeros there, so each channel loads only the samples active in it (cm[i][o]). A channel is blk / 4 lanes of
+        // one 64-bit load each (entries f .. f + 3, f = o * blk + 4 * l), and a warp takes 32 / (blk / 4) channels
+        // side by side. blk % 8 == 0 keeps the lanes (4 * l + j) & 7 fixed per thread.
         const int ln = tid & 31, q = P.blk[i] >> 2, groups = 32 / q;
         const int g = ln / q, l = ln - g * q;
         uint32_t acc0 = 0, acc1 = 0, acc2 = 0, acc3 = 0;
@@ -370,7 +358,7 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
 #pragma unroll
         for (int j = 0; j < 4; j++) lane[(4 * tid + j) & 7] += acc4[j];
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
-        // quads only on Pascal: measured +4..10 % on sm_61 but -1..3 % on sm_86 against the pairs below
+        // quads on Pascal only (slower than the pairs below on sm_86)
       } else if (P.kind[i] == NARROW && (P.nw[i] & 3) == 0) {
         // int16 factors in quads: one 64-bit load per sample brings f .. f+3 (layers and rows are 8-byte aligned,
         // 2 * f is a multiple of 8), a quarter of the loads of the per-factor gather. Sums stay 32-bit (exact).
@@ -468,9 +456,72 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
   }
 }
 
+// Sparse scan. Many samples of a trained model have an all-zero gradient, and a zero entry adds the constant
+// 0 ^ (f + base) to the digest, so the digest of an attempt depends only on its active draws (samples with a non-zero
+// gradient). With none it is the zero digest dig[n], with one it is that sample's own digest dig[s], both built with
+// the table. Every evaluated attempt has the same chance (the ticket is a BLAKE3 of digest and key), so this kernel
+// evaluates only the attempts with at most one active draw: one thread per nonce, key + ChaCha8 + 16 bitmap lookups,
+// one more BLAKE3 when selected. evald counts the evaluated attempts. DUMP writes nonce and ticket of every selected
+// attempt instead of comparing (self-test).
+template <bool DUMP>
+__global__ void __launch_bounds__(256) sparse_kernel(const uint32_t *__restrict__ flags, const uint32_t *__restrict__ dig,
+                                                     uint32_t n, const uint32_t *__restrict__ h0, uint32_t start,
+                                                     uint32_t count, const uint32_t *__restrict__ bound, uint32_t *hits,
+                                                     uint32_t max_hits, const uint32_t *__restrict__ cv, uint32_t *evald) {
+  const uint32_t g = blockIdx.x * blockDim.x + threadIdx.x;
+  bool sel = false;
+  uint32_t k[8];
+  uint32_t sidx = n;
+  const uint32_t nonce = start + g;
+  if (g < count) {
+    uint32_t b1[16] = { __ldg(&h0[16]), __ldg(&h0[17]), __ldg(&h0[18]), nonce };
+    uint32_t c[8], u[16];
+#pragma unroll
+    for (int i = 0; i < 8; i++) c[i] = __ldg(&cv[i]);
+    blake3_compress(c, b1, 0, 16, BLAKE3_CHUNK_END | BLAKE3_ROOT, k);
+    chacha8_block0(k, u);
+    int na = 0;
+#pragma unroll
+    for (int j = 0; j < NEB_NB; j++) {
+      const uint32_t s = (uint32_t)(((unsigned long long)u[j] * n) >> 32);
+      if ((__ldg(&flags[s >> 5]) >> (s & 31)) & 1u) { na++; sidx = s; }
+    }
+    sel = na <= 1;
+  }
+  const uint32_t ball = __ballot_sync(0xffffffffu, sel);
+  if ((threadIdx.x & 31) == 0 && ball) atomicAdd(evald, (uint32_t)__popc(ball));
+  if (!sel) return;
+  uint32_t blk[16], t[8];
+#pragma unroll
+  for (int i = 0; i < 8; i++) { blk[i] = __ldg(&dig[8 * sidx + i]); blk[8 + i] = k[i]; }
+  blake3_compress(blake3_iv(), blk, 0, 64, BLAKE3_CHUNK_START | BLAKE3_CHUNK_END | BLAKE3_ROOT, t);
+  if (DUMP) {
+    const uint32_t at = atomicAdd(hits, 1u);
+    if (at < max_hits) {
+      hits[1 + at] = nonce;
+      for (int i = 0; i < 8; i++) hits[1 + max_hits + 8 * at + i] = t[i];
+    }
+    return;
+  }
+  bool ok = true;
+  for (int i = 7; i >= 0; i--) {
+    const uint32_t b = __ldg(&bound[i]);
+    if (t[i] != b) { ok = t[i] < b; break; }
+  }
+  if (ok) {
+    const uint32_t at = atomicAdd(hits, 1u);
+    if (at < max_hits) hits[1 + at] = nonce;
+  }
+}
+
 struct neb2t_scan {
   int device, arch;
-  bool sm6x;           // compute capability 6.x: the launch shape is measured per model (item 17)
+  // sparse scan: bit s of flags = sample s has a non-zero gradient; dig = 8 digest words per sample alone, then the
+  // zero digest at index n
+  std::vector<uint32_t> flags, dig;
+  uint32_t nactive;
+  uint32_t *d_flags, *d_dig, *d_eval;
+  bool sm6x;           // compute capability 6.x: the launch shape is measured per model
   int threads;         // threads per attempt for the current model; 0 while measuring
   int tune_warm;       // the next timed launch is the warm-up
   uint32_t tune_n[2];  // attempts timed per shape (THREADS, 32)
@@ -534,9 +585,7 @@ struct SampleGrads {
 
 // One evaluation of every sample with neb2_sample_table_row of the C reference (neb2_sample_grad without the linear
 // gradients, which the row never reads: only their factors), on every host thread, recording the range of each
-// convolution layer. The former build loop chose the widths by refilling the whole table once per layer that
-// overflowed int8 or int16, i.e. up to four full gradient passes on mainnet models (~0.65 s each on an i7-7700K),
-// with the GPU idle meanwhile.
+// convolution layer, so the widths are chosen after a single pass.
 static void sample_grads(neb2t_scan *s, const neb2_arch *A, const int8_t *weights, SampleGrads &sg,
                          int32_t lo[NEB2_MAX_LAYERS], int32_t hi[NEB2_MAX_LAYERS]) {
   neb2_model *m = (neb2_model *)calloc(1, sizeof *m);
@@ -634,6 +683,73 @@ static void pack_rows(neb2t_scan *s, const neb2_arch *A, const SampleGrads &sg) 
   for (auto &x : th) x.join();
 }
 
+// Sparse scan tables: the active flag of every sample, the digest of every active sample alone and the zero digest
+// (index n), as the reference computes them: lane f & 7, f the flat index in the layer, entry clip(G) ^ (f + 7919 *
+// (layer + 1)). An entry of a linear layer is d[o] * x[q].
+static void sparse_digests(neb2t_scan *s, const neb2_arch *A, const SampleGrads &sg) {
+  const uint32_t n = s->n;
+  s->flags.assign((n + 31) / 32, 0u);
+  s->dig.assign((size_t)8 * (n + 1), 0u);
+  std::vector<uint8_t> act(n, 0);
+  unsigned nt = std::thread::hardware_concurrency();
+  if (nt == 0) nt = 4;
+  // the digest of one sample, or of the zero gradient (i == n)
+  auto digest = [&](uint32_t i, uint32_t *lane) {
+    const int32_t *c = i < n ? sg.conv.data() + (size_t)i * sg.conv_w : NULL;
+    const int8_t *fa = i < n ? sg.lin.data() + (size_t)i * sg.lin_w : NULL;
+    for (int k = 0; k < 8; k++) lane[k] = 0;
+    for (int l = 0; l < A->nlayers; l++) {
+      const neb2_layer &L = A->l[l];
+      const uint32_t base = 7919u * (uint32_t)(l + 1);
+      if (L.kind == NEB2_LINEAR) {
+        for (int o = 0; o < L.cout; o++)
+          for (int q = 0; q < L.cin; q++) {
+            const uint32_t f = (uint32_t)(o * L.cin + q);
+            int G = fa ? (int)fa[o] * (int)fa[L.cout + q] : 0;
+            G = G < -CLIPV ? -CLIPV : (G > CLIPV ? CLIPV : G);
+            lane[f & 7] += (uint32_t)G ^ (f + base);
+          }
+        if (fa) fa += L.cout + L.cin;
+      } else {
+        for (int f = 0; f < L.nw; f++) {
+          int G = c ? c[f] : 0;
+          G = G < -CLIPV ? -CLIPV : (G > CLIPV ? CLIPV : G);
+          lane[f & 7] += (uint32_t)G ^ ((uint32_t)f + base);
+        }
+        if (c) c += L.nw;
+      }
+    }
+  };
+  std::vector<std::thread> th;
+  for (unsigned t = 0; t < nt; t++)
+    th.emplace_back([&, t] {
+      for (uint32_t i = t; i < n; i += nt) {
+        const int32_t *c = sg.conv.data() + (size_t)i * sg.conv_w;
+        bool a = false;
+        for (int k = 0; k < sg.conv_w && !a; k++) a = c[k] != 0;
+        const int8_t *fa = sg.lin.data() + (size_t)i * sg.lin_w;
+        for (int l = 0; l < A->nlayers && !a; l++) {
+          const neb2_layer &L = A->l[l];
+          if (L.kind != NEB2_LINEAR) continue;
+          bool dz = false, xz = false;
+          for (int o = 0; o < L.cout; o++) dz |= fa[o] != 0;
+          for (int q = 0; q < L.cin; q++) xz |= fa[L.cout + q] != 0;
+          a = dz && xz;
+          fa += L.cout + L.cin;
+        }
+        act[i] = a;
+        if (a) digest(i, &s->dig[(size_t)8 * i]);
+      }
+    });
+  for (auto &x : th) x.join();
+  digest(n, &s->dig[(size_t)8 * n]);
+  s->nactive = 0;
+  for (uint32_t i = 0; i < n; i++) {
+    if (act[i]) { s->flags[i >> 5] |= 1u << (i & 31); s->nactive++; }
+    else memcpy(&s->dig[(size_t)8 * i], &s->dig[(size_t)8 * n], 32);
+  }
+}
+
 static int build(neb2t_scan *s, const int8_t *weights) {
   const neb2_arch *A = neb2_arch_get(s->arch);
   // the kernel lists the active outputs of a linear layer in a fixed shared array of 32
@@ -656,8 +772,13 @@ static int build(neb2t_scan *s, const int8_t *weights) {
   s->tune_ms[0] = s->tune_ms[1] = 0.f;
   s->pin = -1;
   pack_rows(s, A, sg);
+  sparse_digests(s, A, sg);
   if (s->rows.size() > UINT32_MAX) return (int)cudaErrorInvalidValue;
   TRY(cudaSetDevice(s->device));
+  if (!s->d_flags) TRY(cudaMalloc(&s->d_flags, s->flags.size() * 4));
+  if (!s->d_dig) TRY(cudaMalloc(&s->d_dig, s->dig.size() * 4));
+  TRY(cudaMemcpy(s->d_flags, s->flags.data(), s->flags.size() * 4, cudaMemcpyHostToDevice));
+  TRY(cudaMemcpy(s->d_dig, s->dig.data(), s->dig.size() * 4, cudaMemcpyHostToDevice));
   if (s->rows.size() != s->d_rows_bytes) {
     cudaFree(s->d_rows);
     s->d_rows = NULL;
@@ -685,6 +806,8 @@ int neb2t_scan_open(int device, int arch, const uint8_t *values, const uint8_t *
   s->d_rows_bytes = 0;
   s->d_header = s->d_bound = s->d_hits = NULL;
   s->d_cv = NULL;
+  s->d_flags = s->d_dig = s->d_eval = NULL;
+  s->nactive = 0;
   s->ev[0] = s->ev[1] = NULL;
   memset(&s->plan, 0, sizeof s->plan);
   cudaError_t e = cudaSetDevice(device);
@@ -697,6 +820,7 @@ int neb2t_scan_open(int device, int arch, const uint8_t *values, const uint8_t *
   if (e == cudaSuccess) e = cudaMalloc(&s->d_cv, 32);
   if (e == cudaSuccess) e = cudaMalloc(&s->d_bound, 32);
   if (e == cudaSuccess) e = cudaMalloc(&s->d_hits, ((size_t)max_hits + 1) * 4);
+  if (e == cudaSuccess) e = cudaMalloc(&s->d_eval, 4);
   int st = (int)e;
   if (st == 0) st = build(s, weights);
   if (st != 0) {
@@ -709,11 +833,9 @@ int neb2t_scan_open(int device, int arch, const uint8_t *values, const uint8_t *
 
 int neb2t_scan_set_model(neb2t_scan *s, const int8_t *weights) { return build(s, weights); }
 
-int neb2t_scan_run(neb2t_scan *s, const uint8_t *header, uint32_t start, uint32_t count, const uint8_t *bound, uint32_t *hits,
-                  uint32_t *nhits) {
-  if (count == 0 || count > s->capacity) return (int)cudaErrorInvalidValue;
+// header, its BLAKE3 prefix (cached), the bound and a cleared hit count
+static int upload_job(neb2t_scan *s, const uint8_t *header, const uint8_t *bound) {
   TRY(cudaSetDevice(s->device));
-  TRY(cudaMemcpyToSymbol(P, &s->plan, sizeof s->plan));
   TRY(cudaMemcpy(s->d_header, header, 80, cudaMemcpyHostToDevice));
   if (!s->prefix_ready || memcmp(s->cached_prefix, header, 64) != 0) {
     header_prefix<<<1, 1>>>(s->d_header, s->d_cv);
@@ -721,8 +843,68 @@ int neb2t_scan_run(neb2t_scan *s, const uint8_t *header, uint32_t start, uint32_
     memcpy(s->cached_prefix, header, 64);
     s->prefix_ready = true;
   }
-  TRY(cudaMemcpy(s->d_bound, bound, 32, cudaMemcpyHostToDevice));
+  if (bound) TRY(cudaMemcpy(s->d_bound, bound, 32, cudaMemcpyHostToDevice));
   TRY(cudaMemset(s->d_hits, 0, 4));
+  return 0;
+}
+
+#define SPARSE_CHUNK (1u << 22)  // nonces per sparse launch
+
+int neb2t_scan_run_sparse(neb2t_scan *s, const uint8_t *header, uint32_t start, uint32_t count, const uint8_t *bound,
+                          uint32_t *hits, uint32_t *nhits, uint32_t *evaluated) {
+  if (count == 0) return (int)cudaErrorInvalidValue;
+  const int st = upload_job(s, header, bound);
+  if (st) return st;
+  TRY(cudaMemset(s->d_eval, 0, 4));
+  for (uint32_t done = 0; done < count;) {
+    const uint32_t part = count - done < SPARSE_CHUNK ? count - done : SPARSE_CHUNK;
+    sparse_kernel<false><<<(part + 255) / 256, 256>>>(s->d_flags, s->d_dig, s->n, s->d_header, start + done, part,
+                                                      s->d_bound, s->d_hits, s->max_hits, s->d_cv, s->d_eval);
+    TRY(cudaGetLastError());
+    done += part;
+  }
+  uint32_t found = 0;
+  TRY(cudaMemcpy(&found, s->d_hits, 4, cudaMemcpyDeviceToHost));
+  TRY(cudaMemcpy(evaluated, s->d_eval, 4, cudaMemcpyDeviceToHost));
+  *nhits = found;
+  if (found > 0)
+    TRY(cudaMemcpy(hits, s->d_hits + 1, (size_t)(found < s->max_hits ? found : s->max_hits) * 4, cudaMemcpyDeviceToHost));
+  return 0;
+}
+
+int neb2t_scan_sparse_dump(neb2t_scan *s, const uint8_t *header, uint32_t start, uint32_t count, uint32_t max,
+                           uint32_t *nonces, uint8_t *tickets, uint32_t *ndump) {
+  if (count == 0 || max == 0) return (int)cudaErrorInvalidValue;
+  const int st = upload_job(s, header, NULL);
+  if (st) return st;
+  uint32_t *d = NULL;
+  TRY(cudaMalloc(&d, ((size_t)9 * max + 1) * 4));
+  cudaError_t e = cudaMemset(d, 0, 4);
+  if (e == cudaSuccess) e = cudaMemset(s->d_eval, 0, 4);
+  if (e == cudaSuccess) {
+    sparse_kernel<true><<<(count + 255) / 256, 256>>>(s->d_flags, s->d_dig, s->n, s->d_header, start, count, s->d_bound,
+                                                      d, max, s->d_cv, s->d_eval);
+    e = cudaGetLastError();
+  }
+  uint32_t found = 0;
+  if (e == cudaSuccess) e = cudaMemcpy(&found, d, 4, cudaMemcpyDeviceToHost);
+  if (found > max) found = max;
+  if (e == cudaSuccess && found) e = cudaMemcpy(nonces, d + 1, (size_t)found * 4, cudaMemcpyDeviceToHost);
+  if (e == cudaSuccess && found) e = cudaMemcpy(tickets, d + 1 + max, (size_t)found * 32, cudaMemcpyDeviceToHost);
+  cudaFree(d);
+  *ndump = found;
+  return (int)e;
+}
+
+uint32_t neb2t_scan_active(const neb2t_scan *s) { return s->nactive; }
+
+int neb2t_scan_run(neb2t_scan *s, const uint8_t *header, uint32_t start, uint32_t count, const uint8_t *bound, uint32_t *hits,
+                  uint32_t *nhits) {
+  if (count == 0 || count > s->capacity) return (int)cudaErrorInvalidValue;
+  TRY(cudaSetDevice(s->device));
+  TRY(cudaMemcpyToSymbol(P, &s->plan, sizeof s->plan));
+  const int st = upload_job(s, header, bound);
+  if (st) return st;
   for (uint32_t done = 0; done < count; done += CHUNK) {
     const uint32_t part = count - done < CHUNK ? count - done : CHUNK;
     const size_t shm = (size_t)s->plan.shared_words * 4;
@@ -774,6 +956,9 @@ void neb2t_scan_close(neb2t_scan *s) {
   cudaFree(s->d_cv);
   cudaFree(s->d_bound);
   cudaFree(s->d_hits);
+  cudaFree(s->d_flags);
+  cudaFree(s->d_dig);
+  cudaFree(s->d_eval);
   delete s;
 }
 

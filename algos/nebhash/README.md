@@ -1,10 +1,11 @@
-# Nebhash (NEB, `neb-pool/1`) — `-a nebhash` / `-a neb`
+# Nebhash (NEB, `neb-pool/1`) - `-a nebhash` / `-a neb`
 
-Integer-only proof of work used by NEB. One attempt derives a ChaCha8 key from
-an 80-byte header with BLAKE3, picks 16 samples from a fixed dataset, evaluates
-the training gradient of a convolutional model on those samples, clips and
-sums it into a 256-bit little-endian ticket, and compares that ticket with the
-pool's share target. No floating point, no DAG and no epoch regeneration.
+Integer-only proof of work used by NEB. One attempt derives a key from an
+80-byte header with BLAKE3, draws 16 samples from a fixed dataset with ChaCha8,
+sums the training gradients of a convolutional model on those samples, clips
+the sum, hashes it into a digest and then, with the key, into a 256-bit
+little-endian ticket that is compared with the pool's share target. No floating
+point, no DAG and no epoch regeneration.
 
 `-a neb` is an alias for `-a nebhash`. Both plaintext `stratum+tcp://` and TLS
 `stratum+ssl://` / `stratum+tcps://` are supported.
@@ -23,71 +24,57 @@ BLAKE3  790b57fbd830f3dcbe7de9d1146aa89a0a20799118e30dd48a343a5c98f19e72
 The miner computes the BLAKE3 digest of the whole file at startup and compares
 it with the `dataset_hash` sent in `mining.subscribe`. A mismatch aborts mining
 with `Nebhash: pool dataset hash does not match the local file`. The file is a
-user asset and is never committed to this repository. It contains two model
-slots; slot 0 is architecture 1 (KEP1, 784 inputs, 26,000 weights).
+user asset and is not part of this repository. It holds two model slots, both
+of architecture KEP1 (784 inputs, 26,000 weights; 13,404 and 7,089 samples).
 
 ## Layout
 
 | File | Role |
 | :-- | :-- |
-| `nebhash.cpp` / `nebhash.h` | ccminer bridge: dataset load, header build, scan glue, host re-verify and submit. |
-| `nebhash2.c` / `nebhash2.h` | Authoritative portable C reference for nebhash v2 (KEP1/RET2): model init, sample gradient, share evaluation, ticket, model step and state hashes. |
-| `nebhash2_table_cuda.cu` / `.h` | The CUDA scan kernel: one block per nonce, table of per-sample gradients, `dp4a` for the linear layers. |
-| `shares.c` / `shares.h` | Portable reference for the original (v1) training-share PoW and the shared constants (`NEB_NB=16`, `NEB_CLIP=256`, ...). |
-| `chacha8.c` | Portable ChaCha8 used by both references. BLAKE3 is the tree's shared `cuda/blake3_device.cuh` (kernel, host bridge and both C references). |
-| `LICENSE.NEB` | Apache-2.0 licence for the vendored reference code. |
+| `nebhash.cpp` / `nebhash.h` | ccminer bridge: dataset load, header build, scan selection, self-test, host re-verify and submit. |
+| `nebhash2.c` / `nebhash2.h` | Portable C reference for nebhash v2 (KEP1/RET2): model init, sample gradient, share evaluation, ticket, model step and state hashes. |
+| `nebhash2_table_cuda.cu` / `.h` | CUDA scans: the table scan and the sparse scan (below). |
+| `shares.c` / `shares.h` | Portable reference for the v1 training-share PoW and the shared constants (`NEB_NB=16`, `NEB_CLIP=256`, ...). |
+| `chacha8.c` | Portable ChaCha8 used by both references. BLAKE3 is the tree's shared `cuda/blake3_device.cuh`. |
+| `LICENSE.NEB` | Apache-2.0 licence of the vendored reference code. |
 
-The scan window adapts to the target: about `targetdiff / 8` nonces per `scan_run`
-(an expected 1/8 share per call, so the `MAX_NONCES + 1` hit list does not overflow),
-clamped to 8192..65536. Each call pays a few uploads and a synchronisation; the 64k
-window measured +2-3 % on Linux and +11-12 % on Windows against a fixed 8k window. A scan
-never crosses `max_nonce`, the end of the thread's nonce slice: GPUs share one header, so
-overrunning it would duplicate another GPU's nonces.
+## How the GPU scans
 
-For each model the host evaluates every sample once and picks the narrowest exact width per
-convolution layer (int8, else int16, else int32) from the observed range, instead of refilling
-the table once per overflowing layer: the per-model rebuild fell from 2.7 s to 0.7 s on a
-4-core host for a mainnet Kepler model.
+For each model the host evaluates every sample once with the C reference and
+uploads one row per sample: the convolution gradients (int8, int16 or int32,
+the narrowest width that holds the layer) and, per linear layer, the error and
+input factors whose outer product is the gradient.
 
-The upstream bring-up kernel `nebhash2_cuda.cu` (direct forward/backward pass,
-never called by the miner) is not carried in this tree.
+**Table scan.** One thread block per attempt gathers the rows of its 16
+samples, sums, clips and hashes. Samples whose output channel or linear output
+is inactive are skipped, since they add exact zeros. On Pascal the launch shape
+(128 or 32 threads per attempt) is timed per model.
 
-For a linear layer the kernel stages only the `4 × cout` error words in shared
-memory and reloads the `4 × cin` input words directly from the table rows once
-per input element. The 16 row indices are converted to 32-bit row offsets once
-per block (the builder rejects a table larger than 4 GiB), which removes a
-64-bit multiply from every row byte load. Table rows (linear factors and
-convolution weights) are read with `__ldg` through the read-only cache, and
-`THREADS` is 128 so twice as many blocks fit on an SM at the same thread
-occupancy. The eight lane accumulators are reduced per warp and then summed
-once by thread 0, instead of 256 shared-memory atomics per lane. All sums are
-modulo `2^32`, so changing the order does not change the ticket.
+**Sparse scan.** A sample whose gradient is all zero adds only a constant to
+the digest, and on trained models most samples are like that. An attempt with
+no active draw therefore has one fixed digest, and an attempt with exactly one
+active draw has the digest of that sample alone; both are precomputed with the
+table. Every evaluated attempt has the same chance to be a share (the ticket is
+a BLAKE3 of digest and key), so the sparse scan derives the key and the 16
+draws of every nonce and fully evaluates only the attempts with at most one
+active draw. The reported hash rate counts evaluated attempts only, which is
+what the pool sees.
 
-The scan handle caches the BLAKE3 chaining value of the first 64 header bytes
-and recomputes it only when those bytes change; each nonce finishes the key
-from the last 16 bytes.
+After each model change the miner times both scans on its first calls and keeps
+the faster one; the sparse scan is used only after it has passed the self-test.
+An untrained model (for example the `--benchmark` model) has few all-zero
+samples and stays on the table scan.
 
-For each linear layer, the kernel skips outputs whose error factors are zero
-in all 16 selected samples. The lane sums start from the contribution of an
-all-zero linear gradient (a per-model constant) and add the difference for
-each active output, modulo `2^32`, so the ticket is unchanged. On the
-mainnet models of 2026-11-26 this measured +1.3–1.8 % on a GTX 1080 Ti and
-+4.2–7.0 % on an RTX 3060 (matched A/B against the previous kernel); trained
-models have few all-zero error rows, so the gain depends on the model state.
-
-## Provenance
-
-`nebhash2.{c,h}`, `shares.{c,h}`, `chacha8.{c,h}` and the
-reference-derived table kernel are vendored from the NEB implementation under
-Apache-2.0 (`LICENSE.NEB`). The ccminer bridge and stratum glue follow the
-project's GPLv2.
+The scan window adapts to the share target so that a call expects about 1/8
+share, and a scan never crosses `max_nonce`, the end of the thread's nonce
+slice (GPUs share one header).
 
 ## Stratum (`neb-pool/1`)
 
 | Message | Shape |
 | :-- | :-- |
-| `mining.subscribe` | `["<user agent>", "neb-pool/1"]` → object with `session`, `extranonce1`, `extranonce2_size`, `chain_id`, `dataset_hash`. |
-| `mining.set_target` | `["<32-byte LE hex>"]` — the share threshold. |
+| `mining.subscribe` | `["<user agent>", "neb-pool/1"]` -> object with `session`, `extranonce1`, `extranonce2_size`, `chain_id`, `dataset_hash`. |
+| `mining.set_target` | `["<32-byte LE hex>"]` - the share threshold. |
 | `mining.set_model` | `[slot, "<weights_hash hex>", "<packed weights hex>"]`. |
 | `mining.notify` | One job object: `job_id`, `version`, `parent`, `time_start`, `bits`, `target`, `share_target`, `coinbase_prefix/suffix`, `branch`, `tx_count`, `shares_root`, `height`, `slot`, `weights_hash`, `expiry`. |
 | `mining.submit` | `[login, job_id, extranonce2_hex, ntime(number), nonce(number)]`. |
@@ -100,21 +87,19 @@ is `mining.set_target`. Target-to-difficulty uses yiimp's
 
 ## Correctness
 
-- The GPU table kernel is checked against the C reference with an exact-ticket
-  differential harness on `sm_61`: 384 nonces, five rank boundaries and eight
-  exact tickets per case, for both model architectures and initial / trained /
-  all-7 / all-(-8) / alternating weights. All cases pass.
 - Every GPU hit is recomputed on the host with `neb2_share_eval()` before a
   `mining.submit`; a kernel bug can only cause a local miss, never a bad share.
-- `NEB_NEGATIVE_CONTROL_TABLE_CLIP` deliberately clips one below `NEB_CLIP` so
-  the differential test demonstrates that it detects a wrong gradient.
-- Every table a mining thread uploads (scan open and each model change) is
-  self-tested before use: the C reference tickets of 32 nonces of a fixed
-  header, then the GPU hit set through the shipping launcher at a bound equal
-  to the second-lowest ticket (exactly the two lowest nonces) and at that
-  ticket minus one (exactly the lowest). A mismatch stops the miner; a CUDA
-  resource failure only warns. `NEBHASH_SELFTEST_FAULT=1` or `=2` injects a
-  wrong bound into one leg and must stop it (testing only).
+- Every model a mining thread uploads is self-tested before use. Table scan:
+  the C reference tickets of 32 nonces of a fixed header, then the GPU hit set
+  at a bound equal to the second-lowest ticket (exactly the two lowest nonces)
+  and at that ticket minus one (exactly the lowest), for every launch shape.
+  Sparse scan: the tickets of the first 32 attempts it evaluates are compared
+  with the C reference, then the same two hit-set checks. A mismatch stops the
+  miner; a CUDA resource failure only warns.
+- `NEBHASH_SELFTEST_FAULT=1`..`5` breaks one of these checks on purpose and
+  must stop the miner (testing only).
+- `NEB_NEGATIVE_CONTROL_TABLE_CLIP` builds a kernel that clips one below
+  `NEB_CLIP`, for checking that a differential test detects a wrong gradient.
 
 ## Usage
 
@@ -134,26 +119,18 @@ comparable with other benchmark runs, not with a live pool), a header per
 thread and a target of one share per 2^22 attempts. Every hit is re-verified
 on the CPU like a pool share, and the counts are logged every 30 s.
 
-## Benchmark log
+## Rates
 
-| GPU | Arch | Rate | Notes |
+| GPU | Slot 0 | Slot 1 | Notes |
 | :-- | :-- | :-- | :-- |
-| GTX 1050 Ti | sm_61 | ~0.43 MH/s avg (~0.25–0.55) | 2026-11-26, live pool, official dataset, `sm_61` kernel. 5-minute run: 432.33 kH/s, 1/1 share accepted, no reject. A 150-second A/B run averaged 493.47 kH/s. Earlier runs also accepted every share, with and without `sd=`. |
-| GTX 1050 Ti | sm_61 | ~0.50–0.53 MH/s avg | 2026-11-26, packed int8 convolution rows with automatic int16 fallback. Two 170-second local `neb-pool/1` runs with the official dataset averaged 529.02 and 506.61 kH/s; the adjacent 16-bit baseline runs averaged 517.30 and 486.20 kH/s. All shares accepted, no rejects. |
+| GTX 1080 Ti (sm_61) | ~27-31 MH/s | ~180-220 MH/s | live pool, sparse scan, mainnet models of 2026-11-27 |
 
-Lowering the linear-layer shared-memory footprint from `4 × (cout + cin)` to
-`4 × cout` words kept every ticket identical in the differential test but did
-not change the rate materially. A/B runs of the warp reduction versus the old
-shared-atomic reduction showed about 3% higher throughput. Precomputing 32-bit
-row offsets, using `__ldg` for the table rows, and dropping `THREADS` from 256
-to 128 raised the 5-minute average from ~0.34 to ~0.41–0.43 MH/s. Convolution
-factors are now stored as signed 8-bit values when every sample gradient fits;
-the builder retries with the original signed 16-bit layout if any row would
-overflow, so the ticket is unchanged. Four rows are transposed into one word and
-summed with `__dp4a`, which gave a further ~2–4% on the GTX 1050 Ti. Variants
-that passed the differential test but were discarded as slower or less stable:
-aligned 32-bit transposed staging, two convolution weights per load, branchless
-`dp4a`, precomputed row offsets in shared memory, 512 threads, and 64 threads.
-A `__dp2a`-based packed int16 variant was also discarded because it failed the
-exact-ticket differential.
+Rates depend on the model state: the share of all-zero samples decides how many
+nonces the sparse scan evaluates.
 
+## Provenance
+
+`nebhash2.{c,h}`, `shares.{c,h}`, `chacha8.{c,h}` and the reference-derived
+table kernel are vendored from the NEB implementation under Apache-2.0
+(`LICENSE.NEB`). The ccminer bridge, the sparse scan and the stratum glue follow
+the project's GPLv2.
