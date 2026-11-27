@@ -50,6 +50,9 @@ struct TPlan {
   int sh_d[NEB2_MAX_LAYERS], sh_in[NEB2_MAX_LAYERS];   // linear: error words in shared; sh_in is unused (rows are reloaded)
   int row, shared_words;
   uint32_t linear_zero[8];
+  // conv layers: blk = weights per output channel; am = offset of the layer's channel-activity word in a row (bit o:
+  // some weight of output channel o has a non-zero gradient for this sample), -1 when cout > 32 (no mask)
+  int blk[NEB2_MAX_LAYERS], am[NEB2_MAX_LAYERS];
 };
 static __device__ __constant__ TPlan P;
 
@@ -165,6 +168,9 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
   __shared__ uint32_t key[8], idx[NEB_NB], lanes[8];
   __shared__ uint32_t wsum[8][THREADS / 32];
   __shared__ int active[NEB2_MAX_LAYERS][32], active_count[NEB2_MAX_LAYERS];
+  // conv: bit b of cm[i][o] = sample b has a non-zero gradient in output channel o of layer i; a sample whose channel
+  // is inactive contributes exact zeros to that channel's weights, so its loads are skipped (item 14)
+  __shared__ uint32_t cm[NEB2_MAX_LAYERS][32], smask[NEB2_MAX_LAYERS][NEB_NB];
   const int tid = threadIdx.x;
   const uint32_t nonce = start + blockIdx.x;
   if (tid < 8) lanes[tid] = 0;
@@ -197,6 +203,10 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
       }
     }
   }
+  if (tid < NEB_NB)
+    for (int i = 0; i < P.nlayers; i++)
+      if (P.kind[i] != LINEAR && P.am[i] >= 0)
+        smask[i][tid] = __ldg((const uint32_t *)(rows + idx[tid] * (uint32_t)P.row + P.am[i]));
   __syncthreads();
   if (tid < P.nlayers && P.kind[tid] == LINEAR) {
     int count = 0;
@@ -205,6 +215,16 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
       if ((d[0] | d[1] | d[2] | d[3]) != 0) active[tid][count++] = o;
     }
     active_count[tid] = count;
+  }
+  if (tid >= 32) {
+    const int o = tid - 32;
+    for (int i = 0; i < P.nlayers; i++) {
+      if (P.kind[i] == LINEAR || P.am[i] < 0 || o >= P.cout[i]) continue;
+      uint32_t m = 0;
+#pragma unroll
+      for (int b = 0; b < NEB_NB; b++) m |= ((smask[i][b] >> o) & 1u) << b;
+      cm[i][o] = m;
+    }
   }
   __syncthreads();
   uint32_t lane[8] = {0, 0, 0, 0, 0, 0, 0, 0};
@@ -218,6 +238,88 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
       else
         linear_layer<false>(rows, rb, S, i, tid, active[i], active_count[i], base, lane);
     } else {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
+      if (P.kind[i] == NARROW && P.am[i] >= 0 && (P.blk[i] & 7) == 0 && P.blk[i] <= 64) {
+        // Item 14, Pascal shape: one warp per channel, lane ln holds entries f, f + 1 (f = o * blk + 2 * ln, one
+        // 32-bit load per active sample). On the 1080 Ti +3..18 % over the dense loops below; the Ampere shape
+        // (quads, several channels per warp) measured -7..8 % against it here.
+        const int ln = tid & 31, half = P.blk[i] >> 1;
+        uint32_t acc0 = 0, acc1 = 0;
+        if (ln < half) {
+          for (int o = tid >> 5; o < P.cout[i]; o += THREADS / 32) {
+            const int f = o * P.blk[i] + 2 * ln;
+            const uint8_t *rp = rows + P.at[i] + 2 * f;
+            int G0 = 0, G1 = 0;
+            uint32_t m = cm[i][o];
+            while (m) {
+              int bb[4];
+#pragma unroll
+              for (int u = 0; u < 4; u++) { bb[u] = m ? __ffs(m) - 1 : -1; m &= m - 1; }
+              uint32_t v[4];
+#pragma unroll
+              for (int u = 0; u < 4; u++)
+                v[u] = bb[u] >= 0 ? __ldg((const uint32_t *)(rp + idx[bb[u]] * (uint32_t)P.row)) : 0u;
+#pragma unroll
+              for (int u = 0; u < 4; u++) { G0 += (int)(int16_t)(v[u] & 0xffffu); G1 += (int)v[u] >> 16; }
+            }
+            const int c0 = G0 < -CLIPV ? -CLIPV : (G0 > CLIPV ? CLIPV : G0);
+            const int c1 = G1 < -CLIPV ? -CLIPV : (G1 > CLIPV ? CLIPV : G1);
+            acc0 += (uint32_t)c0 ^ ((uint32_t)f + base);
+            acc1 += (uint32_t)c1 ^ ((uint32_t)(f + 1) + base);
+          }
+        }
+        lane[(2 * ln) & 7] += acc0;
+        lane[(2 * ln + 1) & 7] += acc1;
+      } else
+#else
+      if (P.kind[i] == NARROW && P.am[i] >= 0 && (P.blk[i] & 7) == 0 && P.blk[i] <= 128) {
+        // Item 14: a sample whose output channel o is inactive (no non-zero gradient in the channel's blk weights)
+        // adds exact zeros there, so each channel loads only the samples active in it (cm[i][o], ~1/4 of the 16 on
+        // mainnet models) -- whole load instructions are skipped, not only bytes. A channel is blk / 4 lanes of one
+        // 64-bit load each (entries f .. f + 3, f = o * blk + 4 * l), and a warp takes 32 / (blk / 4) channels side by
+        // side (3 for blk 40). blk % 8 == 0 keeps the lanes (4 * l + j) & 7 fixed per thread. On the RTX 3060
+        // +50..63 % over the dense loops below and +12..15 % over the Pascal shape; sm_75 untested (no hardware).
+        const int ln = tid & 31, q = P.blk[i] >> 2, groups = 32 / q;
+        const int g = ln / q, l = ln - g * q;
+        uint32_t acc0 = 0, acc1 = 0, acc2 = 0, acc3 = 0;
+        if (g < groups) {
+          for (int o = (tid >> 5) * groups + g; o < P.cout[i]; o += (THREADS / 32) * groups) {
+            const int f = o * P.blk[i] + 4 * l;
+            const uint8_t *rp = rows + P.at[i] + 2 * f;
+            int G0 = 0, G1 = 0, G2 = 0, G3 = 0;
+            uint32_t m = cm[i][o];
+            while (m) {
+              int bb[4];
+#pragma unroll
+              for (int u = 0; u < 4; u++) { bb[u] = m ? __ffs(m) - 1 : -1; m &= m - 1; }
+              uint2 v[4];
+#pragma unroll
+              for (int u = 0; u < 4; u++)
+                v[u] = bb[u] >= 0 ? __ldg((const uint2 *)(rp + idx[bb[u]] * (uint32_t)P.row)) : make_uint2(0u, 0u);
+#pragma unroll
+              for (int u = 0; u < 4; u++) {
+                G0 += (int)(int16_t)(v[u].x & 0xffffu);
+                G1 += (int)v[u].x >> 16;
+                G2 += (int)(int16_t)(v[u].y & 0xffffu);
+                G3 += (int)v[u].y >> 16;
+              }
+            }
+            const int c0 = G0 < -CLIPV ? -CLIPV : (G0 > CLIPV ? CLIPV : G0);
+            const int c1 = G1 < -CLIPV ? -CLIPV : (G1 > CLIPV ? CLIPV : G1);
+            const int c2 = G2 < -CLIPV ? -CLIPV : (G2 > CLIPV ? CLIPV : G2);
+            const int c3 = G3 < -CLIPV ? -CLIPV : (G3 > CLIPV ? CLIPV : G3);
+            acc0 += (uint32_t)c0 ^ ((uint32_t)f + base);
+            acc1 += (uint32_t)c1 ^ ((uint32_t)(f + 1) + base);
+            acc2 += (uint32_t)c2 ^ ((uint32_t)(f + 2) + base);
+            acc3 += (uint32_t)c3 ^ ((uint32_t)(f + 3) + base);
+          }
+        }
+        lane[(4 * l) & 7] += acc0;
+        lane[(4 * l + 1) & 7] += acc1;
+        lane[(4 * l + 2) & 7] += acc2;
+        lane[(4 * l + 3) & 7] += acc3;
+      } else
+#endif
       if (P.kind[i] == NARROW8) {
         // Four consecutive int8 factors occupy one aligned word. Transpose the
         // bytes of four rows so each resulting word holds one factor from four
@@ -387,6 +489,14 @@ static void make_plan(const neb2_arch *A, const int *wide, const int *narrow8, T
     }
     at = (at + 7) & ~7;  // 8-byte aligned layers and rows: the int16 quad path loads 64 bits per sample
   }
+  for (int i = 0; i < A->nlayers; i++) {
+    const neb2_layer &L = A->l[i];
+    p->am[i] = -1;
+    if (L.kind == NEB2_LINEAR) continue;
+    p->blk[i] = L.cout > 0 ? L.nw / L.cout : L.nw;
+    if (L.cout <= 32 && L.cout > 0 && L.nw % L.cout == 0) { p->am[i] = at; at += 4; }
+  }
+  at = (at + 7) & ~7;
   p->row = at;
   p->shared_words = sh;
 }
@@ -486,6 +596,13 @@ static void pack_rows(neb2t_scan *s, const neb2_arch *A, const SampleGrads &sg) 
           } else {
             int16_t *o = (int16_t *)(row + p.at[l]);
             for (int k = 0; k < L.nw; k++) o[k] = (int16_t)c[k];
+          }
+          if (p.am[l] >= 0) {
+            uint32_t act = 0;
+            for (int ch = 0; ch < L.cout; ch++)
+              for (int k = 0; k < p.blk[l]; k++)
+                if (c[ch * p.blk[l] + k]) { act |= 1u << ch; break; }
+            memcpy(row + p.am[l], &act, 4);
           }
           c += L.nw;
         }
