@@ -20,6 +20,11 @@
 #define THREADS 128
 #endif
 #define CHUNK 65536u  // attempts per launch
+// sm_6x launch shape per model (item 17): after each build the first launches of at least TUNE_MIN attempts alternate
+// THREADS and 32 threads per attempt, timed with events, until each shape has TUNE_ATTEMPTS; the faster one is kept.
+// Both shapes give the same tickets, and the timed launches are real work. The first timed launch is a warm-up.
+#define TUNE_MIN 1024u
+#define TUNE_ATTEMPTS 262144u
 
 __device__ __forceinline__ uint32_t rotl32(uint32_t x, int n) { return (x << n) | (x >> (32 - n)); }
 
@@ -75,18 +80,18 @@ __global__ void header_prefix(const uint32_t *header, uint32_t *cv) {
   blake3_compress(blake3_iv(), first, 0, 64, BLAKE3_CHUNK_START, cv);
 }
 
-// One linear layer of an attempt. With FIXED (cin % 8 == 0; THREADS % 8 == 0 below), every entry f = o * cin + q of
+// One linear layer of an attempt (NT = threads per block). With FIXED (cin % 8 == 0; NT % 8 == 0), every entry f = o * cin + q of
 // this thread has f & 7 == q & 7 == tid & 7, so it adds into ONE lane: a plain accumulator replaces the runtime-indexed
 // lane[f & 7], which ptxas turned into an 8-way compare + predicated read and write per entry. Sums are mod 2^32, so
 // the order of the additions does not change the ticket. !FIXED keeps the per-entry lane index.
-static_assert(THREADS % 8 == 0, "the fixed lane index needs THREADS % 8 == 0");
-template <bool FIXED>
+static_assert(THREADS % 8 == 0, "the fixed lane index needs THREADS % 8 == 0");  // NT: 128 or 32
+template <int NT, bool FIXED>
 __device__ __forceinline__ void linear_layer(const uint8_t *__restrict__ rows, const uint32_t *rb, const int32_t *S,
                                              int i, int tid, const int *act, int nact, uint32_t base, uint32_t *lane) {
   const int cin = P.cin[i];
   const int xat = P.at[i] + P.cout[i];
   uint32_t acc = 0;
-  for (int q = tid; q < cin; q += THREADS) {
+  for (int q = tid; q < cin; q += NT) {
     int32_t x[4];
     for (int w = 0; w < 4; w++) {
       uint32_t v = 0;
@@ -115,12 +120,13 @@ __device__ __forceinline__ void linear_layer(const uint8_t *__restrict__ rows, c
 // x[q] and x[q+1] of that sample, so 16 loads serve two input columns instead of 32 byte loads. Bytes of four
 // samples are transposed with PRMT into the sample-packed words the dp4a takes (byte k = sample 4w + k), exactly the
 // words the byte-load path builds. Lane of every entry: q & 7 = (2 * tid + j) & 7, two fixed accumulators.
+template <int NT>
 __device__ __forceinline__ void linear_layer_pairs(const uint8_t *__restrict__ rows, const uint32_t *rb, const int32_t *S,
                                                    int i, int tid, const int *act, int nact, uint32_t base, uint32_t *lane) {
   const int cin = P.cin[i];
   const int xat = P.at[i] + P.cout[i];
   uint32_t acc0 = 0, acc1 = 0;
-  for (int q = 2 * tid; q < cin; q += 2 * THREADS) {
+  for (int q = 2 * tid; q < cin; q += 2 * NT) {
     int32_t x0[4], x1[4];
 #pragma unroll
     for (int w = 0; w < 4; w++) {
@@ -155,18 +161,27 @@ __device__ __forceinline__ void linear_layer_pairs(const uint8_t *__restrict__ r
 // 1080 Ti over 5 live models, but only when this file is built WITHOUT --maxrregcount (with it: +4.5-8 %), hence the
 // per-file override in both build systems. Every sm_75/86 arm lost (minBlocks 10/12 spill: -24..-28 %; THREADS 64/256:
 // -7..-12 %), so those keep the plain bound (sm_75 SASS unchanged, sm_86 neutral without the cap).
-#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
-#define NEB_TABLE_BOUNDS __launch_bounds__(THREADS, 8)
-#else
-#define NEB_TABLE_BOUNDS __launch_bounds__(THREADS)
+//
+// Item 17: on sm_6x a model may run one warp per attempt instead, 32 blocks of 32 threads per SM at 64 registers. On
+// the 1080 Ti that is +19-20 % for the live slot-1 models (KEP1, 7089 samples) but -2..-4 % for slot 0 (KEP1, 13404
+// samples), and the plans of the two differ in nothing that predicts it, so the launcher measures it per model (see
+// TUNE_ATTEMPTS). 64 threads: -5 % / +10 %.
+#ifndef NEB_SM6X_MINB
+#define NEB_SM6X_MINB 8
 #endif
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
+#define NEB_TABLE_BOUNDS __launch_bounds__(NT, NT == 32 ? 32 : NEB_SM6X_MINB)
+#else
+#define NEB_TABLE_BOUNDS __launch_bounds__(NT)
+#endif
+template <int NT>
 __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, uint32_t n,
                                                         const uint32_t *__restrict__ h0, uint32_t start,
                                                         const uint32_t *__restrict__ bound, uint32_t *hits,
                                                         uint32_t max_hits, const uint32_t *__restrict__ cv) {
   extern __shared__ int32_t S[];  // per linear layer: cout x 4 words of errors (inputs reloaded from rows)
   __shared__ uint32_t key[8], idx[NEB_NB], lanes[8];
-  __shared__ uint32_t wsum[8][THREADS / 32];
+  __shared__ uint32_t wsum[8][NT / 32];
   __shared__ int active[NEB2_MAX_LAYERS][32], active_count[NEB2_MAX_LAYERS];
   // conv: bit b of cm[i][o] = sample b has a non-zero gradient in output channel o of layer i; a sample whose channel
   // is inactive contributes exact zeros to that channel's weights, so its loads are skipped (item 14)
@@ -194,7 +209,7 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
   // same as before; only the loop order changes, and the lane sums are mod 2^32.
   for (int i = 0; i < P.nlayers; i++) {
     if (P.kind[i] != LINEAR) continue;
-    for (int o = tid; o < P.cout[i]; o += THREADS) {
+    for (int o = tid; o < P.cout[i]; o += NT) {
       for (int w = 0; w < 4; w++) {
         uint32_t v = 0;
         for (int b = 0; b < 4; b++)
@@ -216,8 +231,9 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
     }
     active_count[tid] = count;
   }
-  if (tid >= 32) {
-    const int o = tid - 32;
+  // the channel masks: warps 1.. while warp 0 compacts the linear errors; a one-warp block does both in turn
+  if (NT == 32 || tid >= 32) {
+    const int o = NT == 32 ? tid : tid - 32;
     for (int i = 0; i < P.nlayers; i++) {
       if (P.kind[i] == LINEAR || P.am[i] < 0 || o >= P.cout[i]) continue;
       uint32_t m = 0;
@@ -232,11 +248,11 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
     const uint32_t base = 7919u * (uint32_t)(i + 1);
     if (P.kind[i] == LINEAR) {
       if ((P.cin[i] & 7) == 0 && ((P.at[i] + P.cout[i]) & 1) == 0)
-        linear_layer_pairs(rows, rb, S, i, tid, active[i], active_count[i], base, lane);
+        linear_layer_pairs<NT>(rows, rb, S, i, tid, active[i], active_count[i], base, lane);
       else if ((P.cin[i] & 7) == 0)
-        linear_layer<true>(rows, rb, S, i, tid, active[i], active_count[i], base, lane);
+        linear_layer<NT, true>(rows, rb, S, i, tid, active[i], active_count[i], base, lane);
       else
-        linear_layer<false>(rows, rb, S, i, tid, active[i], active_count[i], base, lane);
+        linear_layer<NT, false>(rows, rb, S, i, tid, active[i], active_count[i], base, lane);
     } else {
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 700
       if (P.kind[i] == NARROW && P.am[i] >= 0 && (P.blk[i] & 7) == 0 && P.blk[i] <= 64) {
@@ -246,7 +262,7 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
         const int ln = tid & 31, half = P.blk[i] >> 1;
         uint32_t acc0 = 0, acc1 = 0;
         if (ln < half) {
-          for (int o = tid >> 5; o < P.cout[i]; o += THREADS / 32) {
+          for (int o = tid >> 5; o < P.cout[i]; o += NT / 32) {
             const int f = o * P.blk[i] + 2 * ln;
             const uint8_t *rp = rows + P.at[i] + 2 * f;
             int G0 = 0, G1 = 0;
@@ -283,7 +299,7 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
         const int g = ln / q, l = ln - g * q;
         uint32_t acc0 = 0, acc1 = 0, acc2 = 0, acc3 = 0;
         if (g < groups) {
-          for (int o = (tid >> 5) * groups + g; o < P.cout[i]; o += (THREADS / 32) * groups) {
+          for (int o = (tid >> 5) * groups + g; o < P.cout[i]; o += (NT / 32) * groups) {
             const int f = o * P.blk[i] + 4 * l;
             const uint8_t *rp = rows + P.at[i] + 2 * f;
             int G0 = 0, G1 = 0, G2 = 0, G3 = 0;
@@ -325,7 +341,7 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
         // bytes of four rows so each resulting word holds one factor from four
         // samples, then dp4a sums those four samples with no 16-bit truncation.
         uint32_t acc4[4] = {0, 0, 0, 0};  // lane (4 * tid + j) & 7, fixed per thread and j
-        for (int f0 = 4 * tid; f0 < P.nw[i]; f0 += 4 * THREADS) {
+        for (int f0 = 4 * tid; f0 < P.nw[i]; f0 += 4 * NT) {
           int G0 = 0, G1 = 0, G2 = 0, G3 = 0;
 #pragma unroll
           for (int r = 0; r < NEB_NB; r += 4) {
@@ -358,9 +374,9 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
       } else if (P.kind[i] == NARROW && (P.nw[i] & 3) == 0) {
         // int16 factors in quads: one 64-bit load per sample brings f .. f+3 (layers and rows are 8-byte aligned,
         // 2 * f is a multiple of 8), a quarter of the loads of the per-factor gather. Sums stay 32-bit (exact).
-        // f = 4 * tid + 4 * THREADS * k, so the lanes are (4 * tid + j) & 7: four fixed accumulators.
+        // f = 4 * tid + 4 * NT * k, so the lanes are (4 * tid + j) & 7: four fixed accumulators.
         uint32_t acc0 = 0, acc1 = 0, acc2 = 0, acc3 = 0;
-        for (int f = 4 * tid; f < P.nw[i]; f += 4 * THREADS) {
+        for (int f = 4 * tid; f < P.nw[i]; f += 4 * NT) {
           int G0 = 0, G1 = 0, G2 = 0, G3 = 0;
 #pragma unroll
           for (int b = 0; b < NEB_NB; b++) {
@@ -387,9 +403,9 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
       } else if (P.kind[i] == NARROW && (P.nw[i] & 1) == 0) {
         // int16 factors in pairs: one 32-bit load per sample brings entries f and f+1 (low / high half; at, the
         // row size and 2 * f are multiples of 4), halving the loads of the gather. Sums stay 32-bit, so they are
-        // exact. f = 2 * tid + 2 * THREADS * k, so the lanes are (2 * tid + j) & 7: two fixed accumulators.
+        // exact. f = 2 * tid + 2 * NT * k, so the lanes are (2 * tid + j) & 7: two fixed accumulators.
         uint32_t acc0 = 0, acc1 = 0;
-        for (int f = 2 * tid; f < P.nw[i]; f += 2 * THREADS) {
+        for (int f = 2 * tid; f < P.nw[i]; f += 2 * NT) {
           int G0 = 0, G1 = 0;
 #pragma unroll
           for (int b = 0; b < NEB_NB; b++) {
@@ -406,7 +422,7 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
         lane[(2 * tid + 1) & 7] += acc1;
       } else {
         uint32_t acc = 0;  // lane tid & 7 for every f of this thread
-        for (int f = tid; f < P.nw[i]; f += THREADS) {
+        for (int f = tid; f < P.nw[i]; f += NT) {
           int G = 0;
           if (P.kind[i] == NARROW) {
             for (int b = 0; b < NEB_NB; b++) G += __ldg((const int16_t *)(rows + rb[b] + P.at[i] + 2 * f));
@@ -432,7 +448,7 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
     if (!tid) {
       for (int k = 0; k < 8; k++) {
         uint32_t v = 0;
-        for (int w = 0; w < THREADS / 32; w++) v += wsum[k][w];
+        for (int w = 0; w < NT / 32; w++) v += wsum[k][w];
         lanes[k] = v + P.linear_zero[k];
       }
     }
@@ -454,6 +470,13 @@ __global__ void NEB_TABLE_BOUNDS table_kernel(const uint8_t *__restrict__ rows, 
 
 struct neb2t_scan {
   int device, arch;
+  bool sm6x;           // compute capability 6.x: the launch shape is measured per model (item 17)
+  int threads;         // threads per attempt for the current model; 0 while measuring
+  int tune_warm;       // the next timed launch is the warm-up
+  uint32_t tune_n[2];  // attempts timed per shape (THREADS, 32)
+  float tune_ms[2];
+  cudaEvent_t ev[2];
+  int pin;             // >= 0: every launch uses that shape (neb2t_scan_pin_shape), untimed
   TPlan plan;
   uint32_t n, capacity, max_hits;
   std::vector<uint8_t> values, labels, rows;
@@ -627,6 +650,11 @@ static int build(neb2t_scan *s, const int8_t *weights) {
     else if (lo[i] < -32768 || hi[i] > 32767) wide[i] = 1;
   }
   make_plan(A, wide, n8, &s->plan);
+  s->threads = s->sm6x ? 0 : THREADS;
+  s->tune_warm = 1;
+  s->tune_n[0] = s->tune_n[1] = 0;
+  s->tune_ms[0] = s->tune_ms[1] = 0.f;
+  s->pin = -1;
   pack_rows(s, A, sg);
   if (s->rows.size() > UINT32_MAX) return (int)cudaErrorInvalidValue;
   TRY(cudaSetDevice(s->device));
@@ -656,8 +684,15 @@ int neb2t_scan_open(int device, int arch, const uint8_t *values, const uint8_t *
   s->d_rows = NULL;
   s->d_rows_bytes = 0;
   s->d_header = s->d_bound = s->d_hits = NULL;
+  s->d_cv = NULL;
+  s->ev[0] = s->ev[1] = NULL;
   memset(&s->plan, 0, sizeof s->plan);
   cudaError_t e = cudaSetDevice(device);
+  int major = 0;
+  if (e == cudaSuccess) e = cudaDeviceGetAttribute(&major, cudaDevAttrComputeCapabilityMajor, device);
+  s->sm6x = major == 6;
+  if (e == cudaSuccess && s->sm6x) e = cudaEventCreate(&s->ev[0]);
+  if (e == cudaSuccess && s->sm6x) e = cudaEventCreate(&s->ev[1]);
   if (e == cudaSuccess) e = cudaMalloc(&s->d_header, 80);
   if (e == cudaSuccess) e = cudaMalloc(&s->d_cv, 32);
   if (e == cudaSuccess) e = cudaMalloc(&s->d_bound, 32);
@@ -690,9 +725,32 @@ int neb2t_scan_run(neb2t_scan *s, const uint8_t *header, uint32_t start, uint32_
   TRY(cudaMemset(s->d_hits, 0, 4));
   for (uint32_t done = 0; done < count; done += CHUNK) {
     const uint32_t part = count - done < CHUNK ? count - done : CHUNK;
-    table_kernel<<<part, THREADS, (size_t)s->plan.shared_words * 4>>>(s->d_rows, s->n, s->d_header, start + done, s->d_bound,
-                                                                      s->d_hits, s->max_hits, s->d_cv);
+    const size_t shm = (size_t)s->plan.shared_words * 4;
+    const bool timed = s->pin < 0 && s->threads == 0 && part >= TUNE_MIN;
+    const int k = s->pin >= 0 ? s->pin
+                : s->threads ? (s->threads == 32) : (s->tune_n[1] < s->tune_n[0]);  // the less measured shape
+    if (timed) TRY(cudaEventRecord(s->ev[0]));
+    if (k)
+      table_kernel<32><<<part, 32, shm>>>(s->d_rows, s->n, s->d_header, start + done, s->d_bound, s->d_hits,
+                                          s->max_hits, s->d_cv);
+    else
+      table_kernel<THREADS><<<part, THREADS, shm>>>(s->d_rows, s->n, s->d_header, start + done, s->d_bound, s->d_hits,
+                                                    s->max_hits, s->d_cv);
     TRY(cudaGetLastError());
+    if (timed) {
+      float ms = 0.f;
+      TRY(cudaEventRecord(s->ev[1]));
+      TRY(cudaEventSynchronize(s->ev[1]));
+      TRY(cudaEventElapsedTime(&ms, s->ev[0], s->ev[1]));
+      if (s->tune_warm) {
+        s->tune_warm = 0;
+      } else {
+        s->tune_ms[k] += ms;
+        s->tune_n[k] += part;
+        if (s->tune_n[0] >= TUNE_ATTEMPTS && s->tune_n[1] >= TUNE_ATTEMPTS)
+          s->threads = s->tune_ms[1] / s->tune_n[1] < s->tune_ms[0] / s->tune_n[0] ? 32 : THREADS;
+      }
+    }
   }
   uint32_t found = 0;
   TRY(cudaMemcpy(&found, s->d_hits, 4, cudaMemcpyDeviceToHost));
@@ -702,9 +760,15 @@ int neb2t_scan_run(neb2t_scan *s, const uint8_t *header, uint32_t start, uint32_
   return 0;
 }
 
+int neb2t_scan_threads(const neb2t_scan *s) { return s->threads; }
+int neb2t_scan_shapes(const neb2t_scan *s) { return s->sm6x ? 2 : 1; }
+void neb2t_scan_pin_shape(neb2t_scan *s, int i) { s->pin = i >= 0 && i < neb2t_scan_shapes(s) ? i : -1; }
+
 void neb2t_scan_close(neb2t_scan *s) {
   if (!s) return;
   cudaSetDevice(s->device);
+  if (s->ev[0]) cudaEventDestroy(s->ev[0]);
+  if (s->ev[1]) cudaEventDestroy(s->ev[1]);
   cudaFree(s->d_rows);
   cudaFree(s->d_header);
   cudaFree(s->d_cv);

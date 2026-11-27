@@ -72,6 +72,7 @@ struct ScanHandle {
 	neb2t_scan *h = nullptr;
 	int arch = 0;
 	uint8_t model_hash[32];
+	int logged_threads = 0;  /* launch shape last reported for this model (-D) */
 };
 
 std::vector<Dataset> g_datasets;
@@ -241,35 +242,45 @@ bool scan_selftest(int thr_id, neb2t_scan *h, const Model &m, int slot)
 
 	uint8_t bound[32];
 	uint32_t hits[NEB_MAX_HITS + 1], nh = 0;
-	bool ran = true, leg_a = false, leg_b = false;
+	bool ran = true, leg_a = true, leg_b = true;
+	/* every launch shape the scan may pick for this model (two on sm_6x), each pinned in turn */
+	const int shapes = neb2t_scan_shapes(h);
+	int bad_shape = -1;
 
-	memcpy(bound, v[fault == 1 ? 2 : 1].t, 32);
-	if (neb2t_scan_run(h, header, start, NEB_ST_N, bound, hits, &nh) != 0)
-		ran = selftest_cuda_fault();
-	else
-		leg_a = nh == 2 && ((hits[0] == v[0].nonce && hits[1] == v[1].nonce) ||
-		                    (hits[0] == v[1].nonce && hits[1] == v[0].nonce));
-
-	memcpy(bound, v[1].t, 32);
-	if (fault != 2)
-		for (int i = 0; i < 32 && bound[i]-- == 0; i++) {}   /* bound - 1 */
-	if (ran) {
+	for (int sh = 0; sh < shapes && ran && leg_a && leg_b; sh++) {
+		neb2t_scan_pin_shape(h, sh);
+		memcpy(bound, v[fault == 1 ? 2 : 1].t, 32);
 		if (neb2t_scan_run(h, header, start, NEB_ST_N, bound, hits, &nh) != 0)
-			ran = selftest_cuda_fault();
+			ran = leg_a = leg_b = selftest_cuda_fault();   /* false: neither leg ran */
 		else
-			leg_b = nh == 1 && hits[0] == v[0].nonce;
+			leg_a = nh == 2 && ((hits[0] == v[0].nonce && hits[1] == v[1].nonce) ||
+			                    (hits[0] == v[1].nonce && hits[1] == v[0].nonce));
+
+		memcpy(bound, v[1].t, 32);
+		if (fault != 2)
+			for (int i = 0; i < 32 && bound[i]-- == 0; i++) {}   /* bound - 1 */
+		if (ran) {
+			if (neb2t_scan_run(h, header, start, NEB_ST_N, bound, hits, &nh) != 0)
+				ran = leg_b = selftest_cuda_fault();
+			else
+				leg_b = nh == 1 && hits[0] == v[0].nonce;
+		}
+		if (!ran || !leg_a || !leg_b)
+			bad_shape = sh;
 	}
+	neb2t_scan_pin_shape(h, -1);
 
 	gettimeofday(&t1, NULL);
 	const double ms = 1e3 * (t1.tv_sec - t0.tv_sec) + 1e-3 * (t1.tv_usec - t0.tv_usec);
-	const bool passed = leg_a && leg_b;
+	const bool passed = ran && leg_a && leg_b;
 	if (!passed)
-		gpulog(LOG_ERR, thr_id, "nebhash self-test FAILED (slot %d: GPU hits at rank 2 %s, at rank 2 - 1 %s)", slot,
+		gpulog(LOG_ERR, thr_id, "nebhash self-test FAILED (slot %d, launch shape %d of %d: GPU hits at rank 2 %s, at rank 2 - 1 %s)",
+			slot, bad_shape + 1, shapes,
 			leg_a ? "ok" : (ran ? "WRONG" : "not run"), leg_b ? "ok" : (ran ? "WRONG" : "not run"));
 	else if (!logged[thr_id] || opt_debug) {
 		gpulog(logged[thr_id] ? LOG_DEBUG : LOG_INFO, thr_id,
-			"nebhash self-test passed (slot %d, GPU == CPU hit sets at rank 2 and rank 2 - 1 of %d nonces, %.0f ms)",
-			slot, NEB_ST_N, ms);
+			"nebhash self-test passed (slot %d, %d launch shape%s, GPU == CPU hit sets at rank 2 and rank 2 - 1 of %d nonces, %.0f ms)",
+			slot, shapes, shapes > 1 ? "s" : "", NEB_ST_N, ms);
 		logged[thr_id] = true;
 	}
 	return selftest_gate(thr_id, "nebhash", passed);
@@ -320,6 +331,7 @@ bool ensure_scan(int thr_id, int slot, const uint8_t model_hash[32])
 			return false;
 		}
 		memcpy(ref->model_hash, model_hash, 32);
+		ref->logged_threads = 0;
 		scan_selftest(thr_id, ref->h, *m, slot);
 	}
 	return true;
@@ -675,6 +687,15 @@ int nebhash_scanhash(int thr_id, struct work *work, uint32_t max_nonce,
 		applog(LOG_ERR, "nebhash: scan failed on GPU %d (%d)", device_map[thr_id], rc);
 		usleep(1000 * 1000);
 		return -1;
+	}
+
+	if (opt_debug) {
+		ScanHandle *sh = g_scans[thr_id][slot];
+		const int nt = neb2t_scan_threads(sh->h);
+		if (nt && nt != sh->logged_threads) {
+			applog(LOG_DEBUG, "GPU #%d: nebhash slot %d launch shape %d threads per attempt", device_map[thr_id], slot, nt);
+			sh->logged_threads = nt;
+		}
 	}
 
 	*hashes_done = count;
