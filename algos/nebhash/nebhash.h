@@ -24,8 +24,6 @@ int  nebhash_have_model(const uint8_t weights_hash[32]);
 int  nebhash_benchmark_init(void);
 
 /* Pool target sent by mining.set_target, as a 32-byte little-endian integer. */
-void nebhash_set_target(const uint8_t le[32]);
-void nebhash_get_target(uint8_t le[32]);
 double nebhash_target_to_diff(const uint8_t le[32]);
 
 /* Assemble the 80-byte attempt header (little-endian words, nonce zeroed). */

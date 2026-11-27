@@ -81,7 +81,6 @@ std::vector<Dataset> g_datasets;
 std::mutex g_state_lock;
 std::vector<std::shared_ptr<Model>> g_models;
 uint8_t g_dataset_hash[32] = { 0 };
-uint8_t g_target[32] = { 0 };         /* set by mining.set_target */
 ScanHandle *g_scans[MAX_GPUS][NEB_MAX_SLOTS];
 char g_dataset_path[512] = { 0 };
 
@@ -498,18 +497,6 @@ int nebhash_set_model(int slot, const uint8_t hash[32],
 		g_models.erase(g_models.begin());
 	g_models.push_back(published);
 	return 0;
-}
-
-void nebhash_set_target(const uint8_t le[32])
-{
-	std::lock_guard<std::mutex> lock(g_state_lock);
-	memcpy(g_target, le, 32);
-}
-
-void nebhash_get_target(uint8_t le[32])
-{
-	std::lock_guard<std::mutex> lock(g_state_lock);
-	memcpy(le, g_target, 32);
 }
 
 double nebhash_target_to_diff(const uint8_t le[32])

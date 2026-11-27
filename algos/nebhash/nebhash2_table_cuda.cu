@@ -399,8 +399,9 @@ struct SampleGrads {
   int conv_w = 0, lin_w = 0;
 };
 
-// One evaluation of every sample with neb2_sample_grad of the C reference, on every host thread, recording the range
-// of each convolution layer. The former build loop chose the widths by refilling the whole table once per layer that
+// One evaluation of every sample with neb2_sample_table_row of the C reference (neb2_sample_grad without the linear
+// gradients, which the row never reads: only their factors), on every host thread, recording the range of each
+// convolution layer. The former build loop chose the widths by refilling the whole table once per layer that
 // overflowed int8 or int16, i.e. up to four full gradient passes on mainnet models (~0.65 s each on an i7-7700K),
 // with the GPU idle meanwhile.
 static void sample_grads(neb2t_scan *s, const neb2_arch *A, const int8_t *weights, SampleGrads &sg,
@@ -424,7 +425,7 @@ static void sample_grads(neb2t_scan *s, const neb2_arch *A, const int8_t *weight
       std::vector<int8_t> fac(2 * NEB2_MAX_WEIGHTS);
       int32_t *mylo = tlo.data() + (size_t)t * NEB2_MAX_LAYERS, *myhi = thi.data() + (size_t)t * NEB2_MAX_LAYERS;
       for (uint32_t i = t; i < s->n; i += nt) {
-        neb2_sample_grad(m, s->values.data() + (size_t)i * A->nin, s->labels[i], g.data(), fac.data());
+        neb2_sample_table_row(m, s->values.data() + (size_t)i * A->nin, s->labels[i], g.data(), fac.data());
         int32_t *c = sg.conv.data() + (size_t)i * sg.conv_w;
         int8_t *f = sg.lin.data() + (size_t)i * sg.lin_w;
         const int8_t *fp = fac.data();
