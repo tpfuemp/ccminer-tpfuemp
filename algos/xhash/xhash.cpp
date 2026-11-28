@@ -107,15 +107,28 @@ extern "C" int scanhash_xhash(int thr_id, struct work *work, uint32_t max_nonce,
 		/* a mismatch refuses to mine (selftest_gate); a run that could not complete only warns */
 		if (getenv("XHASH_SELFTEST_FAULT"))
 			gpulog(LOG_WARNING, thr_id, "XHash: SELF-TEST FAULT INJECTION ACTIVE -- for testing only");
-		const int st = xhash_core_selftest(s_core[thr_id], epoch);
+		int bad = -1;
+		const int st = xhash_core_selftest(s_core[thr_id], epoch, &bad);
 		if (st < 0)
 			gpulog(LOG_WARNING, thr_id, "XHash self-test could not run, continuing");
 		else if (st == 0)
-			gpulog(LOG_ERR, thr_id, "XHash self-test FAILED (GPU mix != CPU reference, epoch %d)", epoch);
+			gpulog(LOG_ERR, thr_id, "XHash self-test FAILED (%s search kernel: GPU mix != CPU reference, epoch %d)",
+				bad == 1 ? "dedup" : "standard", epoch);
 		else if (!opt_quiet)
-			gpulog(LOG_INFO, thr_id, "XHash self-test passed (GPU == CPU on the epoch %d DAG)", epoch);
+			gpulog(LOG_INFO, thr_id, "XHash self-test passed (both search kernels, GPU == CPU on the epoch %d DAG)", epoch);
 		selftest_gate(thr_id, "xhash", st != 0);
 		s_selftested[thr_id] = true;
+
+		// faster of the two search kernels for this GPU, once the DAG is up (both just passed the self-test)
+		if (st > 0) {
+			double rates[2];
+			const int v = xhash_core_tune(s_core[thr_id], throughput, rates);
+			if (v < 0)
+				gpulog(LOG_WARNING, thr_id, "XHash: search kernel timing failed, using the standard kernel");
+			else if (!opt_quiet)
+				gpulog(LOG_INFO, thr_id, "XHash search kernel: standard %.2f MH/s, dedup %.2f MH/s, using %s",
+					rates[0] / 1e6, rates[1] / 1e6, v ? "dedup" : "standard");
+		}
 	}
 
 	// Reset the cursor on a genuinely new job. Not on a new share target: vardiff changes it on the

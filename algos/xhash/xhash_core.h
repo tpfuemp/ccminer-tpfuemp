@@ -22,8 +22,13 @@ int xhash_core_epoch_from_seed(const unsigned char seed[32]);
 int xhash_core_ensure(void *handle, int epoch, int *regenerated);
 
 /* Compare one GPU-found nonce/mix against the CPU reference. */
-/* GPU search vs the CPU reference on the live DAG: 1 match, 0 mismatch, -1 could not run */
-int xhash_core_selftest(void *handle, int epoch);
+/* Both GPU search variants vs the CPU reference on the live DAG: 1 match, 0 mismatch (*bad_variant gets the
+ * variant), -1 could not run */
+int xhash_core_selftest(void *handle, int epoch, int *bad_variant);
+
+/* Times both search variants (standard, dedup) once and keeps the faster for this handle; rates get their
+ * hashes per second. Returns the variant, or -1 on error (the standard variant stays). */
+int xhash_core_tune(void *handle, uint32_t throughput, double rates[2]);
 
 /* Search [start_nonce, start_nonce + throughput). Returns 1 on a share that
  * also validates on the CPU, 0 on no share, -1 on launch failure, -2 when the

@@ -37,6 +37,7 @@ struct core_state
 	uint32_t light_items = 0;
 	uint32_t dag_items = 0;
 	int epoch = -1;
+	int kernel_variant = 0;  // search kernel: 0 standard, 1 dedup (xhash_core_tune)
 
 	~core_state()
 	{
@@ -177,10 +178,11 @@ extern "C" int xhash_core_ensure(void *handle, int epoch, int *regenerated)
 	return 1;
 }
 
-extern "C" int xhash_core_selftest(void *handle, int epoch)
+extern "C" int xhash_core_selftest(void *handle, int epoch, int *bad_variant)
 {
-	// 1: GPU == CPU; 0: mismatch; -1: could not run (no handle, DAG or CUDA failure)
+	// 1: GPU == CPU for both search variants; 0: mismatch (*bad_variant = the variant); -1: could not run
 	core_state *s = static_cast<core_state *>(handle);
+	if (bad_variant) *bad_variant = -1;
 	if (!s) return -1;
 	if (!xhash_core_ensure(handle, epoch < 0 ? 0 : epoch, nullptr)) return -1;
 
@@ -191,26 +193,79 @@ extern "C" int xhash_core_selftest(void *handle, int epoch)
 	for (int i = 0; i < 32; ++i) header.bytes[i] = (unsigned char)(i * 7 + 1);
 	const uint64_t nonce = 0x0123456789abcd00ULL;
 
-	xhash::result expected = xhash::hash(*s->ctx, header, nonce);
-	// XHASH_SELFTEST_FAULT=1: a wrong expected mix, the test must fail (testing only)
+	const xhash::result expected = xhash::hash(*s->ctx, header, nonce);
+	// XHASH_SELFTEST_FAULT=1 / 2: a wrong expected mix for the standard / the dedup variant (testing only)
 	const char *fenv = std::getenv("XHASH_SELFTEST_FAULT");
-	if (fenv && std::atoi(fenv) == 1) expected.mix_hash.bytes[0] ^= 1;
+	const int fault = fenv ? std::atoi(fenv) : 0;
 	uint64_t target = 0;
 	for (int i = 0; i < 8; ++i) target = (target << 8) | expected.final_hash.bytes[i];
 
 	xhash_cuda_set_header(header.bytes);
 	xhash_cuda_set_target(target);
-	xhash_cuda_search(1, 32, s->h_results, nonce, 0);
-	if (!report_cuda_error(s, cudaGetLastError(), "self-test search")) return -1;
-
-	const uint32_t found = s->h_results->count < XHASH_MAX_SEARCH_RESULTS ?
-		s->h_results->count : XHASH_MAX_SEARCH_RESULTS;
-	for (uint32_t i = 0; i < found; ++i)
+	// both search variants: xhash_core_tune() may pick either
+	for (int v = 0; v < 2; ++v)
 	{
-		const xhash_search_result &r = s->h_results->result[i];
-		if (r.gid == 0 && mix_matches(r, expected.mix_hash)) return 1;
+		xhash::hash256 want = expected.mix_hash;
+		if (fault == v + 1) want.bytes[0] ^= 1;
+		xhash_cuda_search(1, 32, s->h_results, nonce, (unsigned)v);
+		if (!report_cuda_error(s, cudaGetLastError(), "self-test search")) return -1;
+
+		const uint32_t found = s->h_results->count < XHASH_MAX_SEARCH_RESULTS ?
+			s->h_results->count : XHASH_MAX_SEARCH_RESULTS;
+		bool ok = false;
+		for (uint32_t i = 0; i < found && !ok; ++i)
+		{
+			const xhash_search_result &r = s->h_results->result[i];
+			ok = r.gid == 0 && mix_matches(r, want);
+		}
+		if (!ok)
+		{
+			if (bad_variant) *bad_variant = v;
+			return 0;
+		}
 	}
-	return 0;
+	return 1;
+}
+
+extern "C" int xhash_core_tune(void *handle, uint32_t throughput, double rates[2])
+{
+	core_state *s = static_cast<core_state *>(handle);
+	rates[0] = rates[1] = 0.0;
+	if (!s || !s->ctx || !s->d_dag || !throughput) return -1;
+
+	const uint32_t block = SEARCH_THREADS;
+	const uint32_t grid = (throughput + block - 1) / block;
+	const unsigned batches = 8;
+
+	// target 0: every nonce misses, so the timed runs measure the search alone
+	unsigned char header[32];
+	for (int i = 0; i < 32; ++i) header[i] = (unsigned char)(i * 13 + 7);
+	xhash_cuda_set_header(header);
+	xhash_cuda_set_target(0);
+
+	cudaEvent_t start, stop;
+	if (cudaEventCreate(&start) != cudaSuccess) return -1;
+	if (cudaEventCreate(&stop) != cudaSuccess) { cudaEventDestroy(start); return -1; }
+	// warm both variants up first, then time each
+	for (unsigned v = 0; v < 2; ++v) xhash_cuda_search(grid, block, s->h_results, 0, v);
+	bool fail = cudaGetLastError() != cudaSuccess;
+	for (unsigned v = 0; v < 2 && !fail; ++v)
+	{
+		cudaEventRecord(start);
+		for (unsigned b = 0; b < batches; ++b)
+			xhash_cuda_search(grid, block, s->h_results, (uint64_t)(b + 1) * throughput, v);
+		cudaEventRecord(stop);
+		cudaEventSynchronize(stop);
+		float ms = 0.0f;
+		cudaEventElapsedTime(&ms, start, stop);
+		fail = cudaGetLastError() != cudaSuccess || ms <= 0.0f;
+		if (!fail) rates[v] = (double)batches * throughput / ms * 1000.0;
+	}
+	cudaEventDestroy(start);
+	cudaEventDestroy(stop);
+	if (fail) return -1;
+	s->kernel_variant = rates[1] > rates[0] ? 1 : 0;
+	return s->kernel_variant;
 }
 
 extern "C" int xhash_core_search(void *handle, const unsigned char header[32], uint64_t start_nonce,
@@ -225,7 +280,7 @@ extern "C" int xhash_core_search(void *handle, const unsigned char header[32], u
 
 	const uint32_t block = SEARCH_THREADS;
 	const uint32_t grid = (throughput + block - 1) / block;
-	xhash_cuda_search(grid, block, s->h_results, start_nonce, 0);
+	xhash_cuda_search(grid, block, s->h_results, start_nonce, (unsigned)s->kernel_variant);
 	if (!report_cuda_error(s, cudaGetLastError(), "search")) return -1;
 
 	const uint32_t found = s->h_results->count < XHASH_MAX_SEARCH_RESULTS ?
