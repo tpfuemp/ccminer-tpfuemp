@@ -130,6 +130,7 @@ its command line interface and options.
                           whirlpoolx          WhirlpoolX
                           whirlpoolx2         WhirlpoolX2 (CapStash)
                           wildkeccak          Boolberry (Stratum only)
+                          xhash               XHash (Parallax)
                           x11                 X11 (DarkCoin)
                           x11evo              Permuted X11 (Revolver)
                           x13                 X13 (MaruCoin)

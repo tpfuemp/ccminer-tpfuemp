@@ -392,6 +392,8 @@ extern uint32_t pearl_proof_put(char *b64);
 extern char *pearl_proof_take(uint32_t id);
 extern int scanhash_kawpow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern void free_kawpow(int thr_id);
+extern int scanhash_xhash(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
+extern void free_xhash(int thr_id);
 extern int scanhash_meowpow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
 extern void free_meowpow(int thr_id);
 extern int scanhash_evrprogpow(int thr_id, struct work* work, uint32_t max_nonce, unsigned long *hashes_done);
@@ -885,6 +887,11 @@ struct stratum_ctx {
 	int rpc2;
 	int is_equihash;
 	int srvtime_diff;
+
+	// XHash (Parallax), see algos/xhash/: the session extranonce as the top bytes of the 64-bit
+	// nonce; kept last so the offsets above stay put
+	uint64_t xhash_prefix;
+	uint8_t xhash_prefix_len;
 };
 
 #define POK_MAX_TXS   4
@@ -966,6 +973,11 @@ struct work {
 	struct tx txs[POK_MAX_TXS];
 	// zec solution
 	uint8_t extra[1388];
+
+	// XHash (Parallax), see algos/xhash/; kept last so the offsets above stay put
+	unsigned char kawpow_seed[32];    // epoch seed_hash (from notify)
+	uint64_t      xhash_prefix;       // top-aligned extranonce bits
+	uint8_t       xhash_prefix_len;   // extranonce length in bytes
 };
 
 #define POK_BOOL_MASK 0x00008000

@@ -140,6 +140,7 @@ Select with `-a <name>`. Common aliases are shown in parentheses.
 | `whirlpoolx` | WhirlpoolX |
 | `whirlpoolx2` | WhirlpoolX2 (CapStash) |
 | `wildkeccak` | Boolberry |
+| `xhash` | XHash (Parallax), Ethash-style DAG |
 | `x11` | X11 (DarkCoin) |
 | `x11evo` | Permuted X11 (Revolver) |
 | `x13` | X13 (MaruCoin) |
